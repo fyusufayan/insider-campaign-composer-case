@@ -1,0 +1,1536 @@
+ ▐▛███▛█   Claude Code v2.1.317
+▝▜██████▀  Opus 5.5 · Claude Pro
+ ▝▝   ▝▝   ~/Desktop/devel/leet/insider-case/insider-campaign-composer-case
+
+  Get to finished work sooner with Opus 5.5. Switch anytime with /model.
+
+❯ We are starting the implementation phase of Smart Campaign Composer.          
+  The architecture phase is finalized. The repository currently contains the    
+  design documents but no application implementation.                           
+  Before doing anything, read these files completely:                           
+                                                                                
+  - CLAUDE.md                                                                   
+  - DECISIONS.md                                                                
+  - docs/ARCHITECTURE.md                                                        
+  - docs/ROADMAP.md                                                             
+                                                                                
+  These documents are the source of truth. Follow their constraints and         
+  architectural invariants.                                                     
+  Your immediate objective                                                      
+  We will implement Day 1 — Slice 1a:                                           
+  Brief → Demo Interpretation → Audience Preview                                
+  The intended end-to-end result is:                                            
+                                                                                
+  1. A marketer enters a campaign brief in the Vue application.                 
+  2. Vue sends the brief to the Go API.                                         
+  3. The API creates a campaign.                                                
+  4. The demo LLM interprets the brief and produces a structured segment rule.  
+  5. The backend strictly decodes and validates the rule.                       
+  6. The segment compiler generates parameterized PostgreSQL queries.           
+  7. PostgreSQL returns the audience statistics.                                
+  8. Vue displays the interpretation, assumptions and audience partition.       
+                                                                                
+  The application must work without an Anthropic API key.                       
+  Important constraints                                                         
+                                                                                
+  - Do not redesign the architecture.                                           
+  - Do not introduce new infrastructure.                                        
+  - Do not implement functionality from later roadmap slices.                   
+  - Do not skip tests.                                                          
+  - Do not use hardcoded audience statistics.                                   
+  - Do not allow the LLM to generate SQL.                                       
+  - Do not weaken any invariant in CLAUDE.md.                                   
+  - Do not make live Anthropic API calls.                                       
+  - Do not commit anything.                                                     
+                                                                                
+  Phase 1 — Repository reconnaissance and implementation plan                   
+  For this session, do not write application code yet.                          
+  Inspect:                                                                      
+                                                                                
+  1. Current repository structure and Git status.                               
+  2. Existing documentation and their cross-references.                         
+  3. Required Go and frontend project structure.                                
+  4. Docker Compose service dependencies and startup order.                     
+  5. Database schema and migration dependencies described in ARCHITECTURE.md.   
+  6. The implementation dependencies within Slice 1a.                           
+                                                                                
+  Then produce a concrete implementation plan divided into small, sequential    
+  checkpoints.                                                                  
+  For each checkpoint, specify:                                                 
+                                                                                
+  - Files to create or modify.                                                  
+  - Main responsibilities.                                                      
+  - Dependencies on previous checkpoints.                                       
+  - Tests to implement.                                                         
+  - A clear definition of done.                                                 
+                                                                                
+  The checkpoints should cover:                                                 
+                                                                                
+  1. Repository and project scaffolding.                                        
+  2. PostgreSQL migration and deterministic seed data.                          
+  3. Segment DSL, registry, validation and normalization.                       
+  4. Parameterized SQL compiler and audience partition queries.                 
+  5. LLM interface, demo implementation and interpreter.                        
+  6. Campaign and audience API endpoints.                                       
+  7. Vue application and audience preview.                                      
+  8. Docker Compose integration and end-to-end verification.                    
+                                                                                
+  Identify any architectural ambiguity or contradiction that would block        
+  implementation. Do not invent new requirements to fill gaps.                  
+  Do not modify the four design documents unless you find a genuine             
+  contradiction. If you find one, report it first and explain the impact.       
+  At the end, give me the proposed execution order and the first checkpoint you 
+  recommend implementing.                                                       
+  Wait for my approval before writing application code.                         
+
+  Read 3 files, listed 1 directory, ran 1 shell command (ctrl+o to expand)
+
+⏺ Slice 1a — reconnaissance and implementation plan
+
+  1. What's in the repository
+
+  - Git: the main branch has no commits yet. The untracked files are CLAUDE.md,
+    DECISIONS.md, docs/ARCHITECTURE.md (812 lines), docs/ROADMAP.md,
+    ai-sessions/case-session-1.txt (the transcript of the architecture session)
+    and two .DS_Store files. There is no application code.
+  - Tools on this machine: Node v22.20 and Docker 29.5 are installed. Go is not 
+    installed (go: command not found). This blocks the rule that go test ./...
+    must pass without Docker (see Q5).
+  - How the documents relate: CLAUDE.md links to the other three. DECISIONS.md
+    refers to ARCHITECTURE sections by number, and ROADMAP refers to ADRs and
+    sections. All the references I checked point to the right place.
+
+  2. Contradictions and ambiguities
+
+  I found no contradiction that requires editing the four documents. I found two
+  tensions and several gaps, listed below.
+
+  Blocking: I need your decision
+
+  #: Q1
+  Issue: Which channels a campaign has after interpretation. campaigns.channels
+  defaults to '{}', and audience statistics are computed only "for each
+  selected channel" (§6.5). §5.2 never says interpretation sets channels, but
+  the acceptance criterion expects per-channel numbers right after Interpret.
+  Impact: With no channels set, the audience card would show nothing per
+  channel.
+  Recommendation: Interpret sets channels := suggested_channels only while 
+  channels is still empty. After that, only PUT /channels changes them.
+  ────────────────────────────────────────
+  #: Q2
+  Issue: "A scripted invalid rule produces field-level errors visible in the 
+  UI."
+  The documents say scripted is for tests only and the running app uses only
+  demo (§7.3, ADR-016).
+  Impact: The two rules conflict, so I can't meet this criterion literally
+  without bending one of them.
+  Recommendation: (a) Prove the backend half in an API integration test with
+  scripted: 422 ai_output_invalid, field-level details, and a query tracer
+  showing no SQL ran against the user tables. (b) Prove the UI half with a
+  Vitest test that feeds that same 422 response into the error component. I
+  would not add a "bad output" keyword to the demo LLM.
+  ────────────────────────────────────────
+  #: Q3
+  Issue: The content_brief schema ({goal, tone, length, offer}) has no field
+  types or allowed values defined anywhere. The only hint is the example in
+  §6.2.
+  Impact: The structured-output schema and the strict decoder can't be written
+  without it.
+  Recommendation: Use the §6.2 example as the contract: goal: string up to 64
+  characters; tone: string up to 32; length: short | medium | long; offer:
+  {kind: none | percent_discount | amount_discount |  free_shipping, value?}
+  with percent_discount between 1 and 100. Also: suggested_channels must be a
+  subset of {sms, email}, and assumptions/unsupported allow up to 10 strings of
+   up to 300 characters each.
+  ────────────────────────────────────────
+  #: Q4
+  Issue: How city names are folded, and where the list of known cities lives.
+  city_normalized is "Turkish-aware folded", and the validator needs a "known
+  city" list. Neither the folding rules nor the list's source is defined.
+  Impact: Seed data, validator and compiler must all use the same function, or
+  the counts won't match.
+  Recommendation: One Go list in segment/cities.go (key → display name, e.g.
+  istanbul → İstanbul), used by the seed, the validator and the prompt catalog.
+   Folding: NFC → Turkish lowercase → ı/i̇→i, ş→s, ğ→g, ü→u, ö→o, ç→c → trim and
+   collapse spaces. That way Istanbul, İSTANBUL and istanbul all become
+  istanbul.
+  ────────────────────────────────────────
+  #: Q5
+  Issue: Go toolchain.
+  Impact: Nothing on the backend can build or run tests locally.
+  Recommendation: You run brew install go (it needs to be 1.25 or newer). The
+  fallback is running Make targets inside a golang:1.25 container, but that
+  breaks the "without Docker" unit-test requirement.
+  ────────────────────────────────────────
+  #: Q6
+  Issue: Go module path.
+  Impact: go.mod needs one.
+  Recommendation: github.com/<your-gh-user>/insider-campaign-composer/backend.
+  Tell me the GitHub user or another path.
+
+  Non-blocking: I'll go with these unless you object
+
+  - LLM_PROVIDER before the Anthropic client exists. If the provider resolves to
+    Anthropic in 1a (explicit anthropic, or auto with a key set), the API
+    refuses to start with "anthropic provider not available until slice 1b". It
+    never falls back to demo (invariant 17). Compose does not pass
+    ANTHROPIC_API_KEY through until 1b, so a key in your shell can't break
+    compose up.
+  - Reach partition with one channel selected. It is computed over the selected
+    channels only, so channels that aren't selected count as not reachable.
+    Example: with only SMS selected, email_only = both = 0, and the identities
+    still hold.
+  - Rule limits. A rule needs at least 1 condition in total; each group needs at
+    least 1. The top level counts as a group for the "≤10 conditions" limit.
+  - version stamp. The strict decoder accepts an optional "version": 1, so
+    stored rules decode again. LLM output without it is also accepted.
+  - Event category_in. Values are checked against a Go category list shared with
+    the seed. country is checked as an uppercase [A-Z]{2} code.
+  - Compile only takes validated rules. segment.Compile accepts only a
+    segment.Normalized value, which can only be created by Validate. That makes
+    invariant 1 a type-level guarantee.
+  - Rule chips. The rule chips need display text, and the stored rule holds keys
+    like istanbul. The campaign response adds segment_labels[] from
+    segment.Describe.
+  - "Mock AI" badge. The demo LLM reports its model as "demo", which is stored
+    in interpretation.model. /readyz reports llm_provider, and nginx also
+    proxies /readyz.
+  - Failed interpretation. A 422 or 503 changes nothing on the campaign.
+  - Timezone. The pool sets TimeZone=UTC because §18 defines "last N days" in
+    UTC and age uses current_date.
+  - Seed re-runs. The seed does nothing if users is already populated. make seed
+    resets and reseeds. Its reference time is the database now() when it runs.
+  - Migrations. The Compose migrate service uses the pinned official
+    migrate/migrate image with backend/migrations mounted (ADR-001 lists only 4
+    entrypoints of our own). Tests and /readyz use the library with embedded
+    migration files.
+  - Deferred items:
+    - /metrics: no core metric exists until 1b.
+    - GET /campaigns (list): 1a's roadmap says create/get/interpret only.
+    - Approval revocation inside interpret/channels: no approval can exist
+      before Slice 3. The transaction locks the campaign row first so that step
+      can be added later.
+  - Pinia store. It goes in src/stores/campaign.ts. CLAUDE.md's frontend layout
+    doesn't list a stores folder.
+  - Small wording mismatch (no 1a impact). ADR-014 says the server-side refusal
+    fallback is "not used", while ROADMAP lists it as B-tier item 5 and §7.1
+    says "not used in core". I'd fix the ADR wording during Day 7 cleanup.
+  - Commits. CLAUDE.md says to commit after each step. Your instruction not to
+    commit overrides that. I'll stop at each checkpoint so you can commit.
+
+  3. Checkpoints
+
+  CP1 — Scaffolding and platform
+
+  - Files:
+    - backend/go.mod
+    - backend/cmd/api/main.go
+    - backend/internal/platform/config/config.go
+    - backend/internal/platform/db/pool.go
+    - backend/internal/platform/logging/{slog.go,mask.go}
+    - backend/internal/httpapi/{router.go,middleware.go,errors.go}
+    - Makefile, .gitignore (covers .env, .DS_Store, node_modules), .env.example
+  - What it does:
+    - Loads config once and validates it. 1a variables only: DATABASE_URL,
+      HTTP_ADDR, LLM_PROVIDER, the key's presence, CLAUDE_SEGMENT_*, SEED_*.
+    - Sets up the pgx pool with UTC, slog JSON logs with phone/email masking,
+      request IDs, panic recovery, and the error envelope.
+    - Serves /healthz.
+  - Depends on: nothing.
+  - Tests: config tables (defaults, invalid values, the provider-resolution
+    table above); masking; error envelope encoding.
+  - Done when: go build ./..., go vet, gofmt and go test ./... are clean without
+    Docker or a key.
+
+  CP2 — Migration and deterministic seed
+
+  - Files:
+    - backend/migrations/000001_init.{up,down}.sql: exactly §4, including the
+      circular foreign keys, partial indexes and CHECK constraints.
+    - backend/migrations/embed.go
+    - backend/internal/segment/cities.go: folding function and city list (pulled
+      forward because the seed needs it).
+    - backend/cmd/seed/{main.go,generate.go}
+    - backend/test/integration/testsupport/: starts testcontainers PostgreSQL
+      and migrates it.
+  - What it does: generates 5,000 users from PCG seeded with SEED_RANDOM_SEED:
+    - About 30% in İstanbul, with spellings İstanbul/Istanbul/ISTANBUL/istanbul.
+    - Turkish names within the length CHECK limits; unique phones and emails,
+      some missing.
+    - A consent mix: opted in, opted out, and no row.
+    - Some phones ending in 0000, for later slices.
+    - Some NULL birth_date and last_active_at.
+    - 90 days of carts and purchases, with both abandoned and recovered carts.
+    - Loaded with CopyFrom.
+  - Depends on: CP1.
+  - Tests:
+    - Unit: the same seed produces an identical dataset hash; CHECK lengths;
+      uniqueness; correct city_normalized; distribution within bounds.
+    - Integration: migrate up → down → up; seed loads, and a second run does
+      nothing.
+  - Done when: a migrated test database accepts the seed, and the unit tests
+    pass without Docker.
+
+  CP3 — Segment DSL, registry, validation, normalization
+
+  - Files: segment/{dsl.go,registry.go,validate.go,normalize.go,categories.go,de
+    scribe.go,errors.go}.
+  - What it does:
+    - Typed Attribute/Event/Behavior conditions, decoded by a type field, with
+      unknown fields rejected.
+    - A registry of fields with their allowed operators, value shapes and
+      ranges.
+    - Errors in the form {path, code, message, allowed?}; consent and contact
+      fields fail with consent_is_backend_enforced.
+    - Normalization: canonical city keys, sorted in lists, version: 1.
+  - Depends on: CP2's cities.go.
+  - Tests:
+    - Every field × operator, plus wrong types, ranges and limits (11
+      conditions, 6 groups, 51 list items).
+    - Unknown keys, nested groups, count rules (exists + count, count_gte
+      without count).
+    - Consent fields, and injection strings as values.
+    - Normalizing twice gives the same result; stored rules decode again.
+  - Done when: the table tests are green and Compile's input type can only be
+    produced by validation.
+
+  CP4 — Parameterized compiler and audience partition
+
+  - Files: segment/{compile.go,audience.go}, segment/testdata/golden/*.sql,
+    test/integration/segment_counts_test.go.
+  - What it does:
+    - Each registry entry builds its own SQL fragment. Column and table names
+      come only from Go constants, and every value is a bind parameter.
+      Behaviors compile to EXISTS/NOT EXISTS with make_interval(days => $n).
+    - One partition query runs in a read-only transaction with SET LOCAL 
+      statement_timeout='5s': a CTE of matched users, consent joined in, and
+      FILTER aggregates producing by_channel, reach_users, messages and
+      computed_at.
+    - The identities are checked in Go before the result is returned.
+  - Depends on: CP2, CP3.
+  - Tests:
+    - Golden SQL plus argument lists for every condition type, groups, and any.
+    - Injection strings appear only in the arguments.
+    - A 30-user fixture with hand-computed expectations: mixed spellings,
+      missing contacts, opted-out, missing consent row, recovered cart exactly
+      at the cart time, window edges, NULL birth date.
+    - The partition identities over the 5,000-user seed for a set of rules.
+  - Done when: the golden files are stable, the fixture counts match exactly,
+    and the identities hold.
+
+  CP5 — LLM interface, demo implementation, interpreter
+
+  - Files: llm/{client.go,scripted.go,demo.go,select.go},
+    ai/{prompt_segment_v1.go,schema.go,interpreter.go,interpretation.go},
+    ai/testdata/segment_schema.golden.json.
+  - What it does:
+    - Client: the Client interface from §7.2, plus domain errors.
+    - Demo: keyword-based and deterministic. It recognizes cities from the list,
+      cart/purchase phrases, "last N days", channel words and "% discount".
+    - Prompt: built with strings.Builder (not text/template). It includes a
+      field catalog generated from the registry, and the brief goes inside
+      <brief> tags as data.
+    - Schema: generated from the registry in a deterministic order.
+    - Validation: strict decode, then the segment validator plus the Q3 checks,
+      then at most one append-only repair turn. If that fails:
+      ErrAIOutputInvalid with the details and the raw proposal.
+    - Stop reasons: refusals and truncations are never used as output.
+  - Depends on: CP3 (CP4 not needed, so this can run alongside it).
+  - Tests (scripted):
+    - Happy path; bad JSON → repair → OK; semantic error → repair → OK; repair
+      fails.
+    - The repair request contains the original output and the errors.
+    - Schema golden file is stable across runs; prompt covers every registry
+      field; a brief containing </brief> stays inside the data.
+    - Context cancellation, refusal and truncation are not used as output.
+    - The demo turns the example brief into the exact expected rule, is
+      deterministic, and passes validation for a set of briefs.
+    - Provider selection table.
+  - Done when: all of the above pass with no key and no network.
+
+  CP6 — Campaign service and API endpoints
+
+  - Files: campaign/{campaign.go,repository.go,service.go},
+    httpapi/{dto.go,campaigns.go,health.go}, cmd/api/main.go wiring,
+    test/integration/api_test.go.
+  - What it does:
+    - Transition table for 1a events: create, interpret, set channels.
+    - Interpret: read the brief → call the LLM with no transaction open → lock
+      the campaign FOR UPDATE → bump segment_version and version, set the
+      status, store segment_rule, interpretation and content_brief (and channels
+      per Q1) → compute the audience in a separate read-only transaction.
+    - GET /audience: recomputes the statistics.
+    - PUT /channels: compare-and-set on expected_version; a stale version
+      returns 409 version_conflict.
+    - /readyz: database ping, migration version, llm_provider.
+  - Depends on: CP4, CP5.
+  - Tests:
+    - Unit: allowed and forbidden transitions; DTO validation (name/brief
+      length, unknown fields); error mapping.
+    - Integration (httptest + real database + scripted): create → interpret →
+      audience equals an independent SQL count; stale PUT /channels → 409; bad
+      channel → 422; draft /audience → 409; 404.
+    - Invalid twice → 422 with details, the campaign unchanged, and a pgx tracer
+      showing no statement touched users, channel_consents, cart_events or 
+      purchases.
+  - Done when: the full 1a API flow passes against real PostgreSQL with -race.
+
+  CP7 — Vue application and audience preview
+
+  - Files:
+    - frontend/{package.json,vite.config.ts,tsconfig*.json,index.html}
+    - frontend/src/{main.ts,App.vue,router.ts}
+    - frontend/src/api/{client.ts,types.ts}
+    - frontend/src/stores/campaign.ts
+    - frontend/src/pages/CampaignComposerPage.vue
+    - frontend/src/components/composer/{BriefInput,InterpretationCard,SegmentRul
+      eView,AudienceCard,FieldErrors,MockAiBadge}.vue
+  - What it does: strict TypeScript types that mirror the backend DTOs; a brief
+    step and an audience step chosen by campaign status; channel checkboxes that
+    call PUT /channels; field-level server errors displayed; no v-html
+    anywhere.
+  - Depends on: the CP6 DTOs.
+  - Tests (Vitest):
+    - AudienceCard: partition rendering, totals, channel toggle sends
+      expected_version, 409 handling.
+    - SegmentRuleView chip text; InterpretationCard assumptions and unsupported
+      items.
+    - FieldErrors with a 422 fixture (Q2); the API client's error parsing.
+  - Done when: npm test, vue-tsc --noEmit and vite build pass.
+
+  CP8 — Docker Compose and end-to-end check
+
+  - Files: docker-compose.yml, backend/Dockerfile (one image, all entrypoints),
+    frontend/Dockerfile, frontend/nginx.conf (SPA fallback, /api/ proxy with
+    proxy_buffering off, long read timeout), Makefile (up, test,
+    test-integration, seed), a minimal run section in the README.
+  - Startup order:
+    a. postgres:16 (pinned) becomes healthy.
+    b. migrate runs and completes.
+    c. seed runs and completes.
+    d. api becomes healthy.
+    e. frontend starts.
+  - Depends on: all earlier checkpoints.
+  - Verification:
+    - Fresh docker compose up --build with no key.
+    - In the browser: enter the example brief → see "City is İstanbul ·
+      Abandoned cart in last 30 days", the assumptions, and per-channel numbers
+      that add up to matched_users.
+    - Compare the numbers with a hand-written psql query, to show they aren't
+      hardcoded.
+    - Toggle a channel; the invalid-rule path per Q2.
+    - go test ./... and npm test with no key and no Docker; make 
+      test-integration with -race.
+  - Done when: every 1a acceptance criterion has been shown working, and any
+    deviation is written down.
+
+  4. Execution order
+
+  CP1 → CP2 → CP3 → CP4 → CP5 → CP6 → CP7 → CP8.
+
+  CP5 depends only on CP3, so it can be done right after CP3 or alongside CP4.
+  I'll stop at each checkpoint so you can review and commit.
+
+  I recommend starting with CP1 (scaffolding and platform), once you've
+  installed Go (Q5) and answered Q1–Q4 and Q6.
+
+❯ The reconnaissance is complete. I agree with the overall checkpoint structure 
+  and execution order. Before starting CP1, I want to resolve the decisions     
+  and make a few corrections to the plan.                                       
+  Do not write application code yet. Update the implementation plan and report  
+  the final decisions.                                                          
+  Decisions                                                                     
+  Q1 — Campaign channels                                                        
+  Accept your recommendation.                                                   
+  During the first successful interpretation:                                   
+                                                                                
+  * If `campaign.channels` is empty, initialize it from `suggested_channels`.   
+  * If channels have already been selected, interpretation must not overwrite   
+  them.                                                                         
+  * Subsequent channel changes must happen only through `PUT /channels`.        
+                                                                                
+  Make sure the audience preview uses the persisted campaign channels.          
+  Q2 — Scripted invalid rule                                                    
+  Accept your recommendation.                                                   
+                                                                                
+  * Prove backend behavior with a scripted LLM API integration test.            
+  * Verify that two invalid proposals produce `422 ai_output_invalid` with      
+  field-level details.                                                          
+  * Verify that the campaign remains unchanged.                                 
+  * Verify that no SQL statement touches user, consent, cart or purchase tables 
+  during failed interpretation.                                                 
+  * Prove frontend rendering using a Vitest test with the same 422 response     
+  contract.                                                                     
+  * Do not add an artificial failure keyword or special failure mode to the     
+  demo LLM.                                                                     
+                                                                                
+  Q3 — Content brief schema                                                     
+  Accept the proposed schema:                                                   
+                                                                                
+  * `goal`: string, maximum 64 characters.                                      
+  * `tone`: string, maximum 32 characters.                                      
+  * `length`: `short | medium | long`.                                          
+  * `offer.kind`: `none | percent_discount | amount_discount | free_shipping`.  
+  * `percent_discount`: value between 1 and 100.                                
+  * `suggested_channels`: subset of `sms` and `email`.                          
+  * `assumptions` and `unsupported`: maximum 10 strings, each maximum 300       
+  characters.                                                                   
+                                                                                
+  However, before finalizing the schema, inspect the architecture and database  
+  documents for any existing currency or offer-related constraints.             
+  Define the exact `amount_discount` value type, precision, valid range and     
+  currency semantics. Do not invent a currency requirement or arbitrary upper   
+  bound if the documents do not support one. If the documents leave this        
+  genuinely unspecified, report the remaining decision rather than silently     
+  introducing a business rule.                                                  
+  Q4 — City normalization                                                       
+  Accept your recommendation.                                                   
+  Use one shared city catalog and normalization implementation for:             
+                                                                                
+  * Seed generation.                                                            
+  * Segment validation.                                                         
+  * Prompt catalog generation.                                                  
+  * Segment description.                                                        
+                                                                                
+  Use NFC normalization through `golang.org/x/text/unicode/norm`, followed by   
+  the documented Turkish-aware folding rules.                                   
+  Make sure the implementation handles `İstanbul`, `ISTANBUL`, `Istanbul` and   
+  `istanbul` consistently.                                                      
+  Additional corrections                                                        
+  A. Unit tests must not require Docker                                         
+  This is a hard requirement.                                                   
+                                                                                
+  * `go test ./...` must run without Docker.                                    
+  * PostgreSQL integration tests must run through a separate `make              
+  test-integration` target.                                                     
+  * Testcontainers must not make the ordinary unit-test command fail when       
+  Docker is unavailable.                                                        
+  * Clearly define how integration tests are selected or excluded.              
+  * Update the checkpoint definitions and Makefile plan accordingly.            
+                                                                                
+  B. Deterministic seed reference time                                          
+  There is a contradiction in the current plan:                                 
+                                                                                
+  * The seed is expected to produce an identical dataset hash for identical     
+  inputs.                                                                       
+  * The reference time is currently defined as database `now()`.                
+                                                                                
+  Resolve this by introducing a fixed `SEED_REFERENCE_TIME` configuration       
+  value.                                                                        
+  The generated timestamps must be derived from this reference time and the     
+  deterministic random generator.                                               
+  The same `SEED_RANDOM_SEED` and `SEED_REFERENCE_TIME` must produce the same   
+  dataset.                                                                      
+  Document the default value and how it can be overridden.                      
+  C. Go module path                                                             
+  Inspect `git remote -v` to determine whether the repository’s GitHub owner    
+  and repository name are available.                                            
+  Use the corresponding repository-based Go module path if possible.            
+  If no usable remote exists, ask me for the GitHub username. Do not invent     
+  one.                                                                          
+  D. Ignore files                                                               
+  Ensure `.gitignore` excludes:                                                 
+                                                                                
+  * `.DS_Store`                                                                 
+  * `.env`                                                                      
+  * `node_modules/`                                                             
+  * generated build artifacts                                                   
+  * other appropriate local-only files                                          
+                                                                                
+  Do not delete or modify the existing architecture session transcript.         
+  What I expect                                                                 
+                                                                                
+  1. Updated Q1–Q6 decision table.                                              
+  2. Updated CP1–CP8 plan incorporating the corrections.                        
+  3. Explicitly documented unit-test versus integration-test execution.         
+  4. Explicitly documented deterministic seed behavior.                         
+  5. Final list of unresolved decisions, if any.                                
+  6. Confirmation that no application code or design documents were modified    
+  unnecessarily.                                                                
+                                                                                
+  Do not start CP1 yet. Wait for my approval.                                   
+
+  Ran 2 shell commands (ctrl+o to expand)
+
+⏺ Slice 1a — final decisions and revised plan
+
+  The plan now includes Q1–Q6 and corrections A–D. Two decisions are still open
+  (U1 and U2 in section 5). CP1 hasn't started.
+
+  1. Decisions Q1–Q6
+
+  #: Q1 Channels
+  Decision: Channels are copied from suggested_channels only on the first 
+  successful interpretation, i.e. while segment_version = 0 and channels = 
+  '{}'. This is done in the same locked transaction that saves the rule. If the
+   marketer cleared all channels and then re-interprets, their choice stands.
+  After that, only PUT /channels changes channels. Interpret and GET /audience
+  always compute statistics from the saved campaign row (the channels read back
+   after the commit), never from the LLM response.
+  Status: Resolved
+  ────────────────────────────────────────
+  #: Q2 Invalid rule
+  Decision: Backend: an API integration test (scripted) feeds two invalid
+  proposals. It checks 422 ai_output_invalid with field-level details[] and
+  that the campaign row is unchanged (status, version, segment fields,
+  channels). A pgx QueryTracer checks that no statement mentions users,
+  channel_consents, cart_events or purchases. Frontend: a Vitest test renders a
+   fixture of that same 422 response. The demo LLM has no failure mode.
+  Status: Resolved
+  ────────────────────────────────────────
+  #: Q3 Content brief
+  Decision: Schema accepted as you listed it. Field-by-field rules for offer:
+  <br>• none and free_shipping: no value. <br>• percent_discount: integer
+  1–100. The documents don't say integer or decimal; the only example is 30, so
+   please confirm integer. <br>• amount_discount: see U1 below.
+  Status: Partly open (U1)
+  ────────────────────────────────────────
+  #: Q4 City folding
+  Decision: One implementation in segment/cities.go, used by the seed,
+  validator,
+  prompt catalog and segment.Describe. Steps: norm.NFC → Turkish lowercase
+  (unicode.TurkishCase, so I→ı and İ→i) → ı→i, ş→s, ğ→g, ü→u, ö→o, ç→c → trim
+  and collapse whitespace. A table test checks that İstanbul, ISTANBUL,
+  Istanbul, istanbul and decomposed I\u0307stanbul all become istanbul,
+  displayed as İstanbul.
+  Status: Resolved
+  ────────────────────────────────────────
+  #: Q5 Go toolchain
+  Decision: Go is now installed: go1.27.3 darwin/arm64 at /opt/homebrew/bin/go.
+  go.mod declares go 1.25.0 with no toolchain line, so Go won't auto-download
+  another toolchain. The Docker build uses a pinned golang:1.25 image.
+  Status: Resolved
+  ────────────────────────────────────────
+  #: Q6 Module path
+  Decision: Taken from origin
+  (https://github.com/fyusufayan/insider-campaign-composer-case.git). go.mod
+  lives in backend/, so the path is
+  github.com/fyusufayan/insider-campaign-composer-case/backend.
+  Status: Resolved
+
+  What the documents say about offers and currency
+
+  I searched all four documents for currency, offer, discount, amount, price,
+  NUMERIC, TRY, lira and ₺. This is everything they say:
+  - cart_events.unit_price and purchases.order_total are NUMERIC(12,2). There is
+    no currency column anywhere.
+  - users.country defaults to 'TR' and language allows tr/en.
+  - The only offer example is { "kind": "percent_discount", "value": 30 } in
+    §6.2.
+  - §8 has an "offer not mentioned" content warning, which is Slice 2.
+
+  The documents support a type and precision for an amount: a decimal with at
+  most 2 fractional digits, greater than 0. The only upper bound with any basis
+  is the NUMERIC(12,2) column limit (≤ 9,999,999,999.99), and that is a storage
+  limit, not a business rule. Currency is not specified anywhere, and inferring
+  TRY from country='TR' would be inventing a rule. That leaves decision U1.
+
+  2. CP1–CP8, revised
+
+  CP1 — Scaffolding and platform
+  - Files: backend/go.mod (module path from Q6), backend/cmd/api/main.go,
+    platform/config, platform/db, platform/logging,
+    httpapi/{router,middleware,errors}.go, Makefile, .gitignore, .env.example
+    (placeholders only).
+  - Config: DATABASE_URL, HTTP_ADDR, LLM_PROVIDER, whether ANTHROPIC_API_KEY is
+    present, CLAUDE_SEGMENT_*. SEED_USERS, SEED_RANDOM_SEED and
+    SEED_REFERENCE_TIME are validated with RFC 3339 and must be in UTC.
+  - Provider resolution: a demo selection works. A resolved anthropic provider
+    is a startup error until 1b and never falls back to demo.
+  - Also: an empty placeholder file in test/integration/ tagged //go:build 
+    integration, to show early that go test ./... skips that package.
+  - Tests: config tables, masking, error envelope.
+  - Done when: make test passes with Docker stopped and no key; gofmt -l is
+    empty; go vet passes both with and without the tag.
+
+  CP2 — Migration and deterministic seed
+  - Files:
+    - migrations/000001_init.{up,down}.sql (§4 exactly), plus
+      migrations/embed.go
+    - segment/cities.go
+    - cmd/seed/{main.go,generate.go,load.go,generate_test.go}
+    - test/integration/testsupport/postgres.go (tagged)
+    - test/integration/{migrate,seed}_test.go (tagged)
+  - Unit tests (no Docker):
+    - Same seed and reference time give the same SHA-256.
+    - A different seed or reference time gives a different hash.
+    - CHECK lengths, unique phone and email, correct city_normalized,
+      distribution bounds, every timestamp ≤ the reference time.
+  - Integration tests:
+    - Migrate up → down → up.
+    - Rows loaded into the database, re-serialized in id order, have the
+      generator's hash.
+    - A second plain run does nothing.
+    - -reset refuses if delivery rows exist.
+  - Done when: the unit and integration tests above are green.
+
+  CP3 — DSL, registry, validator, normalizer. Same as before. Adds the
+  content-brief and interpretation envelope validators (Q3) in
+  ai/interpretation.go, which move to CP5. All unit tests.
+
+  CP4 — Compiler and partition. Same as before. Golden SQL tests are unit tests.
+  The 30-user fixture counts and the partition identities over the seed are
+  integration tests (test/integration/segment_test.go). Fixture timestamps are
+  relative to now() in the database, so they don't depend on the seed's
+  reference time.
+
+  CP5 — LLM, demo, interpreter. Same as before. Also covers the Q3 envelope
+  validation (offer kinds and values, channel subset, limits on
+  assumptions/unsupported). It runs before any repair turn, and its errors feed
+  the repair turn. All unit tests (scripted).
+
+  CP6 — Campaign service and API.
+  - Interpret: lock the row → check status → save rule, interpretation and
+    content brief → bump segment_version and version → set channels under the Q1
+    rule (segment_version = 0 and empty) → commit. Then compute statistics from
+    the saved row.
+  - Unit tests: transitions, DTO decode, error mapping.
+  - Integration tests: the full flow, plus the Q2 failure test with its query
+    tracer, plus a test that interpretation does not overwrite channels the
+    marketer already chose.
+
+  CP7 — Vue. Same as before. Adds FieldErrors.spec.ts, which uses the same 422
+  fixture as the Q2 backend test (the shared shape lives in src/api/types.ts),
+  and checks there is no v-html in src/. npm test = vitest run (jsdom, no
+  network).
+
+  CP8 — Compose and end-to-end check.
+  - Same as before. Compose passes SEED_REFERENCE_TIME and SEED_RANDOM_SEED to
+    seed using ${VAR:-default}. It does not pass ANTHROPIC_API_KEY in 1a.
+  - Verification includes make test with Docker stopped.
+
+  3. Unit tests vs integration tests
+
+  - How they're selected: every Go file that uses PostgreSQL or testcontainers
+    starts with //go:build integration and lives under
+    backend/test/integration/..., as the CLAUDE.md layout says. That includes
+    the testsupport helper. Without the tag, those files aren't compiled at all,
+    so testcontainers is never linked and Docker is never contacted.
+  - How exclusion is enforced: make test first runs go list -deps -test ./... | 
+    grep -q testcontainers-go and fails if it finds a match. That catches any
+    unit package that starts depending on testcontainers by accident.
+
+  Target: make test
+  Command: guard; go vet ./...; go test ./... (in backend/); npm test (in
+  frontend/)
+  Needs: Go, Node. No Docker, no key, no network after dependencies are 
+  downloaded
+  ────────────────────────────────────────
+  Target: make test-integration
+  Command: go vet -tags=integration ./...; go test -tags=integration -race 
+  -count=1 -timeout 10m ./test/integration/...
+  Needs: Docker. Fails loudly if Docker is unavailable (no silent skips)
+  ────────────────────────────────────────
+  Target: make lint
+  Command: gofmt -l, staticcheck at a pinned version (via go run …@vX), vue-tsc 
+  --noEmit
+  Needs: —
+  ────────────────────────────────────────
+  Target: make up / make seed
+  Command: docker compose up --build / reseed with -reset
+  Needs: Docker
+
+  4. Deterministic seed
+
+  - Inputs: SEED_USERS (default 5000), SEED_RANDOM_SEED (default 42), and
+    SEED_REFERENCE_TIME, an RFC 3339 UTC timestamp. I suggest the default
+    2026-11-01T00:00:00Z. Override with an environment variable, e.g.
+    SEED_REFERENCE_TIME=2026-12-01T00:00:00Z make seed. Compose passes it
+    through as ${SEED_REFERENCE_TIME:-2026-11-01T00:00:00Z}.
+  - Generation:
+    - Random numbers come from math/rand/v2 PCG seeded from SEED_RANDOM_SEED and
+      a fixed stream constant, drawn in a fixed order. There is no map
+      iteration and no clock reads.
+    - Every timestamp is the reference time minus a random offset, truncated to
+      microseconds to match PostgreSQL. That covers signup_at, last_active_at,
+      birth_date, cart and purchase times over the 90 days before the reference
+      time, and channel_consents.updated_at, which is written explicitly instead
+      of defaulting to now().
+    - Rows are inserted in generation order with CopyFrom into tables with
+      freshly reset sequences, so IDs are deterministic too.
+  - Same inputs give the same dataset: checked by a unit-test hash over a
+    canonical serialization, and by an integration test comparing the rows read
+    back from the database.
+  - Re-run policy:
+    - A plain run does nothing if users is populated.
+    - -reset runs in one transaction: it aborts if any campaign_deliveries row
+      exists, then deletes customer data, restarts the sequences and reloads. It
+      never uses TRUNCATE … CASCADE, which could delete delivery rows and break
+      invariant 6.
+    - The seed logs the inputs it used, so any dataset can be reproduced.
+
+  5. Unresolved decisions
+
+  U1 — amount_discount currency. The type and precision are supported by the
+  documents; the currency is not. Options:
+  - (a, recommended) Drop amount_discount from the v1 enum. offer.kind becomes
+    none | percent_discount | free_shipping. A fixed-amount request then goes
+    into assumptions and the offer is set to none. This adds no rule and can be
+    added back with an ADR.
+  - (b) Keep it and add a required currency field (ISO 4217 code, or a fixed
+    allowed list). Value: decimal, ≤2 fractional digits, > 0, ≤
+    9,999,999,999.99. This would need a short ADR.
+  - Also confirm that percent_discount is an integer.
+
+  U2 — Fixed reference time vs. demo data aging. Segment queries use the
+  database now() (§6.4; I'm not changing that). Seed data spans the 90 days
+  before a fixed reference time. So as real time moves past it, "last 30 days"
+  queries match less data. About 30 days after the reference time, the example
+  brief matches 0 users, and the Slice 1a acceptance criterion fails for anyone
+  running docker compose up later, such as a reviewer. Options:
+  - (a, recommended) Keep the fixed default; it is what the tests use, and they
+    don't depend on the default anyway. Add make seed-today, which passes
+    today's UTC midnight as the reference time. Document in the README that
+    demos run long after the default should use it, and that the inputs logged
+    by the seed reproduce any dataset.
+  - (b) Keep the fixed default and pick a value far enough ahead that it covers
+    the review period. Timestamps in the future would be filtered out by the
+    window logic, so this distorts the data.
+  - (c) Accept the decay and only document it.
+
+  Minor confirmations (I'll proceed this way unless you object):
+  - PUT /channels accepts an empty list. The audience then reports zero messages
+    and every user as unreachable. Prepare (Slice 3) enforces at least one
+    channel.
+  - percent_discount is an integer (see U1).
+
+  6. Files modified
+
+  None. git status shows the same five untracked paths as at the start
+  (.DS_Store, CLAUDE.md, DECISIONS.md, ai-sessions/, docs/). I wrote no
+  application code, didn't touch the four design documents or the session
+  transcript, and committed nothing. The .gitignore will be created in CP1 and
+  cover:
+  - .DS_Store
+  - .env and .env.*, except !.env.example
+  - node_modules/
+  - frontend/dist/, frontend/coverage/, .vite/
+  - backend/bin/, *.test, *.out, coverage.*
+  - playwright-report/, test-results/
+  - *.log, .idea/
+
+  Golden test files, ai-sessions/ and the existing .DS_Store files are left as
+  they are.
+
+❯ We have completed the reconnaissance and architecture planning. All decisions 
+  are now finalized.                                                            
+  Final decisions for previously unresolved items                               
+                                                                                
+  - U1: Remove amount_discount from the v1 offer enum. Supported kinds are      
+  none, percent_discount, and free_shipping. Fixed-amount discount requests     
+  should be represented as assumptions, with no invented currency semantics.    
+  - percent_discount.value is an integer between 1 and 100.                     
+  - U2: Keep the fixed default SEED_REFERENCE_TIME for deterministic datasets.  
+  Add make seed-today in the appropriate future checkpoint to generate demo     
+  data using today’s UTC midnight.                                              
+  - PUT /channels accepts an empty list. The requirement for at least one       
+  channel will be enforced during the preparation/approval flow in a later      
+  slice.                                                                        
+                                                                                
+  All Q1–Q6 decisions and corrections A–D are accepted.                         
+  Start implementation: CP1 — Scaffolding and Platform                          
+  Read the four design documents again if needed, then implement CP1 according  
+  to the revised plan.                                                          
+  Scope                                                                         
+  Implement only:                                                               
+                                                                                
+  1. Go module and backend project scaffolding.                                 
+  2. Configuration loading and validation.                                      
+  3. PostgreSQL connection pool initialization using pgx.                       
+  4. UTC database session configuration.                                        
+  5. Structured JSON logging using slog.                                        
+  6. Phone and email masking in logs.                                           
+  7. HTTP router and middleware.                                                
+  8. Request ID middleware.                                                     
+  9. Panic recovery middleware.                                                 
+  10. Standard API error envelope.                                              
+  11. /healthz endpoint.                                                        
+  12. Makefile targets and .gitignore.                                          
+  13. Unit tests for configuration, masking and error envelope.                 
+                                                                                
+  Use the repository module path identified during reconnaissance:              
+  github.com/fyusufayan/insider-campaign-composer-case/backend                  
+  Use Go 1.25 as the minimum declared Go version. Do not add an unnecessary     
+  toolchain directive.                                                          
+  Strict constraints                                                            
+                                                                                
+  - Implement CP1 only.                                                         
+  - Do not start CP2 or implement database migrations.                          
+  - Do not implement the seed generator.                                        
+  - Do not implement segment DSL, compiler or LLM functionality.                
+  - Do not implement frontend code.                                             
+  - Do not introduce additional infrastructure or dependencies without a clear  
+  reason.                                                                       
+  - Do not make Anthropic API calls.                                            
+  - Do not commit anything.                                                     
+  - Do not modify the architecture documents just to reflect implementation     
+  details.                                                                      
+  - Follow CLAUDE.md and all architectural invariants.                          
+  - Keep the implementation simple and production-quality. Avoid speculative    
+  abstractions.                                                                 
+                                                                                
+  Testing requirements                                                          
+  The following must work without Docker and without an Anthropic API key:      
+                                                                                
+  - make test                                                                   
+  - go test ./...                                                               
+  - go vet ./...                                                                
+  - gofmt -l must produce no output.                                            
+                                                                                
+  Integration tests must remain excluded from ordinary unit-test execution.     
+  Do not add a dependency on testcontainers to ordinary application or          
+  unit-test packages.                                                           
+  Implementation approach                                                       
+  Work through CP1 in small logical steps.                                      
+  After implementing each logical part:                                         
+                                                                                
+  - Run the relevant tests.                                                     
+  - Inspect the resulting code.                                                 
+  - Fix failures before proceeding.                                             
+                                                                                
+  Do not stop after merely creating empty project files. Implement functional   
+  configuration, logging, HTTP middleware and health endpoint behavior.         
+  At completion                                                                 
+  Report:                                                                       
+                                                                                
+  1. Files created and their responsibilities.                                  
+  2. Important implementation decisions.                                        
+  3. Dependencies added and why.                                                
+  4. Tests executed and their actual results.                                   
+  5. Exact commands I should run to verify CP1 locally.                         
+  6. Any deviation from the architecture documents.                             
+                                                                                
+  Do not proceed to CP2.                                                        
+  Stop after CP1 and wait for my review.                                        
+
+  Ran 5 shell commands (ctrl+o to expand)
+
+⏺ Go's module downloads were failing TLS verification. I'm checking whether the
+  custom SSL_CERT_FILE is the cause.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ That was the cause: Go swaps in that file as its only trusted roots, so
+  downloads work once it's unset. Now scaffolding the module.
+
+⏺ Bash(mkdir -p backend && cd backend && cat > go.mod <<'EOF'
+      module github.com/fyusufayan/insider-campaign-composer-case/backend…)
+  ⎿          "Version": "v5.12.0",
+             "Time": "2026-10-31T01:11:21Z",
+             "GoVersion": "1.25.0",
+     … +3 lines (ctrl+o to expand)
+  ⎿  Created backend/go.mod (+3 -0)
+      1 +module github.com/fyusufayan/insider-campaign-composer-case/back
+        +end                                                             
+      2 +                                                                
+      3 +go 1.25.0                                                       
+  ⎿  (files that changed while this command ran, by the command or by 
+     another process; a convenience view, not a review or audit of the 
+     command)
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ Now writing .gitignore, .env.example and the Makefile.
+
+⏺ Write(.gitignore)
+  ⎿  Wrote 30 lines to .gitignore
+       1 # OS / editor
+       2 .DS_Store
+       3 .idea/
+       4 *.swp
+       5 *~
+       6 
+       7 # Local environment and secrets (never commit ANTHROPIC_API_KEY)
+       8 .env
+       9 .env.*
+      10 !.env.example
+     … +20 lines (ctrl+o to expand)
+
+⏺ Write(.env.example)
+  ⎿  Wrote 12 lines to .env.example
+       1 # Copy to .env for local overrides. Never commit .env.
+       2 
+       3 # PostgreSQL connection string (required).
+       4 DATABASE_URL=postgres://composer:composer@localhost:5432/compose
+         r?sslmode=disable
+       5 
+       6 # API listen address.
+       7 HTTP_ADDR=:8080
+       8 
+       9 # LLM provider, resolved once at startup: auto | anthropic | dem
+     … +4 lines (ctrl+o to expand)
+
+⏺ Write(Makefile)
+  ⎿  Wrote 50 lines to Makefile
+      1 SHELL := /bin/bash
+      2 .SHELLFLAGS := -eu -o pipefail -c
+      3 
+      4 BACKEND  := backend
+      5 FRONTEND := frontend
+      6 
+      7 STATICCHECK_VERSION := v0.8.2
+      8 
+      9 .DEFAULT_GOAL := help
+     … +41 lines (ctrl+o to expand)
+
+⏺ Next: configuration loading and validation.
+
+⏺ Write(backend/test/integration/doc.go)
+  ⎿  Wrote 7 lines to backend/test/integration/doc.go
+      1 //go:build integration
+      2 
+      3 // Package integration holds tests that need real PostgreSQL (tes
+        tcontainers) and,
+      4 // for delivery, the real worker and mock provider. Every file in
+         this tree carries
+      5 // the "integration" build tag so that `go test ./...` never comp
+        iles it and never
+      6 // requires Docker. Run with `make test-integration`.
+      7 package integration
+⏺ Write(backend/internal/platform/config/config.go)
+  ⎿  Wrote 130 lines to backend/internal/platform/config/config.go
+       1 // Package config loads and validates process configuration from
+          the environment.
+       2 // It is the only place that reads environment variables; everyt
+         hing else receives
+       3 // a validated Config through constructors.
+       4 package config
+       5 
+       6 import (
+       7   "errors"
+       8   "fmt"
+     … +122 lines (ctrl+o to expand)
+
+⏺ Write(backend/internal/platform/config/config_test.go)
+  ⎿  Wrote 177 lines to backend/internal/platform/config/config_test.go
+       1 package config
+       2 
+       3 import (
+       4   "bytes"
+       5   "encoding/json"
+       6   "fmt"
+       7   "log/slog"
+       8   "strings"
+       9   "testing"
+      10 )
+     … +167 lines (ctrl+o to expand)
+
+⏺ Bash(gofmt -w . && go vet ./... && go test ./internal/platform/config/ 2>&1 |
+      tail -30)
+  ⎿  ok
+     github.com/fyusufayan/insider-campaign-composer-case/backend/inter
+     nal/platform/config     0.296s
+  ⎿  Updated backend/internal/platform/config/config.go (+4 -4)
+      29  
+      30  const redacted = "[REDACTED]"
+      31  
+      32 -func (s Secret) Reveal() string        { return string(s) }    
+      33 -func (s Secret) String() string        { return redacted }     
+      34 -func (s Secret) GoString() string      { return redacted }     
+      35 -func (s Secret) LogValue() slog.Value  { return slog.StringValu
+         -e(redacted) }                                                  
+      32 +func (s Secret) Reveal() string               { return string(s
+         +) }                                                            
+      33 +func (s Secret) String() string               { return redacted
+         + }                                                             
+      34 +func (s Secret) GoString() string             { return redacted
+         + }                                                             
+      35 +func (s Secret) LogValue() slog.Value         { return slog.Str
+         +ingValue(redacted) }                                           
+      36  func (s Secret) MarshalText() ([]byte, error) { return []byte(r
+          edacted), nil }
+      37  
+      38  // LLM is the resolved LLM provider selection.
+
+⏺ Config tests pass. Next: slog logging with masking.
+
+⏺ Write(backend/internal/platform/logging/mask.go)
+  ⎿  Wrote 62 lines to backend/internal/platform/logging/mask.go
+       1 package logging
+       2 
+       3 import (
+       4   "log/slog"
+       5   "regexp"
+       6   "strings"
+       7 )
+       8 
+       9 // Phone is a phone number that is masked whenever it is logged.
+      10 type Phone string
+     … +52 lines (ctrl+o to expand)
+
+⏺ Write(backend/internal/platform/logging/logging.go)
+  ⎿  Wrote 66 lines to backend/internal/platform/logging/logging.go
+      1 // Package logging builds the process logger: slog JSON with cont
+        act masking and
+      2 // request-scoped attributes taken from the context.
+      3 package logging
+      4 
+      5 import (
+      6   "context"
+      7   "io"
+      8   "log/slog"
+      9 )
+     … +57 lines (ctrl+o to expand)
+
+⏺ Write(backend/internal/platform/logging/logging_test.go)
+  ⎿  Wrote 135 lines to backend/internal/platform/logging/logging_test.go
+       1 package logging
+       2 
+       3 import (
+       4   "bytes"
+       5   "context"
+       6   "encoding/json"
+       7   "errors"
+       8   "fmt"
+       9   "log/slog"
+      10   "strings"
+     … +125 lines (ctrl+o to expand)
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ Two failures, both from miscounted asterisks in my own expected values (13
+  characters minus 5 kept = 8 stars). Fixing the test.
+
+⏺ Bash(sed -i '' 's/+90\*\*\*\*\*\*\*\*\*33/+90********33/g'
+      internal/platform/logging/logging_test.go && go test
+      ./internal/platform/logging/)
+  ⎿  ok
+     github.com/fyusufayan/insider-campaign-composer-case/backend/inter
+     nal/platform/logging    0.274s
+  ⎿  Updated backend/internal/platform/logging/logging_test.go (+2 -2)
+      45          tests := []struct{ in, want string }{
+      46                  {"send to ayse@example.com failed", "send to a*
+          **@example.com failed"},
+      47                  {"sms +905321234567 rejected", "sms +90********
+          67 rejected"},
+      48 -                {"a@b.co and +905551112233", "a***@b.co and +90
+         -*********33"},                                                 
+      48 +                {"a@b.co and +905551112233", "a***@b.co and +90
+         +********33"},                                                  
+      49                  // Non-contact values are left untouched.
+      50                  {"campaign 3f2b1c9e-8d4a-4b6f-9c1e-2a7d5e8f0b13
+           attempt 2", "campaign 3f2b1c9e-8d4a-4b6f-9c1e-2a7d5e8f0b13 att
+          empt 2"},
+      51                  {"2026-11-03T10:00:00+03:00 took 1234567890ms",
+           "2026-11-03T10:00:00+03:00 took 1234567890ms"},
+     ...
+       95          if m["email"] != "m***@example.org" {
+       96                  t.Errorf("email = %v", m["email"])
+       97          }
+       98 -        if m["err"] != "provider rejected +90*********33: bad 
+          -number" {                                                     
+       98 +        if m["err"] != "provider rejected +90********33: bad n
+          +umber" {                                                      
+       99                  t.Errorf("err = %v", m["err"])
+      100          }
+      101          if user, _ := m["user"].(map[string]any); user["email"
+           ] != "z***@example.net" {
+
+⏺ Logging is green. Next: the pgx pool with a UTC session.
+
+⏺ Write(backend/internal/platform/db/pool.go)
+  ⎿  Wrote 67 lines to backend/internal/platform/db/pool.go
+       1 // Package db creates the PostgreSQL connection pool.
+       2 package db
+       3 
+       4 import (
+       5   "context"
+       6   "errors"
+       7   "fmt"
+       8   "time"
+       9 
+      10   "github.com/jackc/pgx/v5/pgxpool"
+     … +57 lines (ctrl+o to expand)
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ Bash(env -u SSL_CERT_FILE go mod tidy 2>&1 | tail -3; cat go.mod; go vet ./...
+      && go test ./internal/platform/db/)
+  ⎿  go: downloading gopkg.in/yaml.v3 v3.0.1
+     go: downloading github.com/pmezard/go-difflib v1.0.0
+     go: downloading github.com/davecgh/go-spew v1.1.1
+     … +16 lines (ctrl+o to expand)
+  ⎿  Updated backend/go.mod (+4 -1)
+       2  
+       3  go 1.25.0
+       4  
+       5 +require github.com/jackc/pgx/v5 v5.11.0                        
+       6 +                                                               
+       7  require (
+       8          github.com/jackc/pgpassfile v1.0.0 // indirect
+       9          github.com/jackc/pgservicefile v0.0.0-20240606120523-5a
+          60cdf6a761 // indirect
+       8 -        github.com/jackc/pgx/v5 v5.11.0 // indirect            
+      10 +        github.com/jackc/puddle/v2 v2.2.2 // indirect          
+      11 +        golang.org/x/sync v0.17.0 // indirect                  
+      12          golang.org/x/text v0.29.0 // indirect
+      13  )
+  ⎿  Updated backend/go.sum (+11 -0)
+       1  github.com/davecgh/go-spew v1.1.0/go.mod h1:J7Y8YcW2NihsgmVo/mv
+          3lAwl/skON4iLHjSsI+c5H38=
+       2 +github.com/davecgh/go-spew v1.1.1 h1:vj9j/u1bqnvCEfJOwUhtlOARqs
+         +3+rkHYY13jYWTU97c=                                             
+       3 +github.com/davecgh/go-spew v1.1.1/go.mod h1:J7Y8YcW2NihsgmVo/mv
+         +3lAwl/skON4iLHjSsI+c5H38=                                      
+       4  github.com/jackc/pgpassfile v1.0.0 h1:/6Hmqy13Ss2zCq62VdNG8tM1w
+          chn8zjSGOBJ6icpsIM=
+       5  github.com/jackc/pgpassfile v1.0.0/go.mod h1:CEx0iS5ambNFdcRtxP
+          j5JhEz+xB6uRky5eyVu/W2HEg=
+       6  github.com/jackc/pgservicefile v0.0.0-20240606120523-5a60cdf6a7
+          61 h1:iCEnooe7UlwOQYpKFhBabPMi4aNAfoODPEFNiAnClxo=
+       7  github.com/jackc/pgservicefile v0.0.0-20240606120523-5a60cdf6a7
+          61/go.mod h1:5TJZWKEWniPve33vlWYSoGYefn3gLQRzjfDlhSJ9ZKM=
+       8  github.com/jackc/pgx/v5 v5.11.0 h1:IzBBtyK9AHqf98cctWFifYSci2hg
+          QR/cd56wB4p+ogg=
+       9  github.com/jackc/pgx/v5 v5.11.0/go.mod h1:mal1tBGAFfLHvZzaYh77Y
+          S/eC6IX9OWbRV1QIIM0Jn4=
+      10 +github.com/jackc/puddle/v2 v2.2.2 h1:PR8nw+E/1w0GLuRFSmiioY6Uoo
+         +Mp6KJv0/61nB7icHo=                                             
+      11 +github.com/jackc/puddle/v2 v2.2.2/go.mod h1:vriiEXHvEE654aYKXXj
+         +OvZM39qJ0q+azkZFrfEOc3H4=                                      
+      12 +github.com/pmezard/go-difflib v1.0.0 h1:4DBwDE0NGyQoBHbLQYPwSUP
+         +oCMWR5BEzIk/f1lZbAQM=                                          
+      13  github.com/pmezard/go-difflib v1.0.0/go.mod h1:iKH77koFhYxTK1pc
+          RnkKkqfTogsbg7gZNVY4sRDYZ/4=
+      14  github.com/stretchr/objx v0.1.0/go.mod h1:HFkY916IF+rwdDfMAkV7O
+          twuqBVzrE8GR6GFx+wExME=
+      15  github.com/stretchr/testify v1.3.0/go.mod h1:M5WIy9Dh21IEIfnGCw
+          XGc5bZfKNJtfHm1UVUgZn+9EI=
+      16  github.com/stretchr/testify v1.7.0/go.mod h1:6Fq8oRcR53rry900zM
+          qJjRRixrwX3KX962/h/Wwjteg=
+      17 +github.com/stretchr/testify v1.11.1 h1:7s2iGBzp5EwR7/aIZr8ao5+d
+         +ra3wiQyKjjFuvgVKu7U=                                           
+      18 +github.com/stretchr/testify v1.11.1/go.mod h1:wZwfW3scLgRK+23gO
+         +65QZefKpKQRnfz6sD981Nm4B6U=                                    
+      19 +golang.org/x/sync v0.17.0 h1:l60nONMj9l5drqw6jlhIELNv9I0A4OFgRs
+         +G9k2oT9Ug=                                                     
+      20 +golang.org/x/sync v0.17.0/go.mod h1:9KTHXmSnoGruLpwFjVSX0lNNA75
+         +CykiMECbovNTZqGI=                                              
+      21  golang.org/x/text v0.29.0 h1:1neNs90w9YzJ9BocxfsQNHKuAT4pkghyXc
+          4nhZ6sJvk=
+      22  golang.org/x/text v0.29.0/go.mod h1:7MhJOA9CD2qZyOKYazxdYMF85Ow
+          PdEr9jTtBpO7ydH4=
+      23  gopkg.in/check.v1 v0.0.0-20161208181325-20d25e280405/go.mod h1:
+          Co6ibVJAznAaIkqp8huTwlJQCZ016jof/cbN4VW5Yz0=
+      24  gopkg.in/yaml.v3 v3.0.0-20200313102051-9f266ea9e77c/go.mod h1:K
+          4uyk7z7BCEPqu6E+C64Yfv1cQ7kz7rIZviUmN+EgEM=
+      25 +gopkg.in/yaml.v3 v3.0.1 h1:fxVm/GzAzEWqLHuvctI91KS9hhNmmWOoWu0X
+         +TYJS7CA=                                                       
+      26 +gopkg.in/yaml.v3 v3.0.1/go.mod h1:K4uyk7z7BCEPqu6E+C64Yfv1cQ7kz
+         +7rIZviUmN+EgEM=                                                
+
+⏺ Pool tests pass. Next: router, middleware, error envelope and /healthz.
+
+⏺ Write(backend/internal/httpapi/errors.go)
+  ⎿  Wrote 69 lines to backend/internal/httpapi/errors.go
+       1 package httpapi
+       2 
+       3 import (
+       4   "encoding/json"
+       5   "net/http"
+       6 )
+       7 
+       8 // Error codes of the API error envelope (ARCHITECTURE §11). Cod
+         es for later
+       9 // slices are added together with the code paths that return the
+     … +61 lines (~2 KB) (ctrl+o to expand)
+
+⏺ Write(backend/internal/httpapi/middleware.go)
+  ⎿  Wrote 138 lines to backend/internal/httpapi/middleware.go
+       1 package httpapi
+       2 
+       3 import (
+       4   "crypto/rand"
+       5   "encoding/hex"
+       6   "errors"
+       7   "log/slog"
+       8   "net/http"
+       9   "runtime/debug"
+      10   "time"
+     … +128 lines (ctrl+o to expand)
+
+⏺ Write(backend/internal/httpapi/router.go)
+  ⎿  Wrote 69 lines to backend/internal/httpapi/router.go
+       1 // Package httpapi is the HTTP transport: routing, middleware, D
+         TOs and error
+       2 // mapping. It contains no business rules and no SQL.
+       3 package httpapi
+       4 
+       5 import (
+       6   "log/slog"
+       7   "net/http"
+       8 )
+       9 
+     … +60 lines (ctrl+o to expand)
+
+⏺ Write(backend/internal/httpapi/httpapi_test.go)
+  ⎿  Wrote 261 lines to backend/internal/httpapi/httpapi_test.go
+       1 package httpapi
+       2 
+       3 import (
+       4   "bytes"
+       5   "encoding/json"
+       6   "errors"
+       7   "log/slog"
+       8   "net/http"
+       9   "net/http/httptest"
+      10   "strings"
+     … +251 lines (ctrl+o to expand)
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ HTTP layer passes. Next: wiring cmd/api.
+⏺ Write(backend/cmd/api/main.go)
+  ⎿  Wrote 90 lines to backend/cmd/api/main.go
+       1 // Command api serves the Smart Campaign Composer HTTP API.
+       2 package main
+       3 
+       4 import (
+       5   "context"
+       6   "errors"
+       7   "fmt"
+       8   "log/slog"
+       9   "net/http"
+      10   "os"
+     … +80 lines (ctrl+o to expand)
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ The binary builds. Now running smoke checks of startup behavior.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ All three behave as intended, and the password never shows up. Now checking
+  against a throwaway PostgreSQL 16 container that sessions are UTC and /healthz
+  answers.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ Docker's daemon isn't running, so that live check couldn't run. I'm leaving it
+  as a manual step for you. One upside: everything that follows runs with
+  Docker down. Running the full verification now.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ Every unit check passes, and make test-integration fails loudly with Docker
+  down, as designed. Last: confirming the isolation guard can actually detect a
+  dependency, then running staticcheck.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ staticcheck flagged a fmt.Sprintf("%s", …) call in a test that it wants
+  replaced with .String(), but since that line is meant to exercise fmt's
+  formatting path, I'll switch it to %q instead to keep the test meaningful.
+
+⏺ Update(backend/internal/platform/config/config_test.go)
+  ⎿  Added 1 line, removed 1 line
+      160      "%v":   fmt.Sprintf("%v", cfg),
+      161      "%+v":  fmt.Sprintf("%+v", cfg),
+      162      "%#v":  fmt.Sprintf("%#v", cfg),
+      163 -    "%s":   fmt.Sprintf("%s", cfg.LLM.APIKey),                
+      163 +    "%q":   fmt.Sprintf("%q", cfg.LLM.APIKey),                
+      164      "slog": logBuf.String(),
+      165      "json": string(jsonBytes),
+      166    }
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ CP1 is done, and every required check passes with Docker stopped and no API
+  key: make test, go test ./..., go vet (with and without the integration tag),
+  gofmt -l, staticcheck and -race. One thing is still unchecked: the API running
+  against a real PostgreSQL, because the Docker daemon isn't running on this
+  machine. Nothing is committed and CP2 hasn't started.
+
+  1. Files created
+
+  File: backend/go.mod / go.sum
+  Responsibility: Module
+  github.com/fyusufayan/insider-campaign-composer-case/backend, go 1.25.0, no
+  toolchain line.
+  ────────────────────────────────────────
+  File: backend/internal/platform/config/config.go
+  Responsibility: The only place that reads environment variables. Loads
+  DATABASE_URL, HTTP_ADDR and LLM_PROVIDER, plus whether ANTHROPIC_API_KEY is
+  set. Picks the LLM provider using the table in §7.3 and reports all config
+  problems together. A Secret type hides values when printed, logged or turned
+  into JSON.
+  ────────────────────────────────────────
+  File: backend/internal/platform/logging/logging.go
+  Responsibility: JSON logger built on slog. Adds request_id from the request
+  context to each line.
+  ────────────────────────────────────────
+  File: backend/internal/platform/logging/mask.go
+  Responsibility: Phone and Email types that are masked when logged,
+  MaskPhone/MaskEmail, and a catch-all that masks emails and phone numbers
+  found in any logged text, including error messages.
+  ────────────────────────────────────────
+  File: backend/internal/platform/db/pool.go
+  Responsibility: Creates the pgx pool and checks the database is reachable (5 s
+
+  limit). Every session runs in UTC, overriding any timezone given in the URL,
+  and is labeled composer-api in PostgreSQL.
+  ────────────────────────────────────────
+  File: backend/internal/httpapi/errors.go
+  Responsibility: The error envelope
+  {"error":{code,message,details[],retryable}}. details is always a list, never
+   null. Field errors have the shape {path,code,message,allowed?}.
+  ────────────────────────────────────────
+  File: backend/internal/httpapi/middleware.go
+  Responsibility: Request ID, access log and panic recovery.
+  ────────────────────────────────────────
+  File: backend/internal/httpapi/router.go
+  Responsibility: Standard-library router, middleware order, GET /healthz, and
+  error-envelope responses for unknown paths (404) and wrong methods (405).
+  ────────────────────────────────────────
+  File: backend/cmd/api/main.go
+  Responsibility: Wiring, server timeouts, and graceful shutdown on
+  SIGINT/SIGTERM.
+  ────────────────────────────────────────
+  File: backend/test/integration/doc.go
+  Responsibility: Placeholder for integration tests, behind the integration
+  build
+  tag.
+  ────────────────────────────────────────
+  File: Makefile
+  Responsibility: help, test, test-backend, test-frontend, check-unit-isolation,
+
+  test-integration, lint, fmt.
+  ────────────────────────────────────────
+  File: .gitignore, .env.example
+  Responsibility: Ignore rules as planned; the example file holds placeholders
+  only.
+
+  Tests are in config_test.go, logging_test.go, pool_test.go and
+  httpapi_test.go.
+
+  2. Implementation decisions
+
+  - Provider resolution is a pure table in config; main refuses Anthropic. If
+    the resolved provider is anthropic (explicit, or auto with a key set), the
+    API exits with "not available in this build". It never falls back to demo.
+    CP5/1b replaces this check with the real client.
+  - Two-layer masking. The Phone/Email types are the intended way to log contact
+    data. As a backstop, every logged message, string field and error message
+    is scanned for emails and phone numbers. Phone numbers are only recognized
+    with a leading +, so IDs and timestamps are left alone. Other value types
+    logged as raw objects are not scanned; the explicit types cover those.
+  - Request IDs: a client-supplied X-Request-ID is reused only if it is up to 64
+    characters of [A-Za-z0-9._-]. Otherwise a fresh 128-bit hex ID is
+    generated. This prevents log and header injection.
+  - Middleware order: request ID → access log → panic recovery → routes. A
+    recovered panic therefore shows up in the access log as a 500.
+    http.ErrAbortHandler is re-raised as Go's HTTP server expects. If the
+    response has already started, nothing more is written. The panic text and
+    stack go to the log, never the response.
+  - The access log records the path only. Query strings are left out because
+    they may carry user data. The response wrapper still allows flushing, which
+    the SSE streams in later slices need.
+  - The server has no write timeout, because SSE responses are long-lived.
+    Header read timeout is 5 s, idle timeout 120 s, shutdown waits up to 10 s.
+  - Nothing logs the database URL or the API key. Connection errors from the
+    driver mask the password, and a test checks this.
+
+  3. Dependencies
+
+  - Added to go.mod: only github.com/jackc/pgx/v5 v5.11.0, for pgxpool. I chose
+    it over v5.12.0, which was released 3 days ago. The other entries are
+    indirect dependencies pulled in by pgx.
+  - staticcheck v0.8.2: runs through go run …@v0.8.2 in make lint, so it is not
+    in go.mod. It needs Go 1.26 or newer to build; your Go 1.27 is fine.
+  - Not added yet: golang-migrate, testcontainers, the Anthropic SDK and
+    Prometheus. They come with the checkpoints that use them.
+
+  4. Tests run and results
+
+  Command: make test
+  Result: pass. The isolation guard finds 0 testcontainers dependencies; go vet
+  passes; all 4 packages ok; frontend skipped (not present yet).
+  ────────────────────────────────────────
+  Command: go test -count=1 ./...
+  Result: pass (4 packages)
+  ────────────────────────────────────────
+  Command: go test -race -count=1 ./...
+  Result: pass
+  ────────────────────────────────────────
+  Command: go vet ./... and go vet -tags=integration ./...
+  Result: clean
+  ────────────────────────────────────────
+  Command: gofmt -l .
+  Result: no output
+  ────────────────────────────────────────
+  Command: make lint (includes staticcheck)
+  Result: pass, after one fix: staticcheck flagged a Sprintf("%s") in a test,
+  which I changed to %q so it still exercises fmt's formatting.
+  ────────────────────────────────────────
+  Command: make test-integration with Docker down
+  Result: fails as intended: error: Docker is required for integration tests
+  ────────────────────────────────────────
+  Command: Startup smoke tests (binary)
+  Result: No env → exits with DATABASE_URL is required. Key set with auto →
+  refuses Anthropic. Database unreachable → warns about demo mode, then exits
+  with a ping error. The password never appears in any output.
+  ────────────────────────────────────────
+  Command: Live run against PostgreSQL
+  Result: Not run. The Docker daemon isn't running, so SHOW TimeZone on a real
+  session and curl /healthz against the running binary are not verified. Unit
+  tests cover the session settings and the router.
+
+  The tests cover:
+  - Config: defaults, trimming, 9 error cases, the 10-row provider table
+    (Anthropic is never silently replaced by demo), and secrets hidden in
+    %v/%+v/%#v/%q/slog/JSON.
+  - Logging: the masking tables; masking in messages, fields, errors and nested
+    groups; request_id taken from the context; log levels.
+  - Pool: UTC forced for 4 URL forms; the password isn't leaked by parse errors.
+  - HTTP: the exact envelope JSON; details never null; /healthz; 404/405
+    envelopes with the Allow header; 5 request-ID cases; the access log
+    (including no query string); panic → 500 with the masked panic logged; a
+    panic after headers are sent; abort re-raised; flushing through the wrapper.
+
+  5. Commands to verify locally
+
+  On this machine, SSL_CERT_FILE=/Users/bilgem/.certs/bilgem-ca.pem makes Go
+  trust only that certificate, which breaks module downloads with "x509: unknown
+  authority". Unset it for any command that downloads (the first go test or
+  make lint):
+
+  env -u SSL_CERT_FILE make test
+
+  env -u SSL_CERT_FILE make lint
+
+  cd backend && go vet ./... && test -z "$(gofmt -l .)" && go test -race
+  -count=1 ./...
+
+  make test-integration
+
+  The last one fails without Docker by design; with Docker running it currently
+  finds no tests.
+
+  For the live check once Docker is running:
+
+  docker run -d --rm --name cp1-pg -e POSTGRES_USER=composer -e
+  POSTGRES_PASSWORD=composer -e POSTGRES_DB=composer -p 127.0.0.1:55432:5432
+  postgres:16
+
+  cd backend && DATABASE_URL='postgres://composer:composer@127.0.0.1:55432/compo
+  ser?sslmode=disable' HTTP_ADDR=127.0.0.1:18080 go run ./cmd/api
+
+  curl -i 127.0.0.1:18080/healthz && docker exec cp1-pg psql -U composer -tAc
+  "SELECT application_name FROM pg_stat_activity WHERE 
+  application_name='composer-api'"
+
+  6. Deviations
+
+  - Error codes: I added internal (500) and method_not_allowed (405), which are
+    not in the §11 list, so every response uses the envelope. If you'd rather
+    extend §11, that's a one-line documentation change.
+  - Config scope: CLAUDE_SEGMENT_* moves to CP5 and SEED_* to CP2, where they're
+    first used. This avoids validating settings nothing reads yet. The
+    provider-selection settings are already done.
+  - Makefile targets: up, seed and seed-today are not added yet. They depend on
+    Compose and the seed generator, so they land in CP2/CP8. make test-frontend
+    skips until frontend/ exists.
+  - Request ID inside a group: if code calls logger.WithGroup(...), the
+    request_id field ends up nested inside that group. Nothing uses groups yet.
+  - No changes to the four design documents or ai-sessions/. git status shows
+    only the new backend/, Makefile, .gitignore and .env.example.

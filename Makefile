@@ -5,6 +5,9 @@ BACKEND  := backend
 FRONTEND := frontend
 
 STATICCHECK_VERSION := v0.8.2
+# Same golang-migrate version as backend/go.mod; the CLI applies the same files the binaries embed.
+MIGRATE_VERSION     := v4.19.1
+MIGRATE             := go run -tags pgx5 github.com/golang-migrate/migrate/v4/cmd/migrate@$(MIGRATE_VERSION)
 
 .DEFAULT_GOAL := help
 
@@ -38,6 +41,32 @@ test-integration: ## Integration tests (requires Docker)
 	@docker info >/dev/null 2>&1 || { echo "error: Docker is required for integration tests" >&2; exit 1; }
 	cd $(BACKEND) && go vet -tags=integration ./...
 	cd $(BACKEND) && go test -tags=integration -race -count=1 -timeout 10m ./test/integration/...
+
+# ---- Database (DATABASE_URL from the environment; see .env.example) ----
+
+.PHONY: require-database-url
+require-database-url:
+	@[ -n "$${DATABASE_URL:-}" ] || { echo "error: DATABASE_URL is required (see .env.example)" >&2; exit 1; }
+
+.PHONY: migrate
+migrate: require-database-url ## Apply all migrations to DATABASE_URL
+	@cd $(BACKEND) && url="pgx5://$${DATABASE_URL#*://}" && $(MIGRATE) -path migrations -database "$$url" up
+
+# Seed inputs: SEED_USERS (5000), SEED_RANDOM_SEED (42), SEED_REFERENCE_TIME
+# (2026-11-01T00:00:00Z). The same inputs always reproduce the same dataset.
+.PHONY: seed
+seed: require-database-url ## Load the deterministic seed (does nothing if users exist)
+	cd $(BACKEND) && go run ./cmd/seed
+
+.PHONY: seed-reset
+seed-reset: require-database-url ## Replace customer data and reseed (refused if any campaign or delivery exists)
+	cd $(BACKEND) && go run ./cmd/seed -reset
+
+# For demos long after the default reference time ("last N days" rules are
+# evaluated against now()). Not reproducible across days; the run logs its inputs.
+.PHONY: seed-today
+seed-today: require-database-url ## Reset and reseed with today's UTC midnight (same refusal rules as seed-reset)
+	cd $(BACKEND) && SEED_REFERENCE_TIME="$$(date -u +%Y-%m-%dT00:00:00Z)" go run ./cmd/seed -reset
 
 .PHONY: lint
 lint: ## gofmt check + go vet + staticcheck

@@ -254,6 +254,8 @@ CREATE TABLE worker_heartbeats (worker_id TEXT PRIMARY KEY, last_seen_at TIMESTA
 
 **Rows that the application deletes**: only `held` delivery rows, and only in the same transaction that moves their approval to `revoked` or `expired`. No other delivery row is ever deleted.
 
+**Development seed reset** (`cmd/seed -reset`, `make seed-reset`, `make seed-today`; not part of the application): replaces the customer tables (`users`, `channel_consents`, `cart_events`, `purchases`) in one transaction and restarts their ID sequences, so customer IDs are reused. It is therefore refused unless the database has **no campaigns and no delivery rows**; campaign, content and approval rows are never deleted, and `TRUNCATE … CASCADE` is never used. Concurrency: the transaction takes `LOCK TABLE campaigns IN SHARE MODE` (after the seed's advisory lock) before checking. This waits for any uncommitted campaign insert/update and blocks new ones until the reset commits; approvals and deliveries reference a campaign, so none can appear either. The reset never waits on a lock after that, so it cannot deadlock with approval preparation. To reset a database that has campaigns, recreate it (migrate down/up).
+
 ---
 
 ## 5. State machines and transactions
