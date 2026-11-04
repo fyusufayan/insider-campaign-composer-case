@@ -1,0 +1,2744 @@
+ ▐▛███▛█   Claude Code v2.1.318
+▝▜██████▀  Opus 5.5 · Claude Pro
+ ▝▝   ▝▝   ~/Desktop/devel/leet/insider-case/insider-campaign-composer-case
+
+
+❯ We are continuing the Smart Campaign Composer take-home project.              
+  Slice 1a (CP1–CP8) is complete, reviewed, tested and committed.               
+  Begin CP9 — Anthropic Go SDK Integration and Production Provider Adapter, the 
+  first checkpoint of Slice 1b.                                                 
+  Follow CLAUDE.md and the existing architectural decisions.                    
+  Before implementation, inspect:                                               
+                                                                                
+  * docs/ROADMAP.md and the actual Slice 1b acceptance criteria.                
+  * Relevant sections of docs/ARCHITECTURE.md, especially the LLM interface,    
+  model configuration, structured outputs, error handling and provider          
+  selection.                                                                    
+  * Applicable ADRs.                                                            
+  * Existing backend/internal/llm, backend/internal/ai,                         
+  backend/internal/platform/config and backend/cmd/api implementations.         
+  * The current Anthropic Go SDK v2 API, examples and release documentation.    
+                                                                                
+  Preserve the existing working Slice 1a demo application.                      
+  Objective                                                                     
+  Implement a real Anthropic provider behind the existing `llm.Client`          
+  interface.                                                                    
+  The final architecture must support:                                          
+                                                                                
+  * `LLM_PROVIDER=demo` → deterministic demo implementation.                    
+  * `LLM_PROVIDER=auto` without an API key → demo.                              
+  * `LLM_PROVIDER=auto` with a valid API key → Anthropic.                       
+  * `LLM_PROVIDER=anthropic` with a key → Anthropic.                            
+  * Explicit Anthropic mode without a key → clear startup failure.              
+                                                                                
+  Once Anthropic is selected, a provider error must never silently fall back to 
+  demo.                                                                         
+  Do not make any paid Anthropic API calls during CP9.                          
+  1. Anthropic SDK                                                              
+  Add the official `github.com/anthropics/anthropic-sdk-go` v2 dependency,      
+  selecting a suitable current stable version compatible with the project's Go  
+  toolchain.                                                                    
+  Use the official SDK rather than implementing the HTTP protocol manually.     
+  Implement a focused adapter inside `internal/llm`.                            
+  Requirements:                                                                 
+                                                                                
+  * Implement the existing `llm.Client` contract.                               
+  * Translate `llm.Request` into the official Anthropic Messages API request.   
+  * Preserve system instructions and message roles.                             
+  * Preserve the complete conversation history for repair turns.                
+  * Map model, token budget and reasoning effort according to the architecture. 
+  * Extract response text from supported content blocks safely.                 
+  * Preserve response model, request ID, token usage, latency and stop reason.  
+  * Propagate context cancellation and deadlines.                               
+  * Never log API keys, prompts, briefs, raw model responses or customer data.  
+                                                                                
+  Keep SDK-specific types inside the Anthropic adapter. Do not leak SDK types   
+  into the AI interpreter, campaign service or HTTP layer.                      
+  2. Native structured outputs                                                  
+  The current Anthropic documentation uses:                                     
+  `output_config.format` with `type: "json_schema"`.                            
+  Verify how the selected Go SDK version represents this feature, and send      
+  `llm.Request.JSONSchema` through the correct typed SDK API.                   
+  Do not use deprecated beta parameters unless the selected SDK genuinely       
+  requires them, and explain any such deviation.                                
+  Important:                                                                    
+                                                                                
+  * Verify that the serialized HTTP request actually includes the required      
+  structured-output configuration.                                              
+  * Do not assume that successful Go compilation proves the request is correct. 
+  * Add an HTTP transport-level test that captures the outgoing JSON body       
+  without calling Anthropic.                                                    
+  * Confirm the schema is included and is not accidentally omitted or changed.  
+  * Check schema compatibility with the supported Anthropic structured-output   
+  JSON Schema subset.                                                           
+  * In particular, inspect object closure (`additionalProperties: false`),      
+  nested unions, optional properties and schema complexity.                     
+  * Do not quietly simplify or weaken validation requirements merely to satisfy 
+  the API.                                                                      
+                                                                                
+  If the existing interpretation schema is incompatible, make the smallest      
+  justified correction and preserve the local strict decoder and semantic       
+  validator.                                                                    
+  Do not introduce tool-use-based JSON generation as a substitute without a     
+  documented architectural reason.                                              
+  3. Reasoning effort and model configuration                                   
+  The application already has `CLAUDE_SEGMENT_MODEL`, `CLAUDE_SEGMENT_EFFORT`,  
+  `CLAUDE_SEGMENT_TIMEOUT` and `CLAUDE_SEGMENT_MAX_TOKENS`.                     
+  Map these to the real Anthropic SDK according to the selected model's         
+  supported capabilities.                                                       
+  Check current documentation rather than guessing how effort or thinking       
+  configuration is represented.                                                 
+  Requirements:                                                                 
+                                                                                
+  * Preserve the existing defaults unless the model/API has a verified          
+  incompatibility.                                                              
+  * Avoid unsupported parameter combinations.                                   
+  * Never silently send a materially different reasoning configuration.         
+  * Make unsupported model/config combinations fail clearly.                    
+  * Respect the configured output token budget.                                 
+  * Keep provider configuration separate from campaign brief input.             
+                                                                                
+  Do not implement a generalized model catalog.                                 
+  4. Response handling                                                          
+  Map Anthropic responses into the existing `llm.Response`:                     
+                                                                                
+  * Text.                                                                       
+  * Model identifier.                                                           
+  * Stop reason.                                                                
+  * Input/output token usage.                                                   
+  * Request ID, where available.                                                
+  * Observed latency.                                                           
+                                                                                
+  Preserve the existing interpreter's behavior:                                 
+                                                                                
+  * Complete `end_turn` output proceeds to validation.                          
+  * Truncation is handled by the existing bounded retry policy.                 
+  * Refusal is never accepted as a valid interpretation.                        
+  * Unknown/incomplete stop reasons are not treated as successful output.       
+  * Invalid JSON or semantic validation errors enter the existing single-repair 
+  flow.                                                                         
+                                                                                
+  Do not implement another JSON validator inside the provider.                  
+  Do not bypass `ai.ParseInterpretation`.                                       
+  5. Error classification and retry behavior                                    
+  Map real SDK and HTTP errors to the existing `llm.Error` contract.            
+  Cover:                                                                        
+                                                                                
+  * 400 invalid request / schema rejection.                                     
+  * 401 authentication failure.                                                 
+  * 403 permission failure.                                                     
+  * 404 unknown model or resource.                                              
+  * 408 timeout.                                                                
+  * 429 rate limiting.                                                          
+  * 5xx provider failures.                                                      
+  * Network errors.                                                             
+  * Context cancellation and deadline expiration.                               
+                                                                                
+  Requirements:                                                                 
+                                                                                
+  * Preserve HTTP status and request ID where available.                        
+  * Distinguish retryable transient failures from non-retryable                 
+  configuration/authentication failures.                                        
+  * Do not log secrets or unsafe request/response bodies.                       
+  * Respect the existing interpreter timeout.                                   
+  * Review the SDK's built-in retry defaults and avoid accidental uncontrolled  
+  retry amplification.                                                          
+  * Do not perform a provider-to-demo fallback.                                 
+  * Preserve the existing HTTP error mapping unless a genuine contract problem  
+  requires a targeted change.                                                   
+                                                                                
+  Document any SDK automatic retries and make the behavior bounded and          
+  predictable.                                                                  
+  6. Provider selection and application wiring                                  
+  Replace the current "Anthropic not available" stub with the real adapter.     
+  Wire the selected provider into the existing `cmd/api` startup path.          
+  Requirements:                                                                 
+                                                                                
+  * Demo mode must work exactly as before.                                      
+  * `auto` selects demo only when the key is absent.                            
+  * `auto` selects Anthropic when the key is present.                           
+  * Explicit Anthropic with no key must fail at startup.                        
+  * The API must not validate credentials by making a paid model call at        
+  startup.                                                                      
+  * `/readyz` should identify the selected provider using the existing safe     
+  metadata contract.                                                            
+  * Do not expose API keys, model credentials or provider request payloads to   
+  the frontend.                                                                 
+                                                                                
+  Keep `llm.Scripted` for tests.                                                
+  7. Offline tests: mandatory                                                   
+  All CP9 tests must run without an Anthropic API key or external network       
+  access.                                                                       
+  Use the SDK's supported custom HTTP client, transport override or equivalent  
+  mechanism to capture requests and return predefined Anthropic-shaped          
+  responses.                                                                    
+  Cover at least:                                                               
+                                                                                
+  1. Correct request model and max_tokens.                                      
+  2. System prompt and conversation role mapping.                               
+  3. Initial request and repair-turn history.                                   
+  4. Structured output config and exact schema payload.                         
+  5. Valid structured response extraction.                                      
+  6. Response model, usage, request ID and latency.                             
+  7. Refusal.                                                                   
+  8. Max tokens and incomplete output.                                          
+  9. Unsupported or unexpected response shapes.                                 
+  10. HTTP 400, 401, 403, 404, 408, 429 and 5xx.                                
+  11. Network failure and deadline/cancellation.                                
+  12. Provider-selection matrix.                                                
+  13. No silent demo fallback.                                                  
+  14. No API key, prompt or raw model output in logs.                           
+  15. Existing demo and scripted interpreter tests still pass.                  
+                                                                                
+  At least one test must exercise the real interpreter with the Anthropic       
+  adapter and a mocked Anthropic HTTP response, including a failed first        
+  proposal followed by a successful repair.                                     
+  No live API calls.                                                            
+  8. Docker and configuration                                                   
+  Ensure the backend image builds with the new dependency.                      
+  Update configuration examples and README minimally:                           
+                                                                                
+  * How to keep running demo mode.                                              
+  * How to supply an Anthropic key locally without committing it.               
+  * How provider selection works.                                               
+  * How to run offline integration tests.                                       
+  * A clear warning that live Anthropic requests may incur charges.             
+                                                                                
+  Do not hardcode the key in source, compose files or Dockerfiles.              
+  Do not change the deterministic seed, segment compiler, audience partition or 
+  campaign persistence semantics.                                               
+  9. Scope constraints                                                          
+  Do NOT implement:                                                             
+                                                                                
+  * CP10 live API verification.                                                 
+  * Content generation or streaming.                                            
+  * New campaign endpoints.                                                     
+  * Vue UI features.                                                            
+  * Approval, sending or delivery.                                              
+  * Database migrations.                                                        
+  * New infrastructure.                                                         
+  * Actual paid Anthropic requests.                                             
+                                                                                
+  Do not change the working demo application merely to simplify SDK             
+  integration.                                                                  
+  10. Verification                                                              
+  Run:                                                                          
+                                                                                
+  * `make test`                                                                 
+  * `go test -race ./...`                                                       
+  * `make test-integration`                                                     
+  * `make lint`, where possible.                                                
+  * Frontend tests/typecheck/build if shared contracts changed.                 
+  * `docker compose build`.                                                     
+  * The existing demo-mode smoke test.                                          
+                                                                                
+  If the known proxy.golang.org TLS certificate issue prevents dependency       
+  downloads or lint tools, use safe existing caches or a verified               
+  container-based workflow. Do not disable TLS verification or dependency       
+  integrity checks.                                                             
+  If any verification cannot run, report the exact blocker honestly.            
+  11. Completion report                                                         
+  At the end report:                                                            
+                                                                                
+  1. Files changed and the exact SDK version.                                   
+  2. Anthropic adapter public API and construction.                             
+  3. Serialized structured-output request shape.                                
+  4. Effort/model parameter mapping.                                            
+  5. Response and stop-reason mapping.                                          
+  6. Error classification and SDK retry behavior.                               
+  7. Provider-selection behavior.                                               
+  8. Offline tests and actual results.                                          
+  9. Docker/demo compatibility.                                                 
+  10. Items requiring live API verification in CP10.                            
+                                                                                
+  Do not commit anything.                                                       
+  Do not start CP10.                                                            
+  Stop after CP9 and wait for review.                                           
+
+  Searched for 1 pattern, read 1 file, ran 4 shell commands (ctrl+o to expand)
+
+⏺ I'm still reviewing the roadmap, the AI architecture docs, ADR-014 to 016 and
+  the llm/ai packages. Next I'll read the config and cmd/api code, then check
+  the real SDK v2 API.
+
+  Read 1 file (ctrl+o to expand)
+
+⏺ Skill(claude-api)
+  ⎿  Successfully loaded skill · 1 tool allowed
+
+  Ran 3 shell commands (ctrl+o to expand)
+
+⏺ Now fetching the SDK itself to verify the real types.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ The known proxy TLS issue. Checking how earlier checkpoints worked around it.
+
+  Ran 2 shell commands (ctrl+o to expand)
+
+⏺ The documented fix is to unset SSL_CERT_FILE (it replaces the system root
+  store) — TLS verification stays on.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ v2.5.0 is the latest and matches ADR-014's pin. Adding it and inspecting the
+  real types.
+
+⏺ Bash(env -u SSL_CERT_FILE go get
+      github.com/anthropics/anthropic-sdk-go/v2@v2.5.0 2>&1 | tail -5; S=$(go
+      env GOMODCACHE)/github.com/anthropics/anthropic-sdk-go/v2@v2…)
+  ⎿  go: added github.com/tidwall/gjson v1.18.0
+     go: added github.com/tidwall/match v1.1.1
+     go: added github.com/tidwall/pretty v1.2.1
+     … +375 lines (ctrl+o to expand)
+  ⎿  Updated backend/go.mod (+11 -0)
+      14          dario.cat/mergo v1.0.2 // indirect
+      15          github.com/Azure/go-ansiterm v0.0.0-20250102033503-faa5
+          f7b0171c // indirect
+      16          github.com/Microsoft/go-winio v0.6.2 // indirect
+      17 +        github.com/anthropics/anthropic-sdk-go/v2 v2.5.0 // ind
+         +irect                                                          
+      18 +        github.com/bahlo/generic-list-go v0.2.0 // indirect    
+      19 +        github.com/buger/jsonparser v1.1.2 // indirect         
+      20          github.com/cenkalti/backoff/v4 v4.3.0 // indirect
+      21          github.com/cespare/xxhash/v2 v2.3.0 // indirect
+      22          github.com/containerd/errdefs v1.0.0 // indirect
+     ...
+      34          github.com/go-logr/stdr v1.2.2 // indirect
+      35          github.com/go-ole/go-ole v1.3.0 // indirect
+      36          github.com/google/uuid v1.6.0 // indirect
+      37 +        github.com/invopop/jsonschema v0.14.0 // indirect      
+      38          github.com/jackc/pgerrcode v0.0.0-20220416144525-469b46
+          aa5efa // indirect
+      39          github.com/jackc/pgpassfile v1.0.0 // indirect
+      40          github.com/jackc/pgservicefile v0.0.0-20240606120523-5a
+          60cdf6a761 // indirect
+     ...
+      53          github.com/moby/term v0.5.2 // indirect
+      54          github.com/opencontainers/go-digest v1.0.0 // indirect
+      55          github.com/opencontainers/image-spec v1.1.1 // indirect
+      56 +        github.com/pb33f/ordered-map/v2 v2.3.1 // indirect     
+      57          github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5
+          d4384ee4fb2 // indirect
+      58          github.com/power-devops/perfstat v0.0.0-20240221224432-
+          82ca36839d55 // indirect
+      59          github.com/shirou/gopsutil/v4 v4.26.6 // indirect
+      60          github.com/sirupsen/logrus v1.9.4 // indirect
+      61 +        github.com/standard-webhooks/standard-webhooks/librarie
+         +s v0.0.1 // indirect                                           
+      62          github.com/stretchr/testify v1.11.1 // indirect
+      63 +        github.com/tidwall/gjson v1.18.0 // indirect           
+      64 +        github.com/tidwall/match v1.1.1 // indirect            
+      65 +        github.com/tidwall/pretty v1.2.1 // indirect           
+      66 +        github.com/tidwall/sjson v1.2.5 // indirect            
+      67          github.com/tklauser/go-sysconf v0.4.0 // indirect
+      68          github.com/tklauser/numcpus v0.12.0 // indirect
+      69          github.com/yusufpapurcu/wmi v1.2.4 // indirect
+     ...
+      72          go.opentelemetry.io/otel v1.44.0 // indirect
+      73          go.opentelemetry.io/otel/metric v1.44.0 // indirect
+      74          go.opentelemetry.io/otel/trace v1.44.0 // indirect
+      75 +        go.yaml.in/yaml/v4 v4.0.0-rc.2 // indirect             
+      76          golang.org/x/crypto v0.54.0 // indirect
+      77          golang.org/x/sync v0.22.0 // indirect
+      78          golang.org/x/sys v0.47.0 // indirect
+  ⎿  Updated backend/go.sum (+24 -0)
+       6  github.com/Azure/go-ansiterm v0.0.0-20250102033503-faa5f7b0171c
+          /go.mod h1:xomTg63KZ2rFqZQzSB4Vz2SUXa1BpHTVz9L5PTmPC4E=
+       7  github.com/Microsoft/go-winio v0.6.2 h1:F2VQgta7ecxGYO8k3ZZz3RS
+          8fVIXVxONVUPlNERoyfY=
+       8  github.com/Microsoft/go-winio v0.6.2/go.mod h1:yd8OoFMLzJbo9gZq
+          8j5qaps8bJ9aShtEA8Ipt1oGCvU=
+       9 +github.com/anthropics/anthropic-sdk-go/v2 v2.5.0 h1:144oxWulRaf
+         +DlDWIcejLKw2uH7gl0Pr+3WY8rRRq7NU=                              
+      10 +github.com/anthropics/anthropic-sdk-go/v2 v2.5.0/go.mod h1:LAOI
+         +nMKgn6reTIrPvKXa5weyqzxsJkxSBuzhnxzukpQ=                       
+      11 +github.com/bahlo/generic-list-go v0.2.0 h1:5sz/EEAK+ls5wF+NeqDp
+         +k5+iNdMDXrh3z3nPnH1Wvgk=                                       
+      12 +github.com/bahlo/generic-list-go v0.2.0/go.mod h1:2KvAjgMlE5NNy
+         +nlg/5iLrrCCZ2+5xWbdbCW3pNTGyYg=                                
+      13 +github.com/buger/jsonparser v1.1.2 h1:frqHqw7otoVbk5M8LlE/L7HTn
+         +Iq2v9RX6EJ48i9AxJk=                                            
+      14 +github.com/buger/jsonparser v1.1.2/go.mod h1:6RYKKt7H4d4+iWqouI
+         +mQ9R2FZql3VbhNgx27UK13J/0=                                     
+      15  github.com/cenkalti/backoff/v4 v4.3.0 h1:MyRJ/UdXutAwSAT+s3wNd7
+          MfTIcy71VQueUuFK343L8=
+      16  github.com/cenkalti/backoff/v4 v4.3.0/go.mod h1:Y3VNntkOUPxTVeU
+          xJ/G5vcM//AlwfmyYozVcomhLiZE=
+      17  github.com/cespare/xxhash/v2 v2.3.0 h1:UL815xU9SqsFlibzuggzjXho
+          g7bL6oX9BbNZnL2UFvs=
+     ...
+      61  github.com/google/go-cmp v0.7.0/go.mod h1:pXiqmnSA92OHEEa9HXL2W
+          4E7lf9JzCmGVUdgjX3N/iU=
+      62  github.com/google/uuid v1.6.0 h1:NIvaJDMOsjHA8n1jAhLSgzrAzy1Hgr
+          +hNrb57e+94F0=
+      63  github.com/google/uuid v1.6.0/go.mod h1:TIyPZe4MgqvfeYDBFedMoGG
+          pEw/LqOeaOT+nhxU+yHo=
+      64 +github.com/invopop/jsonschema v0.14.0 h1:MHQqLhvpNUZfw+hM3AZDYK
+         +7jxO8FZoQeQM77g8iyZjg=                                         
+      65 +github.com/invopop/jsonschema v0.14.0/go.mod h1:ygm6C2EaVNMBDPp
+         +aPlnOA2pFAxBnxGjFlMZABxm9n2I=                                  
+      66  github.com/jackc/pgerrcode v0.0.0-20220416144525-469b46aa5efa h
+          1:s+4MhCQ6YrzisK6hFJUX53drDT4UsSW3DEhKn0ifuHw=
+      67  github.com/jackc/pgerrcode v0.0.0-20220416144525-469b46aa5efa/g
+          o.mod h1:a/s9Lp5W7n/DD0VrVoyJ00FbP2ytTPDVOivvn2bMlds=
+      68  github.com/jackc/pgpassfile v1.0.0 h1:/6Hmqy13Ss2zCq62VdNG8tM1w
+          chn8zjSGOBJ6icpsIM=
+     ...
+      111  github.com/opencontainers/go-digest v1.0.0/go.mod h1:0JzlMkj0T
+           RzQZfJkVvzbP0HBR3IKzErnv2BNG4W4MAM=
+      112  github.com/opencontainers/image-spec v1.1.1 h1:y0fUlFfIZhPF1W5
+           37XOLg0/fcx6zcHCJwooC2xJA040=
+      113  github.com/opencontainers/image-spec v1.1.1/go.mod h1:qpqAh3Dm
+           cf36wStyyWU+kCeDgrGnAve2nCC8+7h8Q0M=
+      114 +github.com/pb33f/ordered-map/v2 v2.3.1 h1:5319HDO0aw4DA4gzi+zv
+          +4FXU9UlSs3xGZ40wcP1nBjY=                                      
+      115 +github.com/pb33f/ordered-map/v2 v2.3.1/go.mod h1:qxFQgd0PkVUtO
+          +MCkTapqotNgzRhMPL7VvaHKbd1HnmQ=                               
+      116  github.com/pkg/errors v0.9.1 h1:FEBLx1zS214owpjy7qsBeixbURkuhQ
+           AwrK5UwLGTwt4=
+      117  github.com/pkg/errors v0.9.1/go.mod h1:bwawxfHBFNV+L2hUp1rHADu
+           fV3IMtnDRdf1r5NINEl0=
+      118  github.com/pmezard/go-difflib v1.0.0/go.mod h1:iKH77koFhYxTK1p
+           cRnkKkqfTogsbg7gZNVY4sRDYZ/4=
+     ...
+      126  github.com/shirou/gopsutil/v4 v4.26.6/go.mod h1:LZ6ewCSkBqUpvS
+           Of+LsTGnRinC6iaNUNMGBtDkJBaLQ=
+      127  github.com/sirupsen/logrus v1.9.4 h1:TsZE7l11zFCLZnZ+teH4Umoq5
+           BhEIfIzfRDZ1Uzql2w=
+      128  github.com/sirupsen/logrus v1.9.4/go.mod h1:ftWc9WdOfJ0a92nsE2
+           jF5u5ZwH8Bv2zdeOC42RjbV2g=
+      129 +github.com/standard-webhooks/standard-webhooks/libraries v0.0.
+          +1 h1:uOfcYT+3QungH6tIGSVCR/Y3KJmgJiHcojJbMTPDZAI=             
+      130 +github.com/standard-webhooks/standard-webhooks/libraries v0.0.
+          +1/go.mod h1:L1MQhA6x4dn9r007T033lsaZMv9EmBAdXyU/+EF40fo=      
+      131  github.com/stretchr/objx v0.1.0/go.mod h1:HFkY916IF+rwdDfMAkV7
+           OtwuqBVzrE8GR6GFx+wExME=
+      132  github.com/stretchr/objx v0.5.3 h1:jmXUvGomnU1o3W/V5h2VEradbpJ
+           DwGrzugQQvL0POH4=
+      133  github.com/stretchr/objx v0.5.3/go.mod h1:rDQraq+vQZU7Fde9LOZL
+           r8Tax6zZvy4kuNKF+QYS+U0=
+     ...
+      139  github.com/testcontainers/testcontainers-go v0.44.0/go.mod h1:
+           IcnwQrYTO86xHXu5bvMaBH7ATlbS3Qn1M1QWW3c66rE=
+      140  github.com/testcontainers/testcontainers-go/modules/postgres v
+           0.44.0 h1:8fdv/9y3JMxjQ+ULAcOG8RtgeNu5t9XF9LolSXDuTwM=
+      141  github.com/testcontainers/testcontainers-go/modules/postgres v
+           0.44.0/go.mod h1:CFr2LncGYokw+OKjXcr8ARCKG1SaC2UEnGxFBovE86g=
+      142 +github.com/tidwall/gjson v1.14.2/go.mod h1:/wbyibRr2FHMks5tjHJ
+          +5F8dMZh3AcwJEMf5vlfC0lxk=                                     
+     … 20 more lines (ctrl+o to expand)
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ Stable OutputConfigParam{Effort, Format: JSONOutputFormatParam{Schema}}
+  confirmed. Now the request/response structs, error type and options.
+
+  Ran 4 shell commands (ctrl+o to expand)
+
+⏺ option.WithoutEnvironmentDefaults() exists, which lets the adapter ignore
+  ANTHROPIC_BASE_URL/ANTHROPIC_CUSTOM_HEADERS/profiles. Checking options and
+  retry logic.
+
+  Ran 3 shell commands (ctrl+o to expand)
+
+⏺ The SDK retries connection errors, timeouts and 408/409/429/5xx responses with
+  capped backoff, but it honours Retry-After without a cap. I'm now checking
+  whether *anthropic.Error.Error() leaks response bodies.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ Error() appends the raw response body, so the adapter must not wrap it
+  verbatim. Checking which structured fields are available.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ Now checking the structured-output JSON Schema subset limits against our
+  schema.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ Our schema uses $ref but isn't recursive (rule → group → condition). Fetching
+  the live doc for complexity limits (optional-property and union counts).
+
+⏺ Fetch(https://platform.claude.com/docs/en/build-with-claude/structured-outputs
+       .md)
+  ⎿  Received 103.6KB (200 OK)
+
+⏺ Limits that apply: ≤24 optional properties and ≤16 union-typed parameters per
+  request, non-recursive, additionalProperties:false on every object. Measuring
+  our schema against these.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ The schema is well within limits and needs no changes, so I'm checking the
+  HTTP error mapping and test fixtures next.
+  Ran 2 shell commands (ctrl+o to expand)
+
+⏺ Design is settled. A few last SDK signatures to confirm before writing code.
+
+  Ran 3 shell commands (ctrl+o to expand)
+
+⏺ The campaign service logs cause strings, so the adapter needs to build
+  sanitized causes. I'm now wiring up CLAUDE_MAX_RETRIES in the config, since
+  ARCHITECTURE §7.3 documents it but nothing loads it yet.
+
+⏺ Bash(python3 -I - <<'EOF'
+      p='internal/platform/config/config.go'…)
+  ⎿          }
+     }
+     … +71 lines (ctrl+o to expand)
+  ⎿  Updated backend/internal/platform/config/config.go (+19 -0)
+      44          Provider LLMProvider
+      45          // APIKey is ANTHROPIC_API_KEY, trimmed. Empty when Pro
+          vider is demo.
+      46          APIKey Secret
+      47 +        // MaxRetries is CLAUDE_MAX_RETRIES: the Anthropic SDK'
+         +s automatic                                                    
+      48 +        // retries per model request (connection errors, 408, 4
+         +09, 429, 5xx).                                                 
+      49 +        MaxRetries int                                         
+      50  }
+      51  
+      52  // FellBackToDemo reports whether auto resolved to demo because
+           no API key is set.
+     ...
+      80          maxAIMaxTokens = 64000
+      81  )
+      82  
+      83 +// CLAUDE_MAX_RETRIES bounds: every retry is another provider r
+         +equest inside                                                  
+      84 +// the same task timeout, so the ceiling keeps amplification sm
+         +all.                                                           
+      85 +const (                                                        
+      86 +        defaultLLMMaxRetries = 2                               
+      87 +        maxLLMMaxRetries     = 5                               
+      88 +)                                                              
+      89 +                                                               
+      90  // Config is the validated configuration of the api process.
+      91  type Config struct {
+      92          DatabaseURL Secret // may contain credentials
+     ...
+      120          if err != nil {
+      121                  errs = append(errs, err)
+      122          }
+      123 +        llm.MaxRetries = defaultLLMMaxRetries                 
+      124 +        if v := get("CLAUDE_MAX_RETRIES"); v != "" {          
+      125 +                n, err := strconv.Atoi(v)                     
+      126 +                if err != nil || n < 0 || n > maxLLMMaxRetries
+          + {                                                            
+      127 +                        errs = append(errs, fmt.Errorf("CLAUDE
+          +_MAX_RETRIES must be an integer in [0, %d] (got %q)", maxLLMMa
+          +xRetries, v))                                                 
+      128 +                } else {                                      
+      129 +                        llm.MaxRetries = n                    
+      130 +                }                                             
+      131 +        }                                                     
+      132          cfg.LLM = llm
+      133  
+      134          seg, segErrs := loadAITask(get, "CLAUDE_SEGMENT", AITa
+           sk{
+
+⏺ Bash(cat >> internal/platform/config/config_test.go <<'EOF'…)
+  ⎿  3:import (
+     4-      "bytes"
+     5-      "encoding/json"
+     … +8 lines (ctrl+o to expand)
+  ⎿  Updated backend/internal/platform/config/config_test.go (+21 -0)
+      210                  }
+      211          }
+      212  }
+      213 +                                                              
+      214 +func TestLLMMaxRetries(t *testing.T) {                        
+      215 +        cfg, err := Load(env(validEnv()))                     
+      216 +        if err != nil {                                       
+      217 +                t.Fatal(err)                                  
+      218 +        }                                                     
+      219 +        if cfg.LLM.MaxRetries != 2 {                          
+      220 +                t.Errorf("default MaxRetries = %d, want 2", cf
+          +g.LLM.MaxRetries)                                             
+      221 +        }                                                     
+      222 +        for _, v := range []string{"0", "5"} {                
+      223 +                cfg, err := Load(env(with(validEnv(), "CLAUDE_
+          +MAX_RETRIES", v)))                                            
+      224 +                if err != nil || strconv.Itoa(cfg.LLM.MaxRetri
+          +es) != v {                                                    
+      225 +                        t.Errorf("CLAUDE_MAX_RETRIES=%s: %d, %
+          +v", v, cfg.LLM.MaxRetries, err)                               
+      226 +                }                                             
+      227 +        }                                                     
+      228 +        for _, v := range []string{"-1", "6", "two"} {        
+      229 +                if _, err := Load(env(with(validEnv(), "CLAUDE
+          +_MAX_RETRIES", v))); err == nil || !strings.Contains(err.Error
+          +(), "CLAUDE_MAX_RETRIES") {                                   
+      230 +                        t.Errorf("CLAUDE_MAX_RETRIES=%q: err =
+          + %v", v, err)                                                 
+      231 +                }                                             
+      232 +        }                                                     
+      233 +}                                                             
+
+⏺ Bash(sed -i '' 's/^\t"log\/slog"$/\t"log\/slog"\n\t"strconv"/'
+      internal/platform/config/config_test.go && go test
+      ./internal/platform/config/ 2>&1 | tail -3)
+  ⎿  ok
+     github.com/fyusufayan/insider-campaign-composer-case/backend/inter
+     nal/platform/config     0.935s
+  ⎿  Updated backend/internal/platform/config/config_test.go (+1 -0)
+       5          "encoding/json"
+       6          "fmt"
+       7          "log/slog"
+       8 +        "strconv"                                              
+       9          "strings"
+      10          "testing"
+      11          "time"
+
+⏺ Now the adapter itself.
+
+⏺ Write(backend/internal/llm/anthropic.go)
+  ⎿  Wrote 349 lines to backend/internal/llm/anthropic.go
+       1 package llm
+       2 
+       3 // This file is the only code that imports the Anthropic SDK (AD
+         R-014). SDK
+       4 // types never leave it: callers see Request, Response and *Erro
+         r only.
+       5 
+       6 import (
+       7   "context"
+       8   "errors"
+     … +341 lines (ctrl+o to expand)
+
+⏺ Refining transport errors: *url.Error text (method, URL, dial/TLS reason) is
+  safe and useful, so I'll keep it; only other errors (e.g. undecodable bodies)
+  get the fixed message.
+
+⏺ Bash(python3 -I - <<'EOF'
+      p='internal/llm/anthropic.go'…)
+  ⎿  # github.com/fyusufayan/insider-campaign-composer-case/backend/interna
+     l/llm
+     # [github.com/fyusufayan/insider-campaign-composer-case/backend/intern
+     … +3 lines (ctrl+o to expand)
+  ⎿  Updated backend/cmd/api/main.go (+7 -4)
+      45          if cfg.LLM.FellBackToDemo() {
+      46                  log.Warn("ANTHROPIC_API_KEY is not set; LLM_PRO
+          VIDER=auto selected the demo provider (mock AI output)")
+      47          }
+      48 -        // Selected once at startup; a resolved anthropic provi
+         -der fails here until                                           
+      49 -        // Slice 1b and never falls back to demo (invariant 17)
+         -.                                                              
+      50 -        llmClient, err := llm.New(cfg.LLM, ai.DemoResponders())
+      48 +        // Selected once at startup and never replaced: an Anth
+         +ropic failure is                                               
+      49 +        // returned to the caller, never answered with demo out
+         +put (invariant 17).                                            
+      50 +        // No request is made here; the key is first used by a 
+         +real interpretation.                                           
+      51 +        llmClient, err := llm.New(cfg.LLM, ai.DemoResponders(),
+         + log)                                                          
+      52          if err != nil {
+      53                  return err
+      54          }
+     ...
+      62                  return err
+      63          }
+      64          log.Info("configuration loaded", "http_addr", cfg.HTTPA
+          ddr, "llm_provider", cfg.LLM.Provider,
+      64 -                "segment_model", cfg.Segment.Model, "segment_pr
+         -ompt_version", ai.SegmentPromptVersion)                        
+      65 +                "llm_max_retries", cfg.LLM.MaxRetries, "segment
+         +_model", cfg.Segment.Model, "segment_effort", cfg.Segment.Effor
+         +t,                                                             
+      66 +                "segment_timeout", cfg.Segment.Timeout.String()
+         +, "segment_max_tokens", cfg.Segment.MaxTokens,                 
+      67 +                "segment_prompt_version", ai.SegmentPromptVersi
+         +on)                                                            
+      68  
+      69          ctx, stop := signal.NotifyContext(context.Background(),
+           syscall.SIGINT, syscall.SIGTERM)
+      70          defer stop()
+  ⎿  Updated backend/internal/llm/anthropic.go (+10 -3)
+       9          "fmt"
+      10          "log/slog"
+      11          "net/http"
+      12 +        "net/url"                                              
+      13          "strings"
+      14          "time"
+      15  
+     ...
+      335                  // A context error not caused by ctx (e.g. a t
+           ransport-level timeout).
+      336                  return &Error{Kind: ErrUnavailable, Err: fmt.E
+           rrorf("anthropic request timed out: %w", context.DeadlineExcee
+           ded)}
+      337          }
+      337 -        // Transport failures (DNS, TCP, TLS, reset) and undec
+          -odable 2xx bodies.                                            
+      338 -        // Their text may quote response bytes, so only a fixe
+          -d message is kept.                                            
+      339 -        return &Error{Kind: ErrUnavailable, Err: errors.New("a
+          -nthropic transport or decoding failure")}                     
+      338 +        // Transport failures (DNS, TCP, TLS, reset): *url.Err
+          +or names the method,                                          
+      339 +        // the endpoint URL (no credentials) and the network c
+          +ause.                                                         
+      340 +        var urlErr *url.Error                                 
+      341 +        if errors.As(err, &urlErr) {                          
+      342 +                return &Error{Kind: ErrUnavailable, Err: fmt.E
+          +rrorf("anthropic transport failure: %w", urlErr)}             
+      343 +        }                                                     
+      344 +        // Anything else (e.g. an undecodable 2xx body) may qu
+          +ote response bytes,                                           
+      345 +        // so only a fixed message is kept.                   
+      346 +        return &Error{Kind: ErrUnavailable, Err: errors.New("a
+          +nthropic: unreadable response")}                              
+      347  }
+      348  
+      349  // retryableStatus: the statuses the SDK itself retries (408 t
+           imeout, 409
+  ⎿  Updated backend/internal/llm/client.go (+3 -3)
+       2  // §7.2, ADR-016). It knows nothing about campaigns, segments o
+          r SQL: callers
+       3  // (package ai) own prompts, schemas, decoding, validation and 
+          repair.
+       4  //
+       5 -// Implementations: Scripted (unit tests), Demo (running the ap
+         -p without an                                                   
+       6 -// API key). The Anthropic implementation arrives in Slice 1b a
+         -nd is the only                                                 
+       7 -// code that may import the Anthropic SDK.                     
+       5 +// Implementations: Anthropic (production; anthropic.go is the 
+         +only code that                                                 
+       6 +// imports the Anthropic SDK), Scripted (unit tests), Demo (run
+         +ning the app                                                   
+       7 +// without an API key).                                        
+       8  package llm
+       9  
+      10  import (
+  ⎿  Updated backend/internal/llm/select.go (+11 -9)
+       1  package llm
+       2  
+       3  import (
+       4 -        "errors"                                               
+       4          "fmt"
+       5 +        "log/slog"                                             
+       6  
+       7          "github.com/fyusufayan/insider-campaign-composer-case/b
+          ackend/internal/platform/config"
+       8  )
+       9  
+      10 -// ErrAnthropicNotAvailable is returned while the Anthropic cli
+         -ent is not yet                                                 
+      11 -// implemented (Slice 1b). Selection never falls back to Demo i
+         -nstead.                                                        
+      12 -var ErrAnthropicNotAvailable = errors.New("llm: the anthropic p
+         -rovider is not available until slice 1b; use LLM_PROVIDER=demo 
+         -or unset ANTHROPIC_API_KEY")                                   
+      13 -                                                               
+      10  // New builds the Client for the provider resolved by configura
+          tion
+      15 -// (ARCHITECTURE §7.3). It is called once at process startup. U
+         -nit tests do                                                   
+      16 -// not use it; they construct Scripted directly.               
+      17 -func New(cfg config.LLM, demoResponders map[string]DemoResponde
+         -r) (Client, error) {                                           
+      11 +// (ARCHITECTURE §7.3). It is called once at process startup; t
+         +he choice is                                                   
+      12 +// immutable for the process lifetime, and an Anthropic client 
+         +never falls                                                    
+      13 +// back to Demo (invariant 17). It performs no network I/O. Uni
+         +t tests do not                                                 
+      14 +// use it; they construct Scripted directly.                   
+      15 +func New(cfg config.LLM, demoResponders map[string]DemoResponde
+         +r, log *slog.Logger) (Client, error) {                         
+      16          switch cfg.Provider {
+      17          case config.LLMProviderDemo:
+      18                  return NewDemo(demoResponders), nil
+      19          case config.LLMProviderAnthropic:
+      22 -                return nil, ErrAnthropicNotAvailable           
+      20 +                c, err := NewAnthropic(AnthropicConfig{APIKey: 
+         +cfg.APIKey.Reveal(), MaxRetries: cfg.MaxRetries, Logger: log}) 
+      21 +                if err != nil {                                
+      22 +                        return nil, err                        
+      23 +                }                                              
+      24 +                return c, nil                                  
+      25          default:
+      26                  return nil, fmt.Errorf("llm: unresolved provide
+          r %q", cfg.Provider)
+      27          }
+
+⏺ Builds. Before writing tests, checking how the SDK computes retry delay for
+  connection errors (nil response), so the retry tests don't depend on real
+  backoff waits.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ Status retries can be made instant with retry-after-ms: 0; connection-error
+  tests will use MaxRetries: 0. Writing a small shared fake-transport package
+  for the llm and ai tests.
+
+⏺ Write(backend/internal/llm/anthropictest/anthropictest.go)
+  ⎿  Wrote 188 lines to backend/internal/llm/anthropictest/anthropictest.go
+       1 // Package anthropictest provides an offline http.RoundTripper t
+         hat stands in
+       2 // for the Anthropic Messages API in tests: it records every out
+         going request
+       3 // (method, URL, headers, raw JSON body) and answers with script
+         ed,
+       4 // Anthropic-shaped responses. It never opens a network connecti
+         on. Test-only;
+       5 // production packages must not import it.
+       6 package anthropictest
+     … +182 lines (ctrl+o to expand)
+
+⏺ Now the adapter tests.
+
+⏺ Write(backend/internal/llm/anthropic_test.go)
+  ⎿  Wrote 508 lines to backend/internal/llm/anthropic_test.go
+       1 package llm
+       2 
+       3 import (
+       4   "bytes"
+       5   "context"
+       6   "encoding/json"
+       7   "errors"
+       8   "log/slog"
+       9   "net"
+      10   "net/http"
+     … +498 lines (ctrl+o to expand)
+
+  Read 1 file (ctrl+o to expand)
+
+⏺ Replacing the old selection test (which expected the "not available" stub)
+  with the real matrix.
+
+⏺ Bash(python3 -I - <<'EOF'
+      p='internal/llm/llm_test.go'…)
+  ⎿  --- FAIL: TestAnthropicRequestWireFormat (0.00s)
+         anthropic_test.go:145: x-api-key = ""
+         anthropic_test.go:148: unexpected Authorization header "Bearer sk-
+     … +12 lines (ctrl+o to expand)
+  ⎿  Updated backend/internal/llm/llm_test.go (+36 -25)
+      162          }
+      163  }
+      164  
+      165 -// Provider selection (ARCHITECTURE §7.3) from real configurat
+          -ion: demo when                                                
+      166 -// selected, an explicit failure — never demo — when anthropic
+          - is resolved.                                                 
+      165 +// Provider selection (ARCHITECTURE §7.3) from real configurat
+          +ion: demo only                                                
+      166 +// when selected or when auto has no key; a resolved anthropic
+          + provider always                                              
+      167 +// yields the Anthropic client (never demo), and explicit anth
+          +ropic without a                                               
+      168 +// key fails configuration. Selection performs no I/O and call
+          +s no responder.                                               
+      169  func TestNewSelectsProvider(t *testing.T) {
+      170          const key = "sk-ant-test"
+      171          tests := []struct {
+      172                  provider, key string
+      171 -                wantDemo      bool                            
+      172 -                wantErr       error                           
+      173 -                wantCfgErr    bool                            
+      173 +                want          string // "demo", "anthropic" or
+          + "config error"                                               
+      174          }{
+      175 -                {"", "", true, nil, false},                   
+      176 -                {"auto", "", true, nil, false},               
+      177 -                {"auto", key, false, ErrAnthropicNotAvailable,
+          - false},                                                      
+      178 -                {"anthropic", key, false, ErrAnthropicNotAvail
+          -able, false},                                                 
+      179 -                {"anthropic", "", false, nil, true},          
+      180 -                {"demo", "", true, nil, false},               
+      181 -                {"demo", key, true, nil, false},              
+      175 +                {"", "", "demo"},                             
+      176 +                {"auto", "", "demo"},                         
+      177 +                {"auto", key, "anthropic"},                   
+      178 +                {"anthropic", key, "anthropic"},              
+      179 +                {"anthropic", "", "config error"},            
+      180 +                {"demo", "", "demo"},                         
+      181 +                {"demo", key, "demo"},                        
+      182          }
+      183          for _, tt := range tests {
+      184                  t.Run(tt.provider+"/"+tt.key, func(t *testing.
+           T) {
+      185                          env := map[string]string{"DATABASE_URL
+           ": "postgres://x", "LLM_PROVIDER": tt.provider, "ANTHROPIC_API
+           _KEY": tt.key}
+      186                          cfg, err := config.Load(func(k string)
+            string { return env[k] })
+      187 -                        if tt.wantCfgErr {                    
+      188 -                                if err == nil {               
+      189 -                                        t.Fatal("configuration
+          - accepted")                                                   
+     … 49 more lines (ctrl+o to expand)
+
+⏺ The real wire shows WithAPIKey sending Authorization: Bearer rather than
+  x-api-key — exactly the sort of thing compilation can't catch. Checking the
+  option.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ That's the SDK's deliberate v2 behaviour (API keys go as Authorization: 
+  Bearer), so the adapter is right and my test assumption was wrong. Fixing the
+  assertions to match the SDK's real wire format.
+
+⏺ Bash(python3 -I - <<'EOF'
+      p='internal/llm/anthropic_test.go'…)
+  ⎿  ok
+     github.com/fyusufayan/insider-campaign-composer-case/backend/inter
+     nal/llm 0.397s
+     ?
+     github.com/fyusufayan/insider-campaign-composer-case/backend/inter
+     nal/llm/anthropictest   [no test files]
+  ⎿  Updated backend/internal/llm/anthropic_test.go (+7 -6)
+      141          if r.Method != http.MethodPost || r.URL != "https://ap
+           i.anthropic.com/v1/messages" {
+      142                  t.Errorf("endpoint = %s %s", r.Method, r.URL)
+      143          }
+      144 -        if got := r.Header.Get("X-Api-Key"); got != testAPIKey
+          - {                                                            
+      145 -                t.Errorf("x-api-key = %q", got)               
+      144 +        // SDK v2 sends API keys as a bearer credential (optio
+          +n.WithAPIKey).                                                
+      145 +        if got := r.Header.Get("Authorization"); got != "Beare
+          +r "+testAPIKey {                                              
+      146 +                t.Errorf("authorization = %q", got)           
+      147          }
+      147 -        if got := r.Header.Get("Authorization"); got != "" {  
+      148 -                t.Errorf("unexpected Authorization header %q",
+          - got)                                                         
+      148 +        if got := r.Header.Get("X-Api-Key"); got != "" {      
+      149 +                t.Errorf("unexpected x-api-key header %q", got
+          +)                                                             
+      150          }
+      151          if got := r.Header.Get("Anthropic-Version"); got != "2
+           026-10-21" {
+      152                  t.Errorf("anthropic-version = %q", got)
+     ...
+      480                  t.Fatal(err)
+      481          }
+      482          r := f.tr.Requests()[0]
+      482 -        if !strings.HasPrefix(r.URL, "https://api.anthropic.co
+          -m/") || r.Header.Get("Authorization") != "" ||                
+      483 -                r.Header.Get("X-Leak") != "" || r.Header.Get("
+          -X-Api-Key") != testAPIKey {                                   
+      483 +        if !strings.HasPrefix(r.URL, "https://api.anthropic.co
+          +m/") || r.Header.Get("Authorization") != "Bearer "+testAPIKey 
+          +||                                                            
+      484 +                r.Header.Get("X-Leak") != "" || r.Header.Get("
+          +X-Api-Key") != "" {                                           
+      485                  t.Errorf("request = %s %v", r.URL, r.Header)
+      486          }
+      487  }
+
+⏺ All llm tests pass. Next, the end-to-end test: the real interpreter driving
+  the Anthropic adapter over mocked HTTP, including a failed proposal followed
+  by a successful repair.
+
+⏺ Write(backend/internal/ai/interpreter_anthropic_test.go)
+  ⎿  Wrote 168 lines to backend/internal/ai/interpreter_anthropic_test.go
+       1 package ai
+       2 
+       3 import (
+       4   "context"
+       5   "encoding/json"
+       6   "errors"
+       7   "net/http"
+       8   "reflect"
+       9   "strings"
+      10   "testing"
+     … +158 lines (ctrl+o to expand)
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ Passing. Checking other callers of llm.New (e.g. integration tests) and
+  running the full unit suite.
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ All unit tests pass. Now config examples and docs; checking what compose,
+  .env.example and the README currently say.
+
+  Ran 2 shell commands (ctrl+o to expand)
+
+⏺ Updating the README, .env.example and compose.
+
+⏺ Bash(python3 -I - <<'EOF'
+      p='README.md'…)
+  ⎿   .env.example                                    |  6 +++
+      README.md                                       | 48 +++++++++++++++-
+     ---
+     … +11 lines (ctrl+o to expand)
+  ⎿  Updated .env.example (+6 -0)
+      19  
+      20  # LLM provider, resolved once at startup: auto | anthropic | de
+          mo.
+      21  # auto selects anthropic when ANTHROPIC_API_KEY is non-empty, o
+          therwise demo.
+      22 +# anthropic without a key fails at startup; anthropic failures 
+         +never fall back                                                
+      23 +# to demo. WARNING: with a key, every interpretation is a billa
+         +ble API request.                                               
+      24 +# Set the key only in your uncommitted .env or shell; never com
+         +mit it.                                                        
+      25  LLM_PROVIDER=auto
+      26  ANTHROPIC_API_KEY=
+      27 +# Automatic SDK retries per model request (connection errors, 4
+         +08, 409, 429,                                                  
+      28 +# 5xx), 0–5. All attempts share CLAUDE_SEGMENT_TIMEOUT.        
+      29 +CLAUDE_MAX_RETRIES=2                                           
+      30  
+      31  # Brief interpretation model (model names come only from config
+          uration).
+      32  CLAUDE_SEGMENT_MODEL=claude-opus-5-5
+  ⎿  Updated README.md (+39 -9)
+       5  database-backed audience preview. No real messages are sent.
+       6  
+       7  Design and rationale: `docs/ARCHITECTURE.md`, `DECISIONS.md`, `
+          docs/ROADMAP.md`,
+       8 -`CLAUDE.md`. Current scope: **Slice 1a** — brief → demo interpr
+         -etation →                                                      
+       9 -validated segment → audience preview. Content generation, appro
+         -val and sending                                                
+       8 +`CLAUDE.md`. Current scope: **Slice 1a** plus the start of **Sl
+         +ice 1b** — brief →                                             
+       9 +interpretation (demo, or real Claude when a key is configured) 
+         +→ validated                                                    
+      10 +segment → audience preview. Content generation, approval and se
+         +nding                                                          
+      11  come in later slices.
+      12  
+      13  ## Quick start (Docker only)
+     ...
+      111  | `anthropic` | empty | startup fails with a configuration err
+           or |
+      112  | `demo` | any | `demo` |
+      113  
+      113 -There is never a runtime fallback from Anthropic to demo. **In
+          - Slice 1a the                                                 
+      114 -Anthropic client is not implemented yet**: a resolved `anthrop
+          -ic` provider stops                                            
+      115 -the API at startup. If your shell exports `ANTHROPIC_API_KEY`,
+          - start with                                                   
+      116 -`LLM_PROVIDER=demo docker compose up --build`.                
+      114 +There is never a runtime fallback from Anthropic to demo: once
+          + `anthropic` is                                               
+      115 +selected, every provider failure (authentication, rate limit, 
+          +outage, timeout,                                              
+      116 +refusal, invalid output) is returned as an API error. Startup 
+          +makes no model                                                
+      117 +call, so an invalid key only shows up on the first interpretat
+          +ion (as                                                       
+      118 +`llm_rejected`). `/readyz` reports the selected `llm_provider`
+          +.                                                             
+      119 +                                                              
+      120 +**Keep running demo mode** (no key, nothing sent to Claude): l
+          +eave                                                          
+      121 +`ANTHROPIC_API_KEY` empty, or force it even if your shell expo
+          +rts a key:                                                    
+      122 +                                                              
+      123 +```bash                                                       
+      124 +LLM_PROVIDER=demo docker compose up --build                   
+      125 +```                                                           
+      126 +                                                              
+      127 +**Use real Claude locally.** ⚠️ Every interpretation is a bill
+          +able Anthropic API                                            
+      128 +request (up to three requests: the first answer, at most one r
+          +epair turn and at                                             
+      129 +most one retry after truncation, each with up to `CLAUDE_MAX_R
+          +ETRIES` automatic                                             
+      130 +SDK retries). Put the key in the uncommitted `.env` (git-ignor
+          +ed) or export it                                              
+      131 +only in your shell, never in a tracked file:                  
+      132 +                                                              
+      133 +```bash                                                       
+      134 +cp .env.example .env    # then set ANTHROPIC_API_KEY=… in .env
+          + (never commit it)                                            
+      135 +```                                                           
+     … 38 more lines (ctrl+o to expand)
+  ⎿  Updated docker-compose.yml (+1 -0)
+      82        # auto → anthropic iff ANTHROPIC_API_KEY is non-empty, ot
+          herwise demo.
+      83        LLM_PROVIDER: ${LLM_PROVIDER:-auto}
+      84        ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      85 +      CLAUDE_MAX_RETRIES: ${CLAUDE_MAX_RETRIES:-2}             
+      86        CLAUDE_SEGMENT_MODEL: ${CLAUDE_SEGMENT_MODEL:-claude-opus
+          -5-5}
+      87        CLAUDE_SEGMENT_EFFORT: ${CLAUDE_SEGMENT_EFFORT:-low}
+      88        CLAUDE_SEGMENT_TIMEOUT: ${CLAUDE_SEGMENT_TIMEOUT:-45s}
+
+⏺ Tidying the module, then recording the design details in ARCHITECTURE §7.1.
+
+⏺ Bash(cd /Users/bilgem/Desktop/devel/leet/insider-case/insider-campaign-compose
+      r-case/backend && env -u SSL_CERT_FILE go mod tidy 2>&1 | tail -3; git
+      diff go.mod; go…)
+  ⎿  go: downloading github.com/googleapis/gax-go/v2 v2.15.0
+     go: downloading google.golang.org/genproto/googleapis/rpc v0.0.0-20250
+     818200422-3122310a409c
+     … +56 lines (ctrl+o to expand)
+  ⎿  Updated backend/go.mod (+1 -1)
+      3  go 1.25.0
+      4  
+      5  require (
+      6 +        github.com/anthropics/anthropic-sdk-go/v2 v2.5.0        
+      7          github.com/golang-migrate/migrate/v4 v4.19.1
+      8          github.com/jackc/pgx/v5 v5.11.0
+      9          github.com/testcontainers/testcontainers-go v0.44.0
+     ...
+      15          dario.cat/mergo v1.0.2 // indirect
+      16          github.com/Azure/go-ansiterm v0.0.0-20250102033503-faa5
+          f7b0171c // indirect
+      17          github.com/Microsoft/go-winio v0.6.2 // indirect
+      17 -        github.com/anthropics/anthropic-sdk-go/v2 v2.5.0 // ind
+         -irect                                                          
+      18          github.com/bahlo/generic-list-go v0.2.0 // indirect
+      19          github.com/buger/jsonparser v1.1.2 // indirect
+      20          github.com/cenkalti/backoff/v4 v4.3.0 // indirect
+  ⎿  Updated backend/go.sum (+72 -0)
+       1 +cloud.google.com/go v0.121.6 h1:waZiuajrI28iAf40cWgycWNgaXPO06d
+         +upuS+sgibK6c=                                                  
+       2 +cloud.google.com/go/auth v0.16.4 h1:fXOAIQmkApVvcIn7Pc2+5J8QTMV
+         +bUGLscnSVNl11su8=                                              
+       3 +cloud.google.com/go/auth v0.16.4/go.mod h1:j10ncYwjX/g3cdX7GpEz
+         +sdM+d+ZNsXAbb6qXA7p1Y5M=                                       
+       4 +cloud.google.com/go/auth/oauth2adapt v0.2.8 h1:keo8NaayQZ6wimpN
+         +SmW5OPc283g65QNIiLpZnkHRbnc=                                   
+       5 +cloud.google.com/go/auth/oauth2adapt v0.2.8/go.mod h1:XQ9y31Rkq
+         +ZCcwJWNSx2Xvric3RrU88hAYYbjDWYDL+c=                            
+       6 +cloud.google.com/go/compute/metadata v0.8.0 h1:HxMRIbao8w17ZX6w
+         +BnjhcDkW6lTFpgcaobyVfZWqRLA=                                   
+       7 +cloud.google.com/go/compute/metadata v0.8.0/go.mod h1:sYOGTp851
+         +OV9bOFJ9CH7elVvyzopvWQFNNghtDQ/Biw=                            
+       8  dario.cat/mergo v1.0.2 h1:85+piFYR1tMbRrLcDwR18y4UKJ3aH1Tbzi24V
+          RW1TK8=
+       9  dario.cat/mergo v1.0.2/go.mod h1:E/hbnu0NxMFBjpMIE34DRGLWqDy0g5
+          FuKDhCb31ngxA=
+      10  github.com/AdaLogics/go-fuzz-headers v0.0.0-20240806141605-e8a1
+          dd7889d6 h1:He8afgbRMd7mFxO99hRNu+6tazq8nFF9lIwo9JFroBk=
+     ...
+      15  github.com/Microsoft/go-winio v0.6.2/go.mod h1:yd8OoFMLzJbo9gZq
+          8j5qaps8bJ9aShtEA8Ipt1oGCvU=
+      16  github.com/anthropics/anthropic-sdk-go/v2 v2.5.0 h1:144oxWulRaf
+          DlDWIcejLKw2uH7gl0Pr+3WY8rRRq7NU=
+      17  github.com/anthropics/anthropic-sdk-go/v2 v2.5.0/go.mod h1:LAOI
+          nMKgn6reTIrPvKXa5weyqzxsJkxSBuzhnxzukpQ=
+      18 +github.com/aws/aws-sdk-go-v2 v1.38.0 h1:UCRQ5mlqcFk9HJDIqENSLR3
+         +wiG1VTWlyUfLDEvY7RxU=                                          
+      19 +github.com/aws/aws-sdk-go-v2 v1.38.0/go.mod h1:9Q0OoGQoboYIAJys
+         +lFyF1f5K1Ryddop8gqMhWx/n4Wg=                                   
+      20 +github.com/aws/aws-sdk-go-v2/aws/protocol/eventstream v1.6.3 h1
+         +:tW1/Rkad38LA15X4UQtjXZXNKsCgkshC3EbmcUmghTg=                  
+      21 +github.com/aws/aws-sdk-go-v2/aws/protocol/eventstream v1.6.3/go
+         +.mod h1:UbnqO+zjqk3uIt9yCACHJ9IVNhyhOCnYk8yA19SAWrM=           
+      22 +github.com/aws/aws-sdk-go-v2/config v1.27.27 h1:HdqgGt1OAP0HkED
+         +DShEl0oSYa9ZZBSOmKpdpsDMdO90=                                  
+      23 +github.com/aws/aws-sdk-go-v2/config v1.27.27/go.mod h1:MVYamCg7
+         +6dFNINkZFu4n4RjDixhVr51HLj4ErWzrVwg=                           
+      24 +github.com/aws/aws-sdk-go-v2/credentials v1.17.27 h1:2raNba6gr2
+         +IfA0eqqiP2XiQ0UVOpGPgDSi0I9iAP+UI=                             
+      25 +github.com/aws/aws-sdk-go-v2/credentials v1.17.27/go.mod h1:gni
+         +iwbGahQByxan6YjQUMcW4Aov6bLC3m+evgcoN4r4=                      
+      26 +github.com/aws/aws-sdk-go-v2/feature/ec2/imds v1.16.11 h1:Krelu
+         +oV8FZDEtI6Co2xuNk/UqI9iwMrOx/87PBNIKqw=                        
+      27 +github.com/aws/aws-sdk-go-v2/feature/ec2/imds v1.16.11/go.mod h
+         +1:SeSUYBLsMYFoRvHE0Tjvn7kbxaUhl75CJi1sbfhMxkU=                 
+      28 +github.com/aws/aws-sdk-go-v2/internal/configsources v1.3.15 h1:
+         +SoNJ4RlFEQEbtDcCEt+QG56MY4fm4W8rYirAmq+/DdU=                   
+      29 +github.com/aws/aws-sdk-go-v2/internal/configsources v1.3.15/go.
+         +mod h1:U9ke74k1n2bf+RIgoX1SXFed1HLs51OgUSs+Ph0KJP8=            
+      30 +github.com/aws/aws-sdk-go-v2/internal/endpoints/v2 v2.6.15 h1:C
+         +6WHdGnTDIYETAm5iErQUiVNsclNx9qbJVPIt03B6bI=                    
+      31 +github.com/aws/aws-sdk-go-v2/internal/endpoints/v2 v2.6.15/go.m
+         +od h1:ZQLZqhcu+JhSrA9/NXRm8SkDvsycE+JkV3WGY41e+IM=             
+      32 +github.com/aws/aws-sdk-go-v2/internal/ini v1.8.0 h1:hT8rVHwugYE
+         +2lEfdFE0QWVo81lF7jMrYJVDWI+f+VxU=                              
+      33 +github.com/aws/aws-sdk-go-v2/internal/ini v1.8.0/go.mod h1:8tu/
+         +lYfQfFe6IGnaOdrpVgEL2IrrDOf6/m9RQum4NkY=                       
+      34 +github.com/aws/aws-sdk-go-v2/service/internal/accept-encoding v
+         +1.11.3 h1:dT3MqvGhSoaIhRseqw2I0yH81l7wiR2vjs57O51EAm8=         
+      35 +github.com/aws/aws-sdk-go-v2/service/internal/accept-encoding v
+         +1.11.3/go.mod h1:GlAeCkHwugxdHaueRr4nhPuY+WW+gR8UjlcqzPr1SPI=  
+      36 +github.com/aws/aws-sdk-go-v2/service/internal/presigned-url v1.
+         +11.17 h1:HGErhhrxZlQ044RiM+WdoZxp0p+EGM62y3L6pwA4olE=          
+      37 +github.com/aws/aws-sdk-go-v2/service/internal/presigned-url v1.
+         +11.17/go.mod h1:RkZEx4l0EHYDJpWppMJ3nD9wZJAa8/0lq9aVC+r2UII=   
+      38 +github.com/aws/aws-sdk-go-v2/service/sso v1.22.4 h1:BXx0ZIxvrJd
+         +SgSvKTZ+yRBeSqqgPM89VPlulEcl37tM=                              
+      39 +github.com/aws/aws-sdk-go-v2/service/sso v1.22.4/go.mod h1:ooyC
+         +OXjvJEsUw7x+ZDHeISPMhtwI3ZCB7ggFMcFfWLU=                       
+      40 +github.com/aws/aws-sdk-go-v2/service/ssooidc v1.26.4 h1:yiwVzJW
+         +2ZxZTurVbYWA7QOrAaCYQR72t0wrSBfoesUE=                          
+      41 +github.com/aws/aws-sdk-go-v2/service/ssooidc v1.26.4/go.mod h1:
+         +0oxfLkpz3rQ/CHlx5hB7H69YUpFiI1tql6Q6Ne+1bCw=                   
+      42 +github.com/aws/aws-sdk-go-v2/service/sts v1.30.3 h1:ZsDKRLXGWHk
+         +8WdtyYMoGNO7bTudrvuKpDKgMVRlepGE=                              
+      43 +github.com/aws/aws-sdk-go-v2/service/sts v1.30.3/go.mod h1:zwyS
+         +h8fpFyXp9yOr/KVzxOl8SRqgf/IDw5aUt9UKFcQ=                       
+      44 +github.com/aws/smithy-go v1.22.5 h1:P9ATCXPMb2mPjYBgueqJNCA5S9U
+         +fktsW0tTxi+a7eqw=                                              
+     … 92 more lines (ctrl+o to expand)
+
+⏺ Modules verified. Now the ARCHITECTURE §7.1 update.
+
+⏺ Bash(cd /Users/bilgem/Desktop/devel/leet/insider-case/insider-campaign-compose
+      r-case && python3 -I - <<'EOF'
+      p='docs/ARCHITECTURE.md'…)
+  ⎿  454:- Client (`llm/anthropic.go`, `llm.NewAnthropic`): `anthropic.NewC
+     lient(option.WithoutEnvironmentDefaults(), option.WithAPIKey(key), opt
+     ion.WithHTTPClient(hc), option.WithMaxRetries(CLAUDE_MAX_RETRIES))`. `
+     … +17 lines (ctrl+o to expand)
+  ⎿  Updated docs/ARCHITECTURE.md (+6 -5)
+      451  
+      452  ### 7.1 SDK
+      453  - Module `github.com/anthropics/anthropic-sdk-go/v2`, pinned *
+           *v2.5.0** in `go.mod` (checksum in `go.sum`). Requires **Go 1.
+           25+**. Sends `anthropic-version: 2026-10-21` — **no** `tempera
+           ture`/`top_p`/`top_k` are ever sent.
+      454 -- Client: `anthropic.NewClient(option.WithAPIKey(cfg.Anthropic
+          -APIKey), option.WithMaxRetries(cfg.ClaudeMaxRetries))`. The ke
+          -y comes from `ANTHROPIC_API_KEY` via our config; it is never l
+          -ogged.                                                        
+      454 +- Client (`llm/anthropic.go`, `llm.NewAnthropic`): `anthropic.
+          +NewClient(option.WithoutEnvironmentDefaults(), option.WithAPIK
+          +ey(key), option.WithHTTPClient(hc), option.WithMaxRetries(CLAU
+          +DE_MAX_RETRIES))`. `WithoutEnvironmentDefaults` disables the S
+          +DK's own credential chain and env autoload (`ANTHROPIC_AUTH_TO
+          +KEN`, profiles, federation, `ANTHROPIC_BASE_URL`, `ANTHROPIC_C
+          +USTOM_HEADERS`), so the key from our config is the only creden
+          +tial (the SDK sends it as `Authorization: Bearer`). The key is
+          + never logged. Construction performs no I/O; there is no start
+          +up model call.                                                
+      455  - Non-streaming: `client.Messages.New(ctx, anthropic.MessageNe
+           wParams{…})`.
+      456  - Streaming: `client.Messages.NewStreaming(ctx, params)`; for 
+           each event `message.Accumulate(event)` (check error) and switc
+           h on `event.AsAny()`; `ContentBlockDeltaEvent` → `TextDelta` f
+           eeds the field extractor; a thinking content-block start emits
+            SSE `status: thinking`; finally check `stream.Err()`.
+      457 -- Structured output (stable API): `OutputConfig: anthropic.Out
+          -putConfigParam{Format: anthropic.JSONOutputFormatParam{Schema:
+          - <map[string]any>}, …}` with effort set on the same output con
+          -fig. The JSON arrives as a text block and is decoded by our st
+          -rict decoder. Schemas are generated deterministically from the
+          - registries (stable key order) so the API's compiled-grammar c
+          -ache (24 h) is reused.                                        
+      458 -- Retries: the SDK retries connection errors, 408, 409, 429, ≥
+          -500 (default 2, configurable). Total deadline via `context.Wit
+          -hTimeout`; per-attempt via `option.WithRequestTimeout`.       
+      459 -- Errors: `errors.As(err, &apiErr *anthropic.Error)` → `Status
+          -Code`, `RequestID` (logged). Mapped to domain errors: `ErrLLMU
+          -navailable` (retryable), `ErrLLMRejected`, `ErrLLMRefused` (`s
+          -top_reason == refusal`), `ErrLLMTruncated` (`max_tokens`), `Er
+          -rLLMInvalidOutput`.                                           
+      457 +- Structured output (stable API, no beta header): `OutputConfi
+          +g: anthropic.OutputConfigParam{Effort: …, Format: anthropic.JS
+          +ONOutputFormatParam{Schema: <map[string]any>}}`, serialized as
+          + `"output_config":{"effort":"low","format":{"type":"json_schem
+          +a","schema":{…}}}` (verified by a transport-level test that co
+          +mpares the captured body with `InterpretationSchemaJSON`). Thi
+          +nking is sent explicitly as `{"type":"adaptive"}` so every mod
+          +el gets the same reasoning configuration (on `claude-opus-5-5`
+          + this equals omitting it); a model without adaptive thinking f
+          +ails with a 400 instead of silently running without it. `CLAUD
+          +E_*_EFFORT` maps 1:1 (`low|medium|high|max`); an empty or unkn
+          +own effort is rejected locally rather than letting the model d
+          +efault apply. The interpretation schema stays within the struc
+          +tured-output subset and limits (all objects closed, non-recurs
+          +ive `$defs`, 3 optional properties of 24, 3 unions of 16). The
+          + JSON arrives as a text block and is decoded by our strict dec
+          +oder. Schemas are generated deterministically from the registr
+          +ies (stable key order) so the API's compiled-grammar cache (24
+          + h) is reused.                                                
+      458 +- Retries: the SDK retries connection errors, 408, 409, 429, ≥
+          +500 (honouring `x-should-retry`) up to `CLAUDE_MAX_RETRIES` (d
+          +efault 2, range 0–5) with 0.5 s·2ⁿ backoff (≤ 8 s, jittered) o
+          +r the server's `retry-after(-ms)`. The **only** time budget is
+          + the interpreter's `context.WithTimeout(CLAUDE_SEGMENT_TIMEOUT
+          +)`, which spans all SDK attempts and is never exceeded (a long
+          + `retry-after` simply ends in a timeout). **No** per-attempt `
+          +option.WithRequestTimeout` is set: the SDK retries an attempt 
+          +that hit it, which would abandon and re-bill a slow but health
+          +y generation. Worst case per interpretation: 3 logical request
+          +s (answer, repair, one truncation retry) × (1 + retries) HTTP 
+          +attempts, all inside the one deadline.                        
+      459 +- Errors: `errors.As(err, &apiErr *anthropic.Error)` → `llm.Er
+          +ror{StatusCode, RequestID}`; 408/409/429/5xx → `llm.ErrUnavail
+          +able` (retryable), other 4xx (400 incl. schema rejection, 401,
+          + 403, 404 unknown model, 413) → `llm.ErrRejected`; transport e
+          +rrors → `ErrUnavailable` (status 0); the caller's cancellation
+          +/deadline → the context error. The message is rebuilt from met
+          +adata (status, API error type, request id, `*url.Error` for tr
+          +ansport failures) because `*anthropic.Error.Error()` embeds th
+          +e raw response body. 2xx responses with a non-text content blo
+          +ck (anything but text/thinking) or `end_turn` without text are
+          + `ErrUnavailable`, never output. Stop reasons other than end_t
+          +urn/max_tokens/refusal/stop_sequence pass through verbatim and
+          + are rejected by the interpreter. `ai` maps these to `ErrLLMUn
+          +available`, `ErrLLMRejected`, `ErrLLMRefused`, `ErrLLMTruncate
+          +d`, `ErrOutputInvalid`. The adapter logs one metadata line per
+          + call (task, models, effort, stop reason, tokens, latency, pro
+          +vider request id) — never prompts, briefs, outputs or the key.
+      460 +- `Stream` on the Anthropic client returns `ErrRejected` witho
+          +ut contacting the provider until content generation (Slice 2) 
+          +implements it.                                                
+      461  - Model constraints honoured (Opus 5.5): thinking always on (c
+           ontrolled by effort only), no forced `tool_choice`, no assista
+           nt prefill.
+      462  - Server-side refusal fallback (beta Messages API) is **not** 
+           used in core; refusals are surfaced to the marketer.
+      463  
+     ...
+      477  LLM_PROVIDER=auto|anthropic|demo        ANTHROPIC_API_KEY=…
+      478  CLAUDE_SEGMENT_MODEL=claude-opus-5-5    CLAUDE_SEGMENT_EFFORT=
+           low     CLAUDE_SEGMENT_TIMEOUT=45s  CLAUDE_SEGMENT_MAX_TOKENS=
+           4000
+      479  CLAUDE_CONTENT_MODEL=claude-opus-5-5    CLAUDE_CONTENT_EFFORT=
+           medium  CLAUDE_CONTENT_TIMEOUT=90s  CLAUDE_CONTENT_MAX_TOKENS=
+           8000
+      479 -CLAUDE_MAX_RETRIES=2                                          
+      480 +CLAUDE_MAX_RETRIES=2                    # 0–5, SDK retries per
+          + model request                                                
+      481  ```
+      482  **Provider selection** (once, at startup; immutable for the pr
+           ocess lifetime):
+      483  
+
+⏺ Adding a short ADR-014 note and a Makefile guard so production binaries can
+  never link the test transport.
+
+⏺ Bash(python3 -I - <<'EOF'
+      p='DECISIONS.md'…)
+  ⎿  isolation-ok
+  ⎿  Updated DECISIONS.md (+1 -1)
+      201  
+      202  **Reasoning.** Maintained, typed streaming (`NewStreaming` + `
+           Accumulate`), typed errors (`*anthropic.Error`), built-in retr
+           ies. Forced tool use is rejected by the default model; structu
+           red outputs remove most syntax failures; the schema cannot exp
+           ress ranges/lengths, so local validation remains mandatory. On
+           e repair turn bounds cost and latency.
+      203  
+      204 -**Trade-offs.** Coupling to SDK types is confined to `llm/anth
+          -ropic.go`. v2.5.0 is very recent; fallback to v2.4.0 if issues
+          - arise. Server-side refusal fallbacks (beta API) are not used.
+      204 +**Trade-offs.** Coupling to SDK types is confined to `llm/anth
+          +ropic.go`. v2.5.0 is very recent; fallback to v2.4.0 if issues
+          + arise. Server-side refusal fallbacks (beta API) are not used.
+          + The adapter disables the SDK's environment credential autoloa
+          +d (`option.WithoutEnvironmentDefaults`) so `ANTHROPIC_API_KEY`
+          + from our config is the only credential, sets no per-attempt r
+          +equest timeout (a timed-out attempt would be retried and re-bi
+          +lled; the interpreter's single deadline bounds all attempts) a
+          +nd sends adaptive thinking explicitly (implemented in CP9; det
+          +ails in ARCHITECTURE §7.1).                                   
+      205  
+      206  ---
+      207  
+  ⎿  Updated Makefile (+3 -0)
+      35          @cd $(BACKEND) && if go list -deps -test ./... | grep -
+          q '^github.com/testcontainers/'; then \
+      36                  echo "error: a unit test package depends on tes
+          tcontainers; move it behind the integration build tag" >&2; exi
+          t 1; \
+      37          fi
+      38 +        @cd $(BACKEND) && if go list -deps ./cmd/... | grep -q 
+         +'/internal/llm/anthropictest$$'; then \                        
+      39 +                echo "error: a production binary depends on the
+         + test-only anthropictest package" >&2; exit 1; \               
+      40 +        fi                                                     
+      41  
+      42  .PHONY: test-integration
+      43  test-integration: ## Integration tests (requires Docker)
+
+⏺ Docs done. Now the full verification run: unit tests, race, lint, integration,
+  frontend, Docker build and smoke.
+
+  Ran 2 shell commands (ctrl+o to expand)
+
+⏺ Lint clean, including staticcheck (it downloaded fine once SSL_CERT_FILE was
+  unset). Running integration tests and the Docker build in parallel.
+
+  Ran 2 shell commands (ctrl+o to expand)
+
+⏺ Both images build with the SDK. Starting the demo stack for the smoke test
+  (forcing LLM_PROVIDER=demo so no key from the environment can select
+  Anthropic).
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ Background command "Run integration tests with race detector" completed (exit
+code 0)
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ Integration and demo smoke tests pass. Next I'll check the real startup
+  selection in the container: explicit Anthropic without a key must fail, and
+  auto with a placeholder key must pick Anthropic and start without any model
+  call.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ All behaviour confirmed in the real container. (The exit=0 above is tail's
+  exit code, not the API's; the API logged the configuration error and stopped.)
+  Final file list:
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ CP9 is done. Every verification passed offline and no Anthropic API calls were
+  made. Nothing is committed and CP10 is not started.
+
+  1. Files and SDK version
+
+  - SDK: github.com/anthropics/anthropic-sdk-go/v2 v2.5.0. It is the latest
+    release and the version ADR-014 already pins; it needs Go 1.25. go mod 
+    verify passes.
+  - New files:
+    - anthropic.go: the adapter, and the only file that imports the SDK.
+    - anthropic_test.go: adapter tests.
+    - anthropictest/: an offline fake HTTP transport for tests.
+    - interpreter_anthropic_test.go: the real interpreter running over the
+      adapter.
+  - Changed files: llm/select.go, llm/client.go, llm/llm_test.go,
+    config/config.go, config/config_test.go, cmd/api/main.go, go.mod/go.sum,
+    docker-compose.yml, .env.example, README.md, docs/ARCHITECTURE.md §7.1,
+    DECISIONS.md ADR-014 and Makefile.
+  - New setting: CLAUDE_MAX_RETRIES (default 2, allowed 0–5). ARCHITECTURE §7.3
+    already listed it, but the config code didn't load it yet.
+
+  2. Adapter API
+
+  - llm.NewAnthropic(llm.AnthropicConfig{APIKey, MaxRetries, HTTPClient, 
+    Logger}) (*Anthropic, error). It makes no network call when constructed.
+  - It uses option.WithoutEnvironmentDefaults(), so the SDK never picks up
+    ANTHROPIC_AUTH_TOKEN, profiles, ANTHROPIC_BASE_URL or
+    ANTHROPIC_CUSTOM_HEADERS on its own. A test confirms this.
+  - No SDK types leave anthropic.go.
+
+  3. What the request looks like on the wire
+
+  This is taken from the captured HTTP body, not inferred from compilation. The
+  top-level keys are exactly model, max_tokens, system, messages, thinking and
+  output_config:
+  "thinking": {"type": "adaptive"},
+  "output_config": {"effort": "low", "format": {"type": "json_schema", "schema":
+  {…}}}
+  - There are no beta headers. Temperature/top_p/top_k, tools and tool_choice
+    are never sent.
+  - A test checks that the schema on the wire is identical to
+    InterpretationSchemaJSON().
+  - The schema was already compatible with Anthropic's structured-output rules,
+    so I didn't change it:
+    - every object has additionalProperties: false;
+    - $defs are not recursive;
+    - 3 optional properties against a limit of 24;
+    - 3 unions against a limit of 16.
+  - One thing compiling couldn't show: SDK v2 sends the API key as
+    Authorization: Bearer, not x-api-key. The tests now assert the real
+    behaviour.
+
+  4. Effort and model mapping
+
+  - low, medium, high and max map one-to-one. An empty or unknown effort is
+    rejected before anything is sent, because leaving it out would quietly use
+    the model's own default (medium on Opus 5.5).
+  - Adaptive thinking is sent explicitly. On claude-opus-5-5 this is the same as
+    leaving it out; a model that doesn't support it fails with a 400 instead of
+    silently running without thinking.
+  - Defaults are unchanged.
+
+  5. Response and stop reasons
+
+  - Text blocks are joined together and thinking blocks are skipped.
+  - Any other block type, or end_turn with no text, is treated as an error and
+    never used as output.
+  - end_turn, max_tokens, refusal and stop_sequence map to their existing
+    constants. Any other stop reason is passed through unchanged, and the
+    interpreter rejects it.
+  - Each response keeps the served model, input/output tokens, the request-id
+    header and the measured latency.
+
+  6. Errors and retries
+
+  - Not retryable (rejected): 400 (including schema rejection), 401, 403,
+    404, 413.
+  - Retryable (unavailable): 408, 409, 429, 5xx and network errors.
+  - Cancellation or deadline: returned as the context error.
+  - Status code and request ID are kept. The error message is rebuilt from
+    status, error type and request ID only, because the SDK's own error string
+    includes the raw response body.
+  - SDK automatic retries: connection errors, 408, 409, 429 and 5xx, up to
+    CLAUDE_MAX_RETRIES times. Backoff starts at 0.5s and doubles, capped at 8s
+    with jitter.
+  - One time budget: the interpreter's timeout covers all attempts. A server
+    retry-after header is honoured without a cap, so a long one simply ends in a
+    timeout.
+  - One deviation from ARCHITECTURE §7.1: I don't set a per-attempt timeout. The
+    SDK retries an attempt that times out, which would throw away and pay again
+    for a slow but healthy generation. ARCHITECTURE and the ADR now say this.
+  - Worst case per interpretation: 3 model requests (first answer, one repair,
+    one truncation retry), each with up to 3 HTTP attempts, all inside the 45s
+    timeout.
+
+  7. Provider selection
+
+  - The selection table works as specified.
+  - /readyz reports llm_provider as before.
+  - Checked in the real container:
+    - explicit anthropic without a key fails at startup;
+    - auto with a placeholder key selects anthropic, makes no model call at
+      startup, and the key doesn't appear in the logs.
+  - No error path falls back to demo.
+
+  8. Test results
+
+  ┌───────────────────────────────────────┬─────────────────────────────────┐
+  │                 Check                 │             Result              │
+  ├───────────────────────────────────────┼─────────────────────────────────┤
+  │ make test (Go unit tests + 118        │ pass                            │
+  │ frontend tests + typecheck)           │                                 │
+  ├───────────────────────────────────────┼─────────────────────────────────┤
+  │ go test -race ./...                   │ pass                            │
+  ├───────────────────────────────────────┼─────────────────────────────────┤
+  │ make test-integration (race)          │ pass                            │
+  ├───────────────────────────────────────┼─────────────────────────────────┤
+  │ make lint (gofmt, vet, staticcheck)   │ pass                            │
+  ├───────────────────────────────────────┼─────────────────────────────────┤
+  │ docker compose build                  │ pass                            │
+  ├───────────────────────────────────────┼─────────────────────────────────┤
+  │ make smoke (demo mode)                │ pass (184 matched users,        │
+  │                                       │ llm_provider=demo)              │
+  └───────────────────────────────────────┴─────────────────────────────────┘
+
+  All 15 required test areas are covered, including the end-to-end flow: an
+  invalid first proposal, then a repair turn with the full conversation history,
+  then a valid result. The proxy TLS problem was fixed with the documented
+  workaround of unsetting SSL_CERT_FILE. That makes Go use the system root
+  certificates; TLS and checksum verification stay on.
+
+  9. Docker and demo
+
+  Demo mode behaves exactly as before. The key comes only from the environment
+  or the git-ignored .env. A new make check fails if a production binary ever
+  depends on the test-only anthropictest package. The demo stack is still
+  running, as it was before I started.
+
+  10. Still to verify live in CP10 (costs money, needs your approval)
+
+  - The real API accepts and compiles our schema, including any "Schema is too
+    complex" error.
+  - Our model, effort and adaptive-thinking settings are accepted together with
+    structured outputs.
+  - Real latency compared with the 45s timeout.
+  - The request-id header appears on real responses.
+  - What a real refusal and a real max_tokens cut-off look like.
+  - How real 401/404 errors render in the UI.
+
+  The adapter doesn't yet keep the refusal category (stop_details); that could
+  be added alongside the Slice 1b error-UX work.
+
+❯ CP9 code review is complete. The Anthropic adapter, structured-output request 
+  mapping, provider selection and offline test architecture are accepted.       
+  Make only the following focused final fixes before CP9 is committed.          
+  1. Sanitize transport error messages                                          
+     In internal/llm/anthropic.go, classifyAnthropicError currently wraps       
+  *url.Error directly.                                                          
+     Transport and proxy error strings are not guaranteed to be safe for        
+  application logs or client-facing error chains.                               
+     Change this handling so that:                                              
+                                                                                
+  - Network/transport failures remain ErrUnavailable and retryable.             
+  - The error text exposed to application logging is a fixed, safe message, or  
+  a narrowly controlled classification.                                         
+  - Arbitrary transport error strings, URLs, credentials, proxy details and     
+  response bodies are never echoed.                                             
+  - Context cancellation and deadline errors retain their existing errors.Is    
+  behavior.                                                                     
+  - Existing error classification remains unchanged otherwise.                  
+                                                                                
+  Add a test with a fake transport error containing a secret marker and verify  
+  that the marker is absent from both the returned error string and captured    
+  logs.                                                                         
+  Keep this change minimal.                                                     
+  2. Complete HTTP retry coverage                                               
+  Add HTTP 409 to TestAnthropicHTTPErrors.                                      
+  Verify that it is classified as retryable and that the SDK performs the       
+  expected bounded retry attempts.                                              
+  3. Verification                                                               
+  Run the relevant adapter tests, go test -race ./..., make lint, and the       
+  existing demo-mode tests.                                                     
+  Do not make any live Anthropic requests.                                      
+  Do not modify provider selection, structured-output schema or unrelated       
+  application behavior.                                                         
+  Do not start CP10.                                                            
+  Report the exact changes and test results. Do not commit.                     
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ Bash(python3 -I - <<'EOF'
+      p='internal/llm/anthropic.go'…)
+  ⎿      --- PASS: TestAnthropicHTTPErrors/Conflict (0.00s)
+     ok
+     github.com/fyusufayan/insider-campaign-composer-case/backend/inter
+     nal/llm 0.560s
+     … +3 lines (ctrl+o to expand)
+  ⎿  Updated backend/internal/llm/anthropic.go (+4 -3)
+      335                  // A context error not caused by ctx (e.g. a t
+           ransport-level timeout).
+      336                  return &Error{Kind: ErrUnavailable, Err: fmt.E
+           rrorf("anthropic request timed out: %w", context.DeadlineExcee
+           ded)}
+      337          }
+      338 -        // Transport failures (DNS, TCP, TLS, reset): *url.Err
+          -or names the method,                                          
+      339 -        // the endpoint URL (no credentials) and the network c
+          -ause.                                                         
+      338 +        // Transport failures (DNS, TCP, TLS, proxy, reset). T
+          +heir text (URLs,                                              
+      339 +        // proxy addresses and credentials, quoted bytes) is n
+          +ot safe to log, so                                            
+      340 +        // only a fixed message is kept and the cause is not w
+          +rapped.                                                       
+      341          var urlErr *url.Error
+      342          if errors.As(err, &urlErr) {
+      342 -                return &Error{Kind: ErrUnavailable, Err: fmt.E
+          -rrorf("anthropic transport failure: %w", urlErr)}             
+      343 +                return &Error{Kind: ErrUnavailable, Err: error
+          +s.New("anthropic transport failure")}                         
+      344          }
+      345          // Anything else (e.g. an undecodable 2xx body) may qu
+           ote response bytes,
+      346          // so only a fixed message is kept.
+  ⎿  Updated backend/internal/llm/anthropic_test.go (+15 -3)
+      349                  {404, "not_found_error", ErrRejected, false},
+      350                  {413, "request_too_large", ErrRejected, false}
+           ,
+      351                  {408, "timeout_error", ErrUnavailable, true},
+      352 +                {409, "conflict_error", ErrUnavailable, true},
+      353                  {429, "rate_limit_error", ErrUnavailable, true
+           },
+      354                  {500, "api_error", ErrUnavailable, true},
+      355                  {503, "api_error", ErrUnavailable, true},
+     ...
+      410  
+      411  // 11: network failure, deadline and cancellation.
+      412  func TestAnthropicNetworkFailure(t *testing.T) {
+      412 -        netErr := &net.OpError{Op: "dial", Net: "tcp", Err: er
+          -rors.New("connection refused")}                               
+      413 +        const marker = "TRANSPORT-MARKER-pw"                  
+      414 +        netErr := &net.OpError{Op: "proxyconnect", Net: "tcp",
+      415 +                Err: errors.New("http://user:" + marker + "@pr
+          +oxy.internal:3128 refused: " + marker + " body bytes")}       
+      416          f := newFixture(t, 0, anthropictest.Reply{Err: netErr}
+           )
+      417          _, err := f.a.Complete(context.Background(), testReque
+           st())
+      418          var e *Error
+      419          if !errors.As(err, &e) || !errors.Is(err, ErrUnavailab
+           le) || e.StatusCode != 0 || !Retryable(err) {
+      420                  t.Fatalf("err = %v", err)
+      421          }
+      419 -        if !strings.Contains(err.Error(), "connection refused"
+          -) {                                                           
+      420 -                t.Errorf("transport cause lost: %v", err)     
+      422 +        // Only the fixed message: no transport text, URL, pro
+          +xy or credentials.                                            
+      423 +        if got := err.Error(); got != "llm: provider unavailab
+          +le: anthropic transport failure" {                            
+      424 +                t.Errorf("error = %q", got)                   
+      425 +        }                                                     
+      426 +        for _, where := range []string{err.Error(), f.logs.Str
+          +ing()} {                                                      
+      427 +                if strings.Contains(where, marker) || strings.
+          +Contains(where, "proxy.internal") || strings.Contains(where, "
+          +api.anthropic.com") {                                         
+      428 +                        t.Errorf("transport details leaked: %q
+          +", where)                                                     
+      429 +                }                                             
+      430 +        }                                                     
+      431 +        if !strings.Contains(f.logs.String(), "anthropic trans
+          +port failure") {                                              
+      432 +                t.Errorf("failure not logged: %s", f.logs.Stri
+          +ng())                                                         
+      433          }
+      434          f.assertClean(err.Error())
+      435  }
+
+⏺ Both tests pass, including the 409 case, which confirms the error is retryable
+  and makes exactly three provider requests. I'm now correcting the
+  ARCHITECTURE §7.1 sentence that still describes the kept *url.Error text, then
+  running the full verification.
+
+⏺ Bash(cd /Users/bilgem/Desktop/devel/leet/insider-case/insider-campaign-compose
+      r-case && python3 -I - <<'EOF'
+      p='docs/ARCHITECTURE.md'…)
+  ⎿  ok
+     github.com/fyusufayan/insider-campaign-composer-case/backend/cmd/m
+     igrate  1.288s
+     ok
+     github.com/fyusufayan/insider-campaign-composer-case/backend/cmd/s
+     … +16 lines (ctrl+o to expand)
+  ⎿  Updated docs/ARCHITECTURE.md (+1 -1)
+      456  - Streaming: `client.Messages.NewStreaming(ctx, params)`; for 
+           each event `message.Accumulate(event)` (check error) and switc
+           h on `event.AsAny()`; `ContentBlockDeltaEvent` → `TextDelta` f
+           eeds the field extractor; a thinking content-block start emits
+            SSE `status: thinking`; finally check `stream.Err()`.
+      457  - Structured output (stable API, no beta header): `OutputConfi
+           g: anthropic.OutputConfigParam{Effort: …, Format: anthropic.JS
+           ONOutputFormatParam{Schema: <map[string]any>}}`, serialized as
+            `"output_config":{"effort":"low","format":{"type":"json_schem
+           a","schema":{…}}}` (verified by a transport-level test that co
+           mpares the captured body with `InterpretationSchemaJSON`). Thi
+           nking is sent explicitly as `{"type":"adaptive"}` so every mod
+           el gets the same reasoning configuration (on `claude-opus-5-5`
+            this equals omitting it); a model without adaptive thinking f
+           ails with a 400 instead of silently running without it. `CLAUD
+           E_*_EFFORT` maps 1:1 (`low|medium|high|max`); an empty or unkn
+           own effort is rejected locally rather than letting the model d
+           efault apply. The interpretation schema stays within the struc
+           tured-output subset and limits (all objects closed, non-recurs
+           ive `$defs`, 3 optional properties of 24, 3 unions of 16). The
+            JSON arrives as a text block and is decoded by our strict dec
+           oder. Schemas are generated deterministically from the registr
+           ies (stable key order) so the API's compiled-grammar cache (24
+            h) is reused.
+      458  - Retries: the SDK retries connection errors, 408, 409, 429, ≥
+           500 (honouring `x-should-retry`) up to `CLAUDE_MAX_RETRIES` (d
+           efault 2, range 0–5) with 0.5 s·2ⁿ backoff (≤ 8 s, jittered) o
+           r the server's `retry-after(-ms)`. The **only** time budget is
+            the interpreter's `context.WithTimeout(CLAUDE_SEGMENT_TIMEOUT
+           )`, which spans all SDK attempts and is never exceeded (a long
+            `retry-after` simply ends in a timeout). **No** per-attempt `
+           option.WithRequestTimeout` is set: the SDK retries an attempt 
+           that hit it, which would abandon and re-bill a slow but health
+           y generation. Worst case per interpretation: 3 logical request
+           s (answer, repair, one truncation retry) × (1 + retries) HTTP 
+           attempts, all inside the one deadline.
+      459 -- Errors: `errors.As(err, &apiErr *anthropic.Error)` → `llm.Er
+          -ror{StatusCode, RequestID}`; 408/409/429/5xx → `llm.ErrUnavail
+          -able` (retryable), other 4xx (400 incl. schema rejection, 401,
+          - 403, 404 unknown model, 413) → `llm.ErrRejected`; transport e
+          -rrors → `ErrUnavailable` (status 0); the caller's cancellation
+          -/deadline → the context error. The message is rebuilt from met
+          -adata (status, API error type, request id, `*url.Error` for tr
+          -ansport failures) because `*anthropic.Error.Error()` embeds th
+          -e raw response body. 2xx responses with a non-text content blo
+          -ck (anything but text/thinking) or `end_turn` without text are
+          - `ErrUnavailable`, never output. Stop reasons other than end_t
+          -urn/max_tokens/refusal/stop_sequence pass through verbatim and
+          - are rejected by the interpreter. `ai` maps these to `ErrLLMUn
+          -available`, `ErrLLMRejected`, `ErrLLMRefused`, `ErrLLMTruncate
+          -d`, `ErrOutputInvalid`. The adapter logs one metadata line per
+          - call (task, models, effort, stop reason, tokens, latency, pro
+          -vider request id) — never prompts, briefs, outputs or the key.
+      459 +- Errors: `errors.As(err, &apiErr *anthropic.Error)` → `llm.Er
+          +ror{StatusCode, RequestID}`; 408/409/429/5xx → `llm.ErrUnavail
+          +able` (retryable), other 4xx (400 incl. schema rejection, 401,
+          + 403, 404 unknown model, 413) → `llm.ErrRejected`; transport e
+          +rrors → `ErrUnavailable` (status 0); the caller's cancellation
+          +/deadline → the context error. The message is rebuilt from met
+          +adata (status, API error type, request id) because `*anthropic
+          +.Error.Error()` embeds the raw response body; transport failur
+          +es get the fixed message "anthropic transport failure" (their 
+          +text may carry URLs, proxy credentials or quoted bytes). 2xx r
+          +esponses with a non-text content block (anything but text/thin
+          +king) or `end_turn` without text are `ErrUnavailable`, never o
+          +utput. Stop reasons other than end_turn/max_tokens/refusal/sto
+          +p_sequence pass through verbatim and are rejected by the inter
+          +preter. `ai` maps these to `ErrLLMUnavailable`, `ErrLLMRejecte
+          +d`, `ErrLLMRefused`, `ErrLLMTruncated`, `ErrOutputInvalid`. Th
+          +e adapter logs one metadata line per call (task, models, effor
+          +t, stop reason, tokens, latency, provider request id) — never 
+          +prompts, briefs, outputs or the key.                          
+      460  - `Stream` on the Anthropic client returns `ErrRejected` witho
+           ut contacting the provider until content generation (Slice 2) 
+           implements it.
+      461  - Model constraints honoured (Opus 5.5): thinking always on (c
+           ontrolled by effort only), no forced `tool_choice`, no assista
+           nt prefill.
+      462  - Server-side refusal fallback (beta Messages API) is **not** 
+           used in core; refusals are surfaced to the marketer.
+
+⏺ Race suite and lint are clean. For the demo-mode tests I'll run the demo unit
+  tests by name, then rebuild the running stack from the current code and rerun
+  the smoke test.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ Both review fixes are in, and all the checks you listed pass. Nothing is
+  committed, no live Anthropic requests were made, and CP10 is not started.
+
+  What changed
+
+  1. Transport errors no longer echo the underlying text (classifyAnthropicError
+  in anthropic.go)
+  - A network or proxy failure now returns &Error{Kind: ErrUnavailable, Err: 
+    errors.New("anthropic transport failure")}.
+  - The full error text is llm: provider unavailable: anthropic transport 
+    failure. The original error isn't wrapped, so no URL, proxy address,
+    credentials or quoted bytes can come through.
+  - Transport failures are still ErrUnavailable and retryable.
+  - Cancellation and deadline errors are untouched: they are still handled first
+    and wrap ctx.Err(), so errors.Is behaves as before.
+  - Every other classification (API errors, unreadable 2xx bodies) is unchanged.
+
+  2. Updated network-failure test (TestAnthropicNetworkFailure in
+  anthropic_test.go)
+  - The fake transport error now contains a secret marker inside a proxy URL
+    with credentials, plus fake body text.
+  - The test checks that the error kind is ErrUnavailable, the status is 0 and
+    it is retryable.
+  - It checks that the error string equals the fixed message exactly.
+  - It checks that the marker, the proxy host and the Anthropic endpoint appear
+    in neither the error string nor the captured logs, while the logs still
+    record the fixed message.
+
+  3. 409 added to TestAnthropicHTTPErrors
+  - The new row is {409, "conflict_error", ErrUnavailable, true}.
+  - The test asserts it is retryable, keeps the status and request ID, and that
+    the SDK made exactly 3 provider requests (1 + MaxRetries 2), no more.
+
+  Docs: I corrected one sentence in ARCHITECTURE §7.1, which still said the
+  *url.Error text was kept.
+
+  Test results
+
+  ┌──────────────────────────────────────────────┬──────────────────────────┐
+  │                    Check                     │          Result          │
+  ├──────────────────────────────────────────────┼──────────────────────────┤
+  │ TestAnthropicHTTPErrors/Conflict,            │                          │
+  │ TestAnthropicNetworkFailure and all other    │ pass                     │
+  │ adapter tests                                │                          │
+  ├──────────────────────────────────────────────┼──────────────────────────┤
+  │ go test -race ./...                          │ all packages pass        │
+  ├──────────────────────────────────────────────┼──────────────────────────┤
+  │ make lint (gofmt, vet, vet with the          │ clean                    │
+  │ integration tag, staticcheck)                │                          │
+  ├──────────────────────────────────────────────┼──────────────────────────┤
+  │ Demo unit tests (TestDemo*,                  │ pass                     │
+  │ FuzzDemoValidOrDeclined)                     │                          │
+  ├──────────────────────────────────────────────┼──────────────────────────┤
+  │ Demo stack rebuilt from current code, then   │ pass (llm_provider=demo, │
+  │ make smoke                                   │  184 matched users)      │
+  └──────────────────────────────────────────────┴──────────────────────────┘
+
+  Provider selection, the structured-output schema and the rest of the
+  application are unchanged.
+
+❯ We are continuing Smart Campaign Composer.                                    
+  CP9 has been reviewed, tested and committed. Begin CP10 — Controlled Live     
+  Anthropic API Verification with Claude Haiku 5.5.                             
+  The user has created an Anthropic API key, added API credits and authorized a 
+  small number of billable API requests, within the strict limits below.        
+  Follow CLAUDE.md, docs/ROADMAP.md, docs/ARCHITECTURE.md, ADR-014–016 and the  
+  existing CP9 implementation.                                                  
+  Key model decision                                                            
+  We are deliberately switching the campaign segmentation model used in this    
+  checkpoint from Claude Opus 5.5 to Claude Haiku 5.5.                          
+  Rationale: the model's role is narrow — converting a natural-language         
+  marketing brief into a constrained segmentation DSL. Semantic validation,     
+  normalization, SQL compilation, consent enforcement and campaign safety are   
+  implemented deterministically by our application.                             
+  The priority is reliable structured output, low latency and low cost, not     
+  maximum general reasoning capability.                                         
+  Official Anthropic model IDs:                                                 
+                                                                                
+  * Primary: `claude-haiku-5-5`                                                 
+  * Optional fallback for a demonstrated quality/compatibility problem:         
+  `claude-sonnet-5-5`                                                           
+  * Do not use Opus for CP10.                                                   
+                                                                                
+  These are explicit model configurations, NOT runtime provider fallbacks.      
+  Never silently change the model after a failed request.                       
+  1. Preflight checks                                                           
+  Before making any paid requests:                                              
+                                                                                
+  1. Confirm CP9 is committed.                                                  
+  2. Verify the Anthropic API key is available in the intended local,           
+  Git-ignored environment without displaying it.                                
+  3. Verify no secret has been committed.                                       
+  4. Confirm Haiku 5.5's current API identifier and compatibility with:         
+     * Native `output_config.format` JSON Schema.                               
+     * Adaptive thinking.                                                       
+     * `output_config.effort = low`.                                            
+  5. Inspect the interpreter's repair and truncation retry logic.               
+  6. Check that the existing interpretation schema fits the supported JSON      
+  Schema subset.                                                                
+  7. Review the official pricing and calculate an approximate per-call cost.    
+                                                                                
+  Configure:                                                                    
+                                                                                
+  * `LLM_PROVIDER=anthropic`                                                    
+  * `CLAUDE_SEGMENT_MODEL=claude-haiku-5-5`                                     
+  * `CLAUDE_SEGMENT_EFFORT=low`                                                 
+  * `CLAUDE_MAX_RETRIES=0`                                                      
+  * `CLAUDE_SEGMENT_MAX_TOKENS=4000`, unless a smaller safe budget can be       
+  justified.                                                                    
+                                                                                
+  Do not modify any real API credentials or print their values.                 
+  2. Strict live API budget                                                     
+  Maximum THREE actual Anthropic Messages API HTTP attempts across the entire   
+  CP10 checkpoint.                                                              
+  This includes initial calls, interpreter repair calls, truncation retries and 
+  all other Messages API requests.                                              
+  SDK retries must be disabled.                                                 
+  Do NOT assume `CLAUDE_MAX_RETRIES=0` limits interpreter-level calls.          
+  Before the first real call, use a test-only counting/budgeted transport or an 
+  equivalent enforceable approach that prevents a fourth HTTP request.          
+  Maintain one shared counter for the entire live verification. Do not reset it 
+  after application restarts or test retries.                                   
+  Run at most one live interpretation initially. If the call is successful and  
+  the complete workflow is verified, do not spend the remaining allowance.      
+  Do not run automated smoke tests against the paid provider.                   
+  Use demo mode for all unrelated regression tests.                             
+  3. Live integration test                                                      
+  Create a campaign using the real API and the brief:                           
+  "Target customers in Istanbul who abandoned their cart in the last 30 days."  
+  Interpret this campaign through the application's actual interpreter and      
+  Anthropic SDK, using Haiku 5.5.                                               
+  Verify:                                                                       
+                                                                                
+  1. The provider accepts the structured JSON output schema.                    
+  2. Haiku 5.5 accepts adaptive thinking and low effort with the schema.        
+  3. The response has an acceptable stop reason.                                
+  4. The model output passes our strict decoder and semantic validator.         
+  5. The normalized segment expresses the user's actual intent, including       
+  Istanbul and abandoned cart within 30 days.                                   
+  6. The normalized segment is persisted to PostgreSQL.                         
+  7. `segment_version` and campaign version are correct.                        
+  8. The audience preview uses the persisted validated rule.                    
+  9. Audience counts match an independent SQL calculation.                      
+  10. `/readyz` identifies the selected provider as `anthropic`.                
+                                                                                
+  A valid JSON response is not enough: the generated segmentation rule must be  
+  semantically correct.                                                         
+  4. If Haiku fails                                                             
+  Diagnose the actual failure using sanitized provider metadata.                
+  Distinguish:                                                                  
+                                                                                
+  * Model unavailable or unsupported configuration.                             
+  * JSON Schema rejected.                                                       
+  * Truncation.                                                                 
+  * Timeout.                                                                    
+  * Strict validation failure.                                                  
+  * Semantically incorrect targeting.                                           
+  * Authentication/billing failure.                                             
+                                                                                
+  Fix a concrete SDK or schema compatibility problem using offline tests before 
+  making another paid call.                                                     
+  If Haiku repeatedly produces incorrect or unusable segmentation, consider one 
+  explicitly configured Sonnet 5.5 attempt, only if the total live request      
+  budget permits.                                                               
+  Do not automatically switch to Sonnet.                                        
+  Do not weaken validation, accept an overly broad audience or fall back to     
+  demo output.                                                                  
+  Do not spend remaining paid requests without a specific reason.               
+  5. Validate frontend behavior                                                 
+  When the backend succeeds:                                                    
+                                                                                
+  * Load the already-created campaign in the real Vue frontend.                 
+  * Verify the interpretation is displayed.                                     
+  * Verify the segment rules are understandable.                                
+  * Verify audience counts and channel eligibility.                             
+  * Verify the provider indication does not falsely label Anthropic output as   
+  demo.                                                                         
+  * Verify the campaign remains available after refreshing its URL.             
+                                                                                
+  Do not create another paid interpretation solely for browser testing.         
+  6. Regression verification                                                    
+  Run:                                                                          
+                                                                                
+  * Backend unit tests.                                                         
+  * Backend race tests.                                                         
+  * PostgreSQL integration tests.                                               
+  * Frontend tests, typecheck and build.                                        
+  * Lint.                                                                       
+  * Docker image build.                                                         
+  * Existing demo-mode smoke test.                                              
+                                                                                
+  Explicitly force demo mode for smoke and regression verification so the       
+  configured live API key cannot trigger paid calls.                            
+  7. Model default decision                                                     
+  After the live verification, determine whether Haiku 5.5 is suitable as the   
+  standard segmentation model.                                                  
+  If Haiku succeeds and generates a semantically correct normalized segment,    
+  update the default `CLAUDE_SEGMENT_MODEL` from `claude-opus-5-5` to           
+  `claude-haiku-5-5` consistently across:                                       
+                                                                                
+  * Go configuration defaults.                                                  
+  * Docker Compose.                                                             
+  * `.env.example`.                                                             
+  * README.                                                                     
+  * Relevant architecture/ADR documentation.                                    
+  * Existing tests relying on defaults.                                         
+                                                                                
+  Preserve the ability to explicitly configure Sonnet or Opus through the       
+  environment.                                                                  
+  If the live verification does not establish that Haiku is suitable, do not    
+  silently change the application default. Explain why.                         
+  The SDK adapter itself must remain model-agnostic.                            
+  8. Safe observability                                                         
+  Record only:                                                                  
+                                                                                
+  * Number of actual paid HTTP attempts.                                        
+  * Requested and served model.                                                 
+  * Request ID.                                                                 
+  * Stop reason.                                                                
+  * Input and output token counts.                                              
+  * Duration.                                                                   
+  * Estimated cost from official published prices.                              
+  * Validation result.                                                          
+  * Persisted campaign ID/status/version.                                       
+  * Audience counts.                                                            
+                                                                                
+  Never output API keys, raw customer records, full model output or provider    
+  error bodies.                                                                 
+  Do not commit credentials, test logs with secrets or raw provider responses.  
+  9. Final report                                                               
+  Report:                                                                       
+                                                                                
+  1. Actual live call count (maximum three).                                    
+  2. Haiku 5.5 compatibility with native structured outputs and low-effort      
+  adaptive thinking.                                                            
+  3. Interpretation correctness.                                                
+  4. Persisted segment and audience results.                                    
+  5. Observed token consumption, latency and approximate cost.                  
+  6. Any fallback attempt and why it was necessary.                             
+  7. Code/config/docs changes.                                                  
+  8. Regression test results.                                                   
+  9. Whether Haiku should remain the default.                                   
+  10. Any remaining limitations.                                                
+                                                                                
+  Do not commit anything.                                                       
+  Do not start Slice 2.                                                         
+  Stop after CP10 for review.                                                   
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ The key is in the git-ignored .env, but that file also sets
+  LLM_PROVIDER=anthropic, which Compose reads, so every Compose run must force
+  demo mode and blank the key. I'm scanning git history for secrets next.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ No secrets in history or tracked files (the only matches are … placeholders in
+  session notes). Now checking Haiku 5.5 compatibility and official pricing.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ Haiku 5.5 supports adaptive thinking, low effort and structured outputs, but
+  rejects prefill and sampling params; thinking tokens count toward max_tokens.
+  I'm fetching the official pricing next.
+
+⏺ Fetch(https://platform.claude.com/docs/en/about-claude/pricing.md)
+  ⎿  Received 52.2KB (200 OK)
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ Haiku 5.5 is priced at $0.10 per million input tokens and $0.50 per million
+  output tokens for prompts up to 100K, with thinking billed as output. I'm now
+  sizing the prompt to estimate per-call cost and checking what drives the UI's
+  demo badge.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ I accidentally left a stray cat waiting on stdin, which hung the command.
+  Stopping it and cleaning up the temporary file.
+
+⏺ Stop Task
+  ⎿  cd /Users/bilgem/Desktop/devel/leet/insider-case/insider-campaign-comp
+     oser-case/backend && cat >
+     /private/tmp/claude-501/-Users-bilgem--claude-spares-spare-qu7g… ·
+     stopped
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ Clean (nothing ran beyond the hung cat). Rerunning the measurement properly.
+
+  Searched for 1 pattern, ran 1 shell command (ctrl+o to expand)
+
+⏺ The demo badge depends on /readyz, so the browser check needs the Vue dev
+  server pointed at an API in Anthropic mode. The cost should stay under $0.001
+  per call, and I'm checking the DB port and API endpoints for the harness next.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ Postgres stays unpublished to the host, so I'm planning a live API harness
+  with a 3-request budget transport, a temporarily published database, and the
+  Vite dev server proxying to the harness. I'm writing the budget transport
+  first, with offline tests.
+⏺ Write(backend/test/live/budget/budget.go)
+  ⎿  Wrote 109 lines to backend/test/live/budget/budget.go
+       1 // Package budget enforces a hard cap on paid HTTP requests duri
+         ng manual live
+       2 // verification (CP10). Transport wraps the HTTP transport hande
+         d to the
+       3 // Anthropic adapter and counts every attempt in a file that sur
+         vives process
+       4 // restarts; once the cap is reached it refuses to send anything
+         . Test tooling
+       5 // only; production code never imports it.
+       6 package budget
+     … +103 lines (ctrl+o to expand)
+
+⏺ Write(backend/test/live/budget/budget_test.go)
+  ⎿  Wrote 100 lines to backend/test/live/budget/budget_test.go
+       1 package budget
+       2 
+       3 import (
+       4   "errors"
+       5   "io"
+       6   "net/http"
+       7   "os"
+       8   "path/filepath"
+       9   "strings"
+      10   "sync"
+     … +90 lines (ctrl+o to expand)
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ The cap checks out offline across restarts, the 4th request, and 20 concurrent
+  requests. I'm now running the live API harness, which is excluded from normal
+  builds.
+
+⏺ Write(backend/test/live/liveapi/main.go)
+  ⎿  Wrote 134 lines to backend/test/live/liveapi/main.go
+       1 //go:build live
+       2 
+       3 // Command liveapi serves the real API (same wiring as cmd/api) 
+         with the
+       4 // Anthropic adapter's HTTP transport wrapped in budget.Transpor
+         t, for the
+       5 // manually run, billable CP10 verification. It refuses to start
+          unless the
+       6 // configuration is the approved one: anthropic provider, SDK re
+         tries off,
+     … +128 lines (ctrl+o to expand)
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ The harness builds but stays out of the default build. I'll first verify its
+  wiring offline with a fake key and an exhausted counter so no bytes go out,
+  then publish Postgres on localhost.
+
+  Ran 2 shell commands (ctrl+o to expand)
+
+⏺ The dry run worked: nothing was sent, since the transport refused the request
+  and the counter stayed at 3. I'm now stopping the harness properly, because
+  kill %1 didn't work in this non-interactive shell.
+
+⏺ Stop Task
+  ⎿  SP=/private/tmp/claude-501/-Users-bilgem--claude-spares-spare-qu7gbs/3
+     1a98898-7ddf-46eb-b75d-c8a127bc37d6/scratchpad && echo 3 >
+     $SP/dryrun-counter && env -i PA… · stopped
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ The fake-key wiring test passed with no paid requests and nothing leaked to
+  the logs. Next I'll start the live run with a fresh counter and the harness on
+  127.0.0.1:8080.
+
+  Ran 2 shell commands (ctrl+o to expand)
+
+⏺ Harness is ready with Haiku 5.5, effort low, 0 SDK retries, and 0 of 3 budget
+  used. Checking the interpret response shape, then making the single live
+  interpretation.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ Paid request 1 of 3 (max). Creating the campaign and interpreting it once
+  through the real API.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ HTTP 200 in 4.36 s, using exactly 1 paid attempt. Extracting only the fields I
+  need to verify (normalized segment, metadata, audience), without dumping the
+  response.
+
+  Ran 2 shell commands (ctrl+o to expand)
+
+⏺ The compiler produced the correct audience filter on the first try, with no
+  repairs needed. Next I'm checking the saved result in PostgreSQL and
+  recomputing the audience with independent SQL, starting with how "abandoned
+  cart" is defined.
+
+  Ran 2 shell commands (ctrl+o to expand)
+
+⏺ Writing the audience SQL independently by hand: users in İstanbul with a cart
+  event in the last 30 days and no purchase at or after it, then the
+  consent/contact partition per channel.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ The persisted segment and the hand-written SQL agree exactly (184 users, with
+  the same per-segment counts), and the rule is clearly narrow. Next I'll
+  confirm the audience endpoint recomputes from the stored rule without calling
+  the LLM.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ The backend check used one paid call, so I'm skipping the remaining two. Next
+  I'll start the Vite dev server and load the existing campaign in the browser,
+  without clicking Interpret.
+
+  Ran 2 shell commands (ctrl+o to expand)
+⏺ The page now shows the "Claude connected" badge and Model: claude-haiku-5-5,
+  with three assumptions. I'm reading the targeting, audience and channels
+  sections next.
+
+⏺ All sections render correctly, with matching counts and both channels'
+  partitions adding up. I'm reloading the URL to confirm the campaign persists
+  and checking that the budget counter is unchanged.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ After the reload the campaign is intact, Claude is connected, and there are no
+  demo badges or console errors, with the budget still at 1. I'm now shutting
+  down the live harness and Vite so no further paid calls can happen.
+
+⏺ Stop Task
+  ⎿  SP=/private/tmp/claude-501/-Users-bilgem--claude-spares-spare-qu7gbs/3
+     1a98898-7ddf-46eb-b75d-c8a127bc37d6/scratchpad && [ ! -e
+     $SP/cp10-live-counter ] && KEY="$… · stopped
+
+⏺ Stop Task
+  ⎿  cd /Users/bilgem/Desktop/devel/leet/insider-case/insider-campaign-comp
+     oser-case/frontend && exec npx vite --host 127.0.0.1 --port 5173
+     --strictPort · stopped
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ All live processes are stopped, with one paid attempt made and no key logged.
+  Haiku 5.5 gave a correct segment, so I'm switching the segment-model default
+  to it and looking for the other segment-model defaults.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ Updating code default, test, Compose, .env.example, README, ARCHITECTURE
+  §7.1/§7.3, ADR-015 and the roadmap line. Opus and Sonnet stay selectable via
+  CLAUDE_SEGMENT_MODEL.
+
+⏺ Bash(python3 -I - <<'EOF'
+      import re…)
+  ⎿  13:**Trade-offs.** Opus 5.5 thinking cannot be disabled, adding latenc
+     y before the first streamed token (mitigated by a "thinking" status in
+      the UI). The evaluation spends a small amount of real API budget.
+  ⎿  Updated .env.example (+2 -1)
+      29  CLAUDE_MAX_RETRIES=2
+      30  
+      31  # Brief interpretation model (model names come only from config
+          uration).
+      32 -CLAUDE_SEGMENT_MODEL=claude-opus-5-5                           
+      32 +# Default claude-haiku-5-5 (ADR-015); claude-sonnet-5-5 or clau
+         +de-opus-5-5 can be set explicitly.                             
+      33 +CLAUDE_SEGMENT_MODEL=claude-haiku-5-5                          
+      34  CLAUDE_SEGMENT_EFFORT=low
+      35  CLAUDE_SEGMENT_TIMEOUT=45s
+      36  CLAUDE_SEGMENT_MAX_TOKENS=4000
+  ⎿  Updated DECISIONS.md (+4 -2)
+      205  
+      206  ---
+      207  
+      208 -## ADR-015 — Model selection per task via environment; `claude
+          --opus-5-5` by default; Day 2 evaluation                       
+      208 +## ADR-015 — Model selection per task via environment; `claude
+          +-haiku-5-5` for interpretation, `claude-opus-5-5` for content;
+          + evaluation                                                   
+      209  
+      210  **Context.** Interpretation and content generation have differ
+           ent quality/latency profiles. The model must not be hardcoded.
+      211  
+      212  **Alternatives.** (a) One global model constant. (b) Per-task 
+           model and effort via environment variables.
+      213  
+      214 -**Decision.** (b): `CLAUDE_SEGMENT_MODEL`, `CLAUDE_CONTENT_MOD
+          -EL` (both default `claude-opus-5-5`), effort `low`/`medium` re
+          -spectively. A Day 2 evaluation (12 briefs) compares `claude-so
+          -nnet-5-5` per task; switching is an env change.               
+      214 +**Decision.** (b): `CLAUDE_SEGMENT_MODEL` (default `claude-hai
+          +ku-5-5`) and `CLAUDE_CONTENT_MODEL` (default `claude-opus-5-5`
+          +), effort `low`/`medium` respectively. The 12-brief evaluation
+          + compares models per task; switching is an env change, never a
+          + runtime fallback.                                            
+      215 +                                                              
+      216 +**Update (CP10).** Interpretation is a narrow translation into
+          + a closed DSL; validation, normalization, SQL compilation, con
+          +sent and audience rules are deterministic backend code, so rel
+          +iable structured output, latency and cost matter more than max
+          +imum reasoning. One live call with `claude-haiku-5-5` (effort 
+          +`low`, adaptive thinking, native `output_config.format` JSON s
+          +chema, SDK retries off) on the example brief "Target customers
+          + in Istanbul who abandoned their cart in the last 30 days." re
+          +turned `end_turn` in 4.3 s with 5,138 input / 294 output token
+          +s (≈ $0.0007), passed strict decode and semantic validation wi
+          +thout a repair turn, and produced exactly `city eq istanbul` A
+          +ND `abandoned_cart within 30 days`; the persisted audience mat
+          +ched an independent SQL count. The interpretation default ther
+          +efore moved from `claude-opus-5-5` to `claude-haiku-5-5`. One 
+          +brief is evidence of compatibility, not of quality across brie
+          +fs: the 12-brief evaluation (incl. ambiguous and unsupported b
+          +riefs) should confirm it, with `claude-sonnet-5-5` as the expl
+          +icit alternative. Content generation was not evaluated and kee
+          +ps `claude-opus-5-5`.                                         
+      217  
+      218  **Reasoning.** Quality and predictable structured output are p
+           rioritized; costs per campaign are cents. Measurement, not ass
+           umption, decides any switch.
+      219  
+  ⎿  Updated README.md (+2 -1)
+      147  to Claude.
+      148  
+      149  Model names come only from configuration (`CLAUDE_SEGMENT_MODE
+           L`, default
+      150 -`claude-opus-5-5`, plus `_EFFORT`, `_TIMEOUT`, `_MAX_TOKENS`, 
+          -and                                                           
+      150 +`claude-haiku-5-5`; set `claude-sonnet-5-5` or `claude-opus-5-
+          +5` to use another                                             
+      151 +model, plus `_EFFORT`, `_TIMEOUT`, `_MAX_TOKENS`, and         
+      152  `CLAUDE_MAX_RETRIES`, default 2). `_TIMEOUT` is the total budg
+           et of one
+      153  interpretation, SDK retries included. All variables are
+      154  listed in `.env.example`; Compose reads an uncommitted `.env` 
+           in the repository
+  ⎿  Updated backend/internal/platform/config/config.go (+1 -1)
+      66  
+      67  // Defaults of the segment interpretation task (CLAUDE_SEGMENT_
+          *).
+      68  const (
+      69 -        defaultSegmentModel     = "claude-opus-5-5"            
+      69 +        defaultSegmentModel     = "claude-haiku-5-5"           
+      70          defaultSegmentEffort    = "low"
+      71          defaultSegmentTimeout   = 45 * time.Second
+      72          defaultSegmentMaxTokens = 4000
+  ⎿  Updated backend/internal/platform/config/config_test.go (+1 -1)
+      183          if err != nil {
+      184                  t.Fatal(err)
+      185          }
+      186 -        want := AITask{Model: "claude-opus-5-5", Effort: "low"
+          -, Timeout: 45 * time.Second, MaxTokens: 4000}                 
+      186 +        want := AITask{Model: "claude-haiku-5-5", Effort: "low
+          +", Timeout: 45 * time.Second, MaxTokens: 4000}                
+      187          if cfg.Segment != want {
+      188                  t.Errorf("defaults = %+v, want %+v", cfg.Segme
+           nt, want)
+      189          }
+  ⎿  … 3 more files changed
+
+⏺ Docs and config updated. I'll also add a short README note on the budgeted
+  live harness, and include the live build tag in make lint so the harness is
+  vetted too.
+
+⏺ Bash(python3 -I - <<'EOF'
+      def edit(p,a,b):…)
+  ⎿   .env.example                                    |  3 ++-
+      DECISIONS.md                                    |  6 ++++--
+      Makefile                                        |  2 +-
+     … +7 lines (ctrl+o to expand)
+  ⎿  Updated Makefile (+1 -1)
+      103  .PHONY: lint
+      104  lint: ## gofmt check + go vet + staticcheck
+      105          @cd $(BACKEND) && out="$$(gofmt -l .)"; if [ -n "$$out
+           " ]; then echo "gofmt needed:"; echo "$$out"; exit 1; fi
+      106 -        cd $(BACKEND) && go vet ./... && go vet -tags=integrat
+          -ion ./...                                                     
+      106 +        cd $(BACKEND) && go vet ./... && go vet -tags=integrat
+          +ion ./... && go vet -tags=live ./test/live/...                
+      107          cd $(BACKEND) && go run honnef.co/go/tools/cmd/staticc
+           heck@$(STATICCHECK_VERSION) ./...
+      108  
+      109  .PHONY: fmt
+  ⎿  Updated README.md (+8 -0)
+      196  make test-integration
+      197  ```
+      198  
+      199 +Live Anthropic verification is manual and billable; it is neve
+          +r part of                                                     
+      200 +`make test` or the smoke test. `backend/test/live/liveapi` (bu
+          +ild tag `live`)                                               
+      201 +serves the real API with the Anthropic adapter's transport wra
+          +pped in a                                                     
+      202 +persistent request counter (`backend/test/live/budget`) that r
+          +efuses any request                                            
+      203 +beyond 3, and it only starts with `LLM_PROVIDER=anthropic`,   
+      204 +`CLAUDE_MAX_RETRIES=0`, an allowed model and an absolute `LIVE
+          +_BUDGET_FILE`                                                 
+      205 +outside the repository.                                       
+      206 +                                                              
+      207  Lint (gofmt, go vet, staticcheck):
+      208  
+      209  ```bash
+
+⏺ Regression run now, with demo mode forced and the key blanked in every
+  command: unit, race, lint and frontend build first.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ Unit, race, lint and the frontend build all pass; since my earlier grep hid
+  make test's exit status, I'm rerunning the typecheck explicitly alongside the
+  integration tests.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ Typecheck and the race-enabled integration tests pass. Last: Docker build and
+  the demo smoke test, with demo forced on the command line so .env's
+  LLM_PROVIDER=anthropic and key can't take effect.
+
+  Ran 2 shell commands (ctrl+o to expand)
+
+⏺ Haiku 5.5 passed the live check on the first try, using 1 of the 3 approved
+  paid requests. It produced the correct rule (customers in İstanbul who
+  abandoned a cart in the last 30 days), the rule was saved, and the audience
+  counts matched an independent SQL count. I've made claude-haiku-5-5 the
+  default segmentation model. Nothing is committed and Slice 2 is not started.
+
+  Before you run docker compose up normally: your .env sets
+  LLM_PROVIDER=anthropic and holds the key, so a plain Compose run will use
+  Anthropic and every Interpret click will be billed. For demo mode, run:
+  LLM_PROVIDER=demo ANTHROPIC_API_KEY= docker compose up --build
+  The stack is running that way now.
+
+  1. Paid requests: 1 of 3
+
+  - I added a small live-testing server that wires the API exactly like cmd/api,
+    except that its HTTP transport counts requests in a file outside the repo.
+  - That counter blocks a 4th request and survives restarts. SDK retries were 0,
+    and only api.anthropic.com was allowed.
+  - I proved the block worked first with a fake key and a full counter: the
+    request was refused and nothing was sent.
+  - That dry run left one uninterpreted campaign, "CP10 dry run", in the local
+    database.
+  - Final counter: 1. The browser checks didn't trigger any further calls.
+
+  2. Haiku 5.5 compatibility
+
+  All checked on the one live call:
+  - The JSON schema sent in output_config.format was accepted.
+  - Adaptive thinking plus effort: low was accepted alongside the schema.
+  - Stop reason was end_turn.
+  - Strict decoding and validation passed with no repair turn and no truncation
+    retry.
+
+  3. Correctness of the interpretation
+
+  - Rule: match: all → city eq istanbul AND abandoned_cart within_days 30.
+  - Nothing was marked unsupported. The three assumptions were sensible (what
+    "abandoned" means, both channels, neutral tone).
+  - The rule is narrow: 184 of 1,522 İstanbul users, against 1,251 users with
+    any cart activity in the last 30 days.
+
+  4. Saved campaign and audience
+
+  - Campaign 3d6a851d-…: status segmented, version 1→2, segment_version 1, model
+    claude-haiku-5-5 stored in the database.
+
+  ┌───────┬──────────┬────────────┬────────────┐
+  │       │ Eligible │ No consent │ No contact │
+  ├───────┼──────────┼────────────┼────────────┤
+  │ SMS   │ 104      │ 65         │ 15         │
+  ├───────┼──────────┼────────────┼────────────┤
+  │ Email │ 108      │ 68         │ 8          │
+  └───────┴──────────┴────────────┴────────────┘
+
+  - Matched users: 184. Reach: both 59, SMS only 45, email only 49,
+    unreachable 31. Eligible messages: 212.
+  - My hand-written SQL gave identical numbers, and the audience endpoint
+    returned the same figures from the saved rule.
+  - /readyz reported anthropic.
+  - In the browser:
+    - the header said "Claude connected", with no demo badge;
+    - the targeting rule and counts displayed correctly;
+    - the campaign was still there after reloading the URL;
+    - there were no console errors.
+
+  5. Usage and cost
+
+  - Request ID req_011CgiQ3rN6k1jzTKhx7M1PN; model requested and served:
+    claude-haiku-5-5.
+  - 5,138 input and 294 output tokens.
+  - 4.32 s at the provider, 4.36 s end to end.
+  - At the official ≤100K-token prices ($0.10/MTok in, $0.50/MTok out), that's
+    about $0.0007.
+
+  6. Fallback
+
+  None. Sonnet was not needed, and the other two approved requests were not
+  used.
+
+  7. Changes
+
+  - Default model: claude-haiku-5-5 in config.go and its test,
+    docker-compose.yml, .env.example, README, ARCHITECTURE §7.1/§7.3, ADR-015
+    (with the live evidence) and ROADMAP. You can still set Opus or Sonnet
+    through CLAUDE_SEGMENT_MODEL.
+  - CLAUDE_CONTENT_MODEL stays claude-opus-5-5, because content generation
+    wasn't tested.
+  - The adapter is unchanged and works with any model.
+  - New: backend/test/live/budget (the counting transport, with offline tests)
+    and backend/test/live/liveapi (the live-testing server, built only with the
+    live tag).
+  - make lint now also checks the live-tagged code, and the README explains the
+    live harness.
+  - The live log, counter and saved response are in the scratchpad, not the
+    repo. The log contains no key.
+
+  8. Regression results (demo mode forced)
+
+  ┌────────────────────────────────────┬─────────────────────────────────────┐
+  │               Check                │               Result                │
+  ├────────────────────────────────────┼─────────────────────────────────────┤
+  │ Go unit tests + 118 frontend tests │ pass                                │
+  ├────────────────────────────────────┼─────────────────────────────────────┤
+  │ go test -race ./...                │ pass                                │
+  ├────────────────────────────────────┼─────────────────────────────────────┤
+  │ Integration tests (race)           │ pass                                │
+  ├────────────────────────────────────┼─────────────────────────────────────┤
+  │ Frontend typecheck and build       │ pass                                │
+  ├────────────────────────────────────┼─────────────────────────────────────┤
+  │ make lint                          │ clean                               │
+  ├────────────────────────────────────┼─────────────────────────────────────┤
+  │ docker compose build               │ pass                                │
+  ├────────────────────────────────────┼─────────────────────────────────────┤
+  │ make smoke                         │ pass (llm_provider=demo, 184 users) │
+  └────────────────────────────────────┴─────────────────────────────────────┘
+
+  9. Should Haiku stay the default?
+
+  Yes. It produced a correct, narrow rule on the first try, quickly and for well
+  under a cent. The backend does the validation, SQL and consent checks either
+  way, so the model's job is narrow.
+
+  10. Limitations
+
+  - One brief shows the setup works; it doesn't show quality across many briefs.
+    The planned 12-brief evaluation (including ambiguous and unsupported
+    briefs) should confirm Haiku, with Sonnet 5.5 as the configured alternative.
+  - No refusal, truncation or real error response from the provider was observed
+    live. Those paths are covered only by the offline tests.
+  - The refusal category from the provider still isn't kept.
+
+❯ CP10 is functionally complete and approved.                                   
+  Before committing, perform one final safety check of backend/test/live/budget 
+  and backend/test/live/liveapi.                                                
+  Verify that:                                                                  
+                                                                                
+  - The live harness requires the explicit live build tag.                      
+  - Normal tests, builds, Docker Compose startup and demo smoke tests cannot    
+  accidentally invoke the live harness.                                         
+  - The API request budget persists across restarts and cannot be reset by      
+  simply restarting the harness.                                                
+  - API keys, raw model responses, paid-call logs and budget-counter files are  
+  not tracked by Git.                                                           
+  - No secrets appear in the staged diff.                                       
+  - The working tree contains only intended CP10 changes.                       
+                                                                                
+  Do not make any real Anthropic API calls.                                     
+  If all checks pass, stage and commit the intended CP10 changes with:          
+  feat: verify live Anthropic integration and default to Haiku 5.5              
+  Then report the commit hash and git status --short.                           
+  If a concrete safety problem is found, fix and test it before committing.     
+  Do not start Slice 2.                                                         
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ Build isolation holds: liveapi stays out of normal builds and nothing outside
+  the live tests references it. Budget persistence had a fail-open gap, a
+  missing counter file counted as zero, so I'm changing it to require an
+  existing counter file.
+
+⏺ Bash(cd /Users/bilgem/Desktop/devel/leet/insider-case/insider-campaign-compose
+      r-case/backend && python3 -I - <<'EOF'
+      def edit(p,a,b):…)
+  ⎿  --- PASS: TestCapPersistsAcrossTransports (0.01s)
+     --- PASS: TestConcurrentRequestsNeverExceedCap (0.01s)
+     --- PASS: TestRefusesOtherHostsAndBadConfig (0.00s)
+     … +4 lines (ctrl+o to expand)
+  ⎿  Updated backend/test/live/budget/budget.go (+4 -2)
+      23  var ErrHostNotAllowed = errors.New("live budget: host not allow
+          ed")
+      24  
+      25  // Transport counts and caps requests. The counter is increment
+          ed and synced
+      26 -// to disk before a request is sent, so a crash never under-cou
+         -nts.                                                           
+      26 +// to disk before a request is sent, so a crash never under-cou
+         +nts. It fails                                                  
+      27 +// closed: the counter file must already exist (created deliber
+         +ately with                                                     
+      28 +// "0"), so a mistyped path or a deleted counter never grants a
+         + fresh budget.                                                 
+      29  type Transport struct {
+      30          Base        http.RoundTripper
+      31          CounterFile string // absolute path
+     ...
+      45  func (t *Transport) read() (int, error) {
+      46          b, err := os.ReadFile(t.CounterFile)
+      47          if errors.Is(err, os.ErrNotExist) {
+      46 -                return 0, nil                                  
+      48 +                return 0, fmt.Errorf("live budget: counter file
+         + %s does not exist; create it with \"0\" to start a new budget"
+         +, t.CounterFile)                                               
+      49          }
+      50          if err != nil {
+      51                  return 0, fmt.Errorf("live budget: read counter
+          : %w", err)
+  ⎿  Updated backend/test/live/budget/budget_test.go (+45 -3)
+      28          return r
+      29  }
+      30  
+      31 -func TestCapPersistsAcrossTransports(t *testing.T) {           
+      31 +// newCounter creates a counter file holding 0 (a deliberately 
+         +started budget).                                               
+      32 +func newCounter(t *testing.T) string {                         
+      33 +        t.Helper()                                             
+      34          file := filepath.Join(t.TempDir(), "count")
+      35 +        if err := os.WriteFile(file, []byte("0\n"), 0o600); err
+         + != nil {                                                      
+      36 +                t.Fatal(err)                                   
+      37 +        }                                                      
+      38 +        return file                                            
+      39 +}                                                              
+      40 +                                                               
+      41 +func TestCapPersistsAcrossTransports(t *testing.T) {           
+      42 +        file := newCounter(t)                                  
+      43          base := &countingRT{}
+      44          mk := func() *Transport {
+      45                  return &Transport{Base: base, CounterFile: file
+          , Max: 3, AllowedHost: "api.anthropic.com"}
+     ...
+      67  }
+      68  
+      69  func TestConcurrentRequestsNeverExceedCap(t *testing.T) {
+      60 -        file := filepath.Join(t.TempDir(), "count")            
+      70 +        file := newCounter(t)                                  
+      71          base := &countingRT{}
+      72          tr := &Transport{Base: base, CounterFile: file, Max: 3,
+           AllowedHost: "api.anthropic.com"}
+      73          var wg sync.WaitGroup
+     ...
+      88  }
+      89  
+      90  func TestRefusesOtherHostsAndBadConfig(t *testing.T) {
+      81 -        file := filepath.Join(t.TempDir(), "count")            
+      91 +        file := newCounter(t)                                  
+      92          base := &countingRT{}
+      93          tr := &Transport{Base: base, CounterFile: file, Max: 3,
+           AllowedHost: "api.anthropic.com"}
+      94          if _, err := tr.RoundTrip(newReq(t, "https://example.co
+          m/v1/messages")); !errors.Is(err, ErrHostNotAllowed) {
+     ...
+      108                  t.Errorf("requests sent = %d", base.n.Load())
+      109          }
+      110  }
+      111 +                                                              
+      112 +// A missing counter (mistyped path, or deleted mid-run) fails
+          + closed: nothing                                              
+     … 30 more lines (ctrl+o to expand)
+
+⏺ I'm checking the rebuilt harness binary in real processes with a fake key: a
+  missing counter should refuse to start, and the real CP10 counter should still
+  read used: 1 after restart.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ The model and retry guards work, but my wrapper function printed nothing for
+  the first two cases. Rerunning those directly to see the real output:
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ A missing counter refuses to start without creating a file, and a restart
+  against the real CP10 counter stops at the unreachable database with the
+  counter unchanged. I'm adding a README line on initialising the counter, then
+  running the Git and secret checks.
+
+⏺ Bash(cd /Users/bilgem/Desktop/devel/leet/insider-case/insider-campaign-compose
+      r-case && python3 -I - <<'EOF'
+      p='README.md'; s=open(p).read()…)
+  ⎿  --- untracked files:
+     ?? backend/test/live/budget/budget.go
+     ?? backend/test/live/budget/budget_test.go
+     … +5 lines (ctrl+o to expand)
+  ⎿  Updated README.md (+3 -1)
+      202  persistent request counter (`backend/test/live/budget`) that r
+           efuses any request
+      203  beyond 3, and it only starts with `LLM_PROVIDER=anthropic`,
+      204  `CLAUDE_MAX_RETRIES=0`, an allowed model and an absolute `LIVE
+           _BUDGET_FILE`
+      205 -outside the repository.                                       
+      205 +outside the repository. The counter fails closed: it must be c
+          +reated                                                        
+      206 +deliberately (`echo 0 > "$LIVE_BUDGET_FILE"`); a missing or co
+          +rrupt counter sends                                           
+      207 +nothing.                                                      
+      208  
+      209  Lint (gofmt, go vet, staticcheck):
+      210  
+
+⏺ The only untracked files are the three intended source files, and the sole
+  ignored file is .env; the live log, counter and saved response sit outside the
+  repo. I'm staging the changes and scanning the staged diff for secrets next.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ Staged diff is clean: no real-key match, no sk-ant tokens, no request IDs, no
+  .env, and nothing left unstaged. A quick gofmt/vet/test pass on the final
+  tree, then the commit.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ CP10 is committed as 3d0027b (feat: verify live Anthropic integration and 
+  default to Haiku 5.5), and git status --short is empty. I found one safety
+  problem and fixed it before committing. No Anthropic calls were made in this
+  step and Slice 2 is not started.
+
+  The fix
+
+  A missing counter file used to count as 0. So a mistyped LIVE_BUDGET_FILE
+  path, or a counter deleted while the server was running, would silently give a
+  fresh budget of 3. Now:
+  - The counter file must already exist, created on purpose with 0. The harness
+    won't create one.
+  - If the file is missing or corrupt, nothing is sent and the live server won't
+    start.
+  - A new test covers both cases (missing path, and file deleted mid-run), and
+    the README says how to create the counter.
+
+  Checks
+
+  Check: live build tag
+  Result: liveapi is //go:build live; plain go list and go build exclude it
+    ("build constraints exclude all Go files").
+  ────────────────────────────────────────
+  Check: Can't run by accident
+  Result: Nothing in cmd/... or the integration tests imports test/live. The
+    Dockerfile builds only cmd/api, cmd/migrate and cmd/seed. Compose and the
+    smoke script never mention it. make lint only runs go vet on it. budget's
+  own
+     tests use a fake transport and never touch the network.
+  ────────────────────────────────────────
+  Check: Budget survives restarts
+  Result: Restarting the real built binary with the CP10 counter logged used: 1,
+   
+    max: 3, then stopped at the unreachable test database. The counter was still
+
+    1 afterwards. Unit tests also cover restarts, 20 concurrent requests and a
+    blocked 4th request.
+  ────────────────────────────────────────
+  Check: Startup guards
+  Result: Refused to start with claude-opus-5-5 and with CLAUDE_MAX_RETRIES=2.
+  ────────────────────────────────────────
+  Check: Untracked or ignored files
+  Result: Only .env is ignored inside the repo. The live log, counter file,
+  saved
+    response and built binary are all outside the repo.
+  ────────────────────────────────────────
+  Check: Staged diff
+  Result: No match for the real key, no sk-ant- tokens, no request IDs, no .env.
+  ────────────────────────────────────────
+  Check: Working tree
+  Result: Only the 12 intended CP10 files were staged; nothing was left over.
+    Final gofmt, vet (including the live tag) and unit tests passed in demo
+  mode.
+
+  .env still sets LLM_PROVIDER=anthropic with your key, so a plain docker 
+  compose up will use Claude and each Interpret click is billed. Use
+  LLM_PROVIDER=demo ANTHROPIC_API_KEY= docker compose up for demo mode.

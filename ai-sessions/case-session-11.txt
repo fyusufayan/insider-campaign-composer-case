@@ -1,0 +1,1089 @@
+ ▐▛███▛█   Claude Code v2.1.318
+▝▜██████▀  Opus 5.5 · Claude Pro
+ ▝▝   ▝▝   ~/Desktop/devel/leet/insider-case/insider-campaign-composer-case
+
+
+❯ Project status                                                                
+                                                                                
+  * Slice 1a (CP1–CP8): complete, tested and committed.                         
+  * Slice 1b (CP9–CP10): complete, reviewed and committed.                      
+  * Latest commit: `3d0027b` — `feat: verify live Anthropic integration and     
+  default to Haiku 5.5`.                                                        
+  * The real Claude Haiku 5.5 integration was verified with one paid API        
+  request and produced a correct, persisted segment.                            
+  * The Docker Compose demo workflow, backend tests, frontend tests and         
+  integration tests pass.                                                       
+                                                                                
+  Begin Slice 2, CP11 — Content Domain, Contracts and Strict Validation.        
+  This is the foundation for personalized SMS and email generation. Do not      
+  implement the entire Slice 2 in one step.                                     
+  1. Read the existing design before coding                                     
+  Inspect:                                                                      
+                                                                                
+  * `CLAUDE.md`                                                                 
+  * `docs/ROADMAP.md`                                                           
+  * Relevant Slice 2 sections of `docs/ARCHITECTURE.md`                         
+  * `DECISIONS.md`, especially content-related ADRs                             
+  * Existing database migrations and content-related tables                     
+  * `internal/campaign`                                                         
+  * `internal/ai`                                                               
+  * `internal/llm`                                                              
+  * Existing HTTP DTO and error contracts                                       
+  * Relevant existing test helpers                                              
+                                                                                
+  The existing documents are authoritative.                                     
+  Do not invent a new content architecture or database model merely because it  
+  seems convenient.                                                             
+  First reconcile this CP11 scope with the actual roadmap. If the roadmap       
+  assigns different checkpoint numbers, follow its intended dependencies and    
+  report the mapping.                                                           
+  2. Objective                                                                  
+  Implement a deterministic, reusable content-domain and validation layer for   
+  personalized campaign messages.                                               
+  It must provide a safe boundary between untrusted AI-generated text and       
+  content that can eventually be persisted, approved and delivered.             
+  The layer should support the established SMS/email content model and be       
+  usable by:                                                                    
+                                                                                
+  * The future AI content generator.                                            
+  * A future manual content editor.                                             
+  * The future approval preparation step.                                       
+  * The future delivery worker.                                                 
+                                                                                
+  Do not couple content validation to the Anthropic SDK.                        
+  3. Content domain                                                             
+  Implement the content types and invariants defined by the architecture.       
+  Cover:                                                                        
+                                                                                
+  * SMS message body.                                                           
+  * Email subject.                                                              
+  * Email body.                                                                 
+  * Channel-specific content.                                                   
+  * Personalization placeholders.                                               
+  * Content validation results.                                                 
+  * Content version metadata, where appropriate for this checkpoint.            
+                                                                                
+  Keep content definitions typed and explicit.                                  
+  Do not use generic maps or unvalidated `json.RawMessage` as the trusted       
+  internal content model.                                                       
+  Use the existing database schema as the source of truth for persisted         
+  representations.                                                              
+  4. Personalization placeholders                                               
+  Implement strict recognition and validation of the approved personalization   
+  syntax.                                                                       
+  Read the actual placeholder catalog and allowed fields from the architecture. 
+  Do not assume arbitrary template variables are safe.                          
+  Requirements:                                                                 
+                                                                                
+  * Reject unknown or misspelled placeholders.                                  
+  * Reject unsupported template expressions, nested expressions and arbitrary   
+  function calls.                                                               
+  * Reject malformed or unbalanced template delimiters.                         
+  * Avoid accidentally interpreting unknown placeholders as ordinary literal    
+  text.                                                                         
+  * Define how placeholders are rendered safely with customer-specific values   
+  at delivery time, following existing decisions.                               
+  * Do not expose customer contact data or personalized values to the LLM.      
+                                                                                
+  The validator should work on template content, not on customer-specific       
+  rendered content.                                                             
+  If the architecture specifies fallback behavior for missing profile fields,   
+  implement only the deterministic rules that belong in this layer.             
+  5. SMS validation                                                             
+  Enforce the architecture's SMS limits exactly.                                
+  Include:                                                                      
+                                                                                
+  * Unicode-aware length handling.                                              
+  * The correct treatment of personalization placeholders when calculating      
+  message size.                                                                 
+  * Any required SMS segment or character limits.                               
+  * Rejection of empty/whitespace-only messages.                                
+  * Rejection of unsupported control characters.                                
+  * No silent truncation.                                                       
+                                                                                
+  Do not invent arbitrary SMS limits. Use the documented limits.                
+  6. Email validation                                                           
+  Enforce the documented constraints for:                                       
+                                                                                
+  * Subject length.                                                             
+  * Body length.                                                                
+  * Allowed formatting, if any.                                                 
+  * Safe representation of user-facing content.                                 
+  * Personalization placeholders.                                               
+  * Empty required fields.                                                      
+  * Unsupported control characters or dangerous markup.                         
+                                                                                
+  Do not confuse email template validation with HTML escaping at                
+  delivery/render time.                                                         
+  If the architecture supports plain-text email only at this stage, do not      
+  introduce a rich HTML editor or HTML sanitizer.                               
+  7. Validation errors                                                          
+  Provide structured, field-level errors consistent with the existing           
+  campaign/segment conventions.                                                 
+  For example, distinguish:                                                     
+                                                                                
+  * Missing SMS body.                                                           
+  * SMS too long.                                                               
+  * Invalid or unknown placeholder.                                             
+  * Missing email subject.                                                      
+  * Email subject too long.                                                     
+  * Invalid email body.                                                         
+                                                                                
+  The error messages must be useful for both AI repair prompts and frontend     
+  validation without echoing sensitive customer data.                           
+  Keep the error shape stable and deterministic.                                
+  8. Versioning and immutability boundaries                                     
+  Review the existing content-version and approval schema.                      
+  Define and implement the domain rules that can safely be established in CP11: 
+                                                                                
+  * What constitutes a valid content version.                                   
+  * Which fields belong to one version.                                         
+  * How channel content relates to selected campaign channels.                  
+  * Which changes should create a new version.                                  
+  * How content versions can eventually be frozen by approval.                  
+                                                                                
+  Avoid writing incomplete approval or persistence workflows.                   
+  Do not alter migration schemas unless the existing design has a demonstrated  
+  inconsistency that blocks this checkpoint.                                    
+  Prefer pure domain functions and types in CP11. Database writes belong in the 
+  next checkpoint unless explicitly required by the established roadmap.        
+  9. Security properties                                                        
+  Ensure that:                                                                  
+                                                                                
+  * AI-produced text is treated as untrusted.                                   
+  * Unapproved placeholder syntax cannot reach delivery.                        
+  * LLM output cannot execute commands or templates.                            
+  * Customer personal information never enters AI prompts.                      
+  * No raw customer records are included in content-domain errors or logs.      
+  * Templates cannot silently widen the intended audience.                      
+  * Invalid content is rejected, not truncated or silently repaired.            
+                                                                                
+  Do not add external template engines or evaluate arbitrary expressions.       
+  10. Tests                                                                     
+  Write extensive deterministic, Docker-free unit tests covering:               
+                                                                                
+  1. Valid SMS templates.                                                       
+  2. Valid email templates.                                                     
+  3. Approved placeholders.                                                     
+  4. Unknown and malformed placeholders.                                        
+  5. Nested or expression-like placeholders.                                    
+  6. Unicode and Turkish text.                                                  
+  7. SMS boundary lengths.                                                      
+  8. Email subject/body boundary lengths.                                       
+  9. Whitespace and control characters.                                         
+  10. Multiple placeholders and repeated placeholders.                          
+  11. Missing personalization values and documented fallback behavior.          
+  12. Invalid content for a selected channel.                                   
+  13. Valid content for multiple channels.                                      
+  14. Content version equivalence/changes, if defined here.                     
+  15. Error paths and stable field-level error shapes.                          
+                                                                                
+  Add fuzz tests for placeholder parsing and validation where useful.           
+  Test that malformed inputs cannot panic or bypass validation.                 
+  11. Scope restrictions                                                        
+  Do NOT implement:                                                             
+                                                                                
+  * Live Anthropic calls.                                                       
+  * Content generation prompts or repair loops.                                 
+  * Streaming or SSE.                                                           
+  * Frontend content editor.                                                    
+  * Content HTTP endpoints.                                                     
+  * Approval preparation or confirmation.                                       
+  * Delivery worker or provider.                                                
+  * Rate limiting and retries.                                                  
+  * New database migrations without demonstrated necessity.                     
+                                                                                
+  Do not modify the existing segment parser/compiler or audience statistics     
+  behavior.                                                                     
+  Keep demo mode working.                                                       
+  12. Verification                                                              
+  Run:                                                                          
+                                                                                
+  * `make test`                                                                 
+  * `go test -race ./...`                                                       
+  * `make lint`                                                                 
+  * Relevant existing integration tests if your changes affect shared code.     
+                                                                                
+  Use the documented safe TLS environment workaround if necessary.              
+  Do not run live Anthropic requests.                                           
+  13. Completion report                                                         
+  Report:                                                                       
+                                                                                
+  1. Files created/modified.                                                    
+  2. Exact content model and public APIs.                                       
+  3. Approved placeholder syntax/catalog.                                       
+  4. SMS and email limits implemented.                                          
+  5. Character-counting and placeholder-length semantics.                       
+  6. Versioning rules and approval boundaries.                                  
+  7. Test coverage and results.                                                 
+  8. Any architecture/documentation ambiguities or necessary deviations.        
+  9. What CP12 should build on top of this domain.                              
+                                                                                
+  Do not commit anything.                                                       
+  Do not start CP12.                                                            
+  Stop after CP11 for review.                                                   
+
+  Searched for 1 pattern, listed 1 directory, ran 5 shell commands (ctrl+o to expand)
+
+⏺ Done reading the design docs. Now checking the existing types I'll reuse
+  (channels, city catalog, content brief) before writing the content package.
+
+  Ran 3 shell commands (ctrl+o to expand)
+
+⏺ The roadmap gives no CP numbers, so CP11 maps to the first Slice 2 bullet, the
+  pure content package. campaign_contents already exists, so no migration is
+  needed, and I'm writing the package now.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ Write(backend/internal/content/variables.go)
+  ⎿  Wrote 96 lines to backend/internal/content/variables.go
+       1 package content
+       2 
+       3 import (
+       4   "slices"
+       5 
+       6   "github.com/fyusufayan/insider-campaign-composer-case/backend/
+         internal/segment"
+       7 )
+       8 
+       9 // VariableName is the name of a personalization variable as wri
+     … +88 lines (~3 KB) (ctrl+o to expand)
+
+⏺ Write(backend/internal/content/template.go)
+  ⎿  Wrote 265 lines to backend/internal/content/template.go
+      1 package content
+      2 
+      3 import (
+      4   "strconv"
+      5   "strings"
+      6   "unicode/utf8"
+      7 
+      8   "golang.org/x/text/unicode/norm"
+      9 )
+     … +256 lines (ctrl+o to expand)
+
+⏺ Write(backend/internal/content/content.go)
+  ⎿  Wrote 385 lines to backend/internal/content/content.go
+       1 // Package content owns campaign message content: the {{var}} te
+         mplate
+       2 // parser and renderer (ADR-018), the personalization variable r
+         egistry, the
+       3 // content validator (ARCHITECTURE §8, ADR-013) and the rules of
+          immutable
+       4 // content versions.
+       5 //
+       6 // Everything here is pure and deterministic. The same Parse is 
+         applied to AI
+     … +379 lines (ctrl+o to expand)
+
+⏺ Write(backend/internal/content/render.go)
+  ⎿  Wrote 133 lines to backend/internal/content/render.go
+       1 package content
+       2 
+       3 import (
+       4   "errors"
+       5   "unicode/utf8"
+       6 )
+       7 
+       8 // EmailFooter is the fixed footer the backend appends to every 
+         email
+       9 // (ARCHITECTURE §8.8). It is not part of the 5,000-rune body bu
+     … +125 lines (~4 KB) (ctrl+o to expand)
+
+⏺ Write(backend/internal/content/version.go)
+  ⎿  Wrote 93 lines to backend/internal/content/version.go
+       1 package content
+       2 
+       3 import (
+       4   "errors"
+       5   "time"
+       6 )
+       7 
+       8 // Content versions (campaign_contents) are immutable: a row is 
+         inserted once
+       9 // and never updated. Every change of content text is a new vers
+     … +85 lines (~3 KB) (ctrl+o to expand)
+
+⏺ The core content package is written (variables, parser, validator, renderer,
+  version rules). Now I'm compiling it and writing the tests.
+
+  Ran 2 shell commands (ctrl+o to expand)
+
+⏺ The escapes were written as literal characters; switching them to hex
+  constants.
+
+⏺ Bash(python3 - <<'EOF'
+      p='internal/content/content.go'…)
+  ⎿                          return ""
+                     }
+                     return "a line break"
+     … +18 lines (ctrl+o to expand)
+  ⎿  Updated backend/internal/content/content.go (+4 -4)
+      347                  return "a line break"
+      348          case unicode.IsControl(r):
+      349                  return "a control character"
+      350 -        case r == ' ' || r == ' ':                            
+      350 +        case r == 0x2028 || r == 0x2029:                      
+      351                  return "a line or paragraph separator"
+      352 -        case r == '�' || r == '' || r == '' || (r >= '�' && r 
+          -<= '�') || (r >= '�' && r <= '�'):                            
+      352 +        case r == 0x061C || r == 0x200E || r == 0x200F || (r >
+          += 0x202A && r <= 0x202E) || (r >= 0x2066 && r <= 0x2069):     
+      353                  return "a bidirectional control character"
+      354 -        case r == '':                                         
+      354 +        case r == 0xFEFF:                                     
+      355                  return "a byte-order mark"
+      356 -        case r >= '﷐' && r <= '﷯', r&0xFFFE == 0xFFFE:        
+      356 +        case r >= 0xFDD0 && r <= 0xFDEF, r&0xFFFE == 0xFFFE:  
+      357                  return "a Unicode noncharacter"
+      358          }
+      359          return ""
+
+⏺ Package builds and depends only on segment. Writing tests next.
+
+⏺ Write(backend/internal/content/content_test.go)
+  ⎿  Wrote 525 lines to backend/internal/content/content_test.go
+       1 package content
+       2 
+       3 import (
+       4   "encoding/json"
+       5   "slices"
+       6   "strings"
+       7   "testing"
+       8   "unicode/utf8"
+       9 
+      10   "github.com/fyusufayan/insider-campaign-composer-case/backend/
+     … +516 lines (~24 KB) (ctrl+o to expand)
+
+⏺ Bash(cd /Users/bilgem/Desktop/devel/leet/insider-case/insider-campaign-compose
+      r-case/backend/internal/content && python3 - <<'EOF'
+      p='content_test.go'…)
+  ⎿  ok
+     github.com/fyusufayan/insider-campaign-composer-case/backend/inter
+     nal/content     0.362s
+  ⎿  Updated backend/internal/content/content_test.go (+6 -8)
+       2  
+       3  import (
+       4          "encoding/json"
+       5 +        "errors"                                               
+       6          "slices"
+       7 +        "strconv"                                              
+       8          "strings"
+       9          "testing"
+      10          "unicode/utf8"
+     ...
+      67          }
+      68  }
+      69  
+      68 -func itoa(n int) string { return strings.TrimSpace(strings.Repe
+         -at(" ", 0) + jsonNum(n)) }                                     
+      69 -func jsonNum(n int) string {                                   
+      70 -        b, _ := json.Marshal(n)                                
+      71 -        return string(b)                                       
+      72 -}                                                              
+      70 +func itoa(n int) string { return strconv.Itoa(n) }             
+      71  
+      72  func TestValidSMS(t *testing.T) {
+      73          text := "Merhaba {{first_name}}, sepetindeki ürünler se
+          ni bekliyor! %30 indirim: ornek.com/sepet"
+     ...
+      285                  {"sms newline counts", smsOnly(strings.Repeat(
+           "a", 80) + "\n" + strings.Repeat("a", 80)), chSMS, []string{"s
+           ms_body:too_long"}, 161},
+      286                  {"subject 80", email(strings.Repeat("ğ", 80), 
+           "b"), chEmail, nil, 80},
+      287                  {"subject 81", email(strings.Repeat("ğ", 81), 
+           "b"), chEmail, []string{"email_subject:too_long"}, 81},
+      290 -                {"subject 54+city+last", email(strings.Repeat(
+          -"x", 41)+"{{city}}{{last_name}}", "b"), chEmail, nil, 80},    
+      291 -                {"subject 55+city+last", email(strings.Repeat(
+          -"x", 42)+"{{city}}{{last_name}}", "b"), chEmail, []string{"ema
+          -il_subject:too_long"}, 81},                                   
+      288 +                {"subject 41+city+last", email(strings.Repeat(
+          +"x", 41)+"{{city}}{{last_name}}", "b"), chEmail, nil, 80},    
+      289 +                {"subject 42+city+last", email(strings.Repeat(
+          +"x", 42)+"{{city}}{{last_name}}", "b"), chEmail, []string{"ema
+          +il_subject:too_long"}, 81},                                   
+      290                  {"body 5000", email("s", strings.Repeat("ö", 5
+           000)), chEmail, nil, 5000},
+      291                  {"body 5001", email("s", strings.Repeat("ö", 5
+           001)), chEmail, []string{"email_body:too_long"}, 5001},
+      292                  {"body 4980+name", email("s", strings.Repeat("
+           ö", 4980)+ph), chEmail, nil, 5000},
+     ...
+      473                  }
+      474          }
+      475          var verr *ValidationError
+      478 -        if e := res.Err(); e == nil || !errorsAs(e, &verr) || 
+          -len(verr.Problems) != 3 {                                     
+      476 +        if e := res.Err(); e == nil || !errors.As(e, &verr) ||
+          + len(verr.Problems) != 3 {                                    
+      477                  t.Fatalf("Err() = %v", e)
+      478          }
+      479  
+
+⏺ All pass. Now render, version and fuzz tests.
+
+⏺ Write(backend/internal/content/render_test.go)
+  ⎿  Wrote 158 lines to backend/internal/content/render_test.go
+       1 package content
+       2 
+       3 import (
+       4   "errors"
+       5   "strings"
+       6   "testing"
+       7   "unicode/utf8"
+       8 
+       9   "github.com/fyusufayan/insider-campaign-composer-case/backend/
+         internal/segment"
+     … +149 lines (ctrl+o to expand)
+
+⏺ Write(backend/internal/content/version_test.go)
+  ⎿  Wrote 77 lines to backend/internal/content/version_test.go
+       1 package content
+       2 
+       3 import (
+       4   "errors"
+       5   "testing"
+       6 )
+       7 
+       8 func TestProvenanceValidate(t *testing.T) {
+       9   cases := []struct {
+      10     p  Provenance
+     … +67 lines (ctrl+o to expand)
+
+⏺ Write(backend/internal/content/fuzz_test.go)  ⎿  Wrote 133 lines to backend/internal/content/fuzz_test.go
+       1 package content
+       2 
+       3 import (
+       4   "encoding/json"
+       5   "errors"
+       6   "strings"
+       7   "testing"
+       8   "unicode/utf8"
+       9 
+      10   "github.com/fyusufayan/insider-campaign-composer-case/backend/
+     … +124 lines (~5 KB) (ctrl+o to expand)
+
+⏺ Bash(cd /Users/bilgem/Desktop/devel/leet/insider-case/insider-campaign-compose
+      r-case/backend/internal/content && python3 - <<'EOF'
+      import unicodedata…)
+  ⎿  fixed fuzz_test.go
+     ok
+     github.com/fyusufayan/insider-campaign-composer-case/backend/inter
+     nal/content     0.370s
+  ⎿  Updated backend/internal/content/fuzz_test.go (+3 -3)
+      14          "", " ", "hi", "{{first_name}}", "{{first_name|there}}"
+          , "{{city}}{{last_name}}",
+      15          "{{", "}}", "{", "}", "{{}}", "{{{first_name}}}", "{{fi
+          rst_name}}}", "{{a{{b}}}}", "{{first_name|a|b}}",
+      16          "{{ first_name }}", "{{.X}}", "{{if .X}}y{{end}}", "{{f
+          irst_name|}}", "{{first_name| x}}",
+      17 -        "<b>x</b>", "a < b", "İstanbul", "Merhaba {{first_name}
+         -}, %30 indirim!", "a\nb", "a\tb", "a\rb",                      
+      18 -        "\xff\xfe", "�", "", "👩‍👩‍👧", strings.Repeat("ş", 161),   
+      19 -        strings.Repeat("{x}", 20), "{{first_name|́}}", "x{{city|
+         - y}}",                                                         
+      17 +        "<b>x</b>", "a < b", "I\u0307stanbul", "Merhaba {{first
+         +_name}}, %30 indirim!", "a\nb", "a\tb", "a\rb",                
+      18 +        "\xff\xfe", "\u202e", "\ufeff", "👩\u200d👩\u200d👧", s
+         +trings.Repeat("ş", 161),                                       
+      19 +        strings.Repeat("{x}", 20), "{{first_name|\u0301}}", "x{
+         +{city|\u00a0y}}",                                              
+      20  }
+      21  
+      22  var knownPaths = map[string]bool{"": true, "channels": true, Fi
+          eldSMSBody: true, FieldEmailSubject: true, FieldEmailBody: true
+          }
+
+⏺ Unit tests pass. Running each fuzzer briefly, then the full verification
+  suite.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ Both fuzzers passed with no crashers. Running make test, -race, and make lint.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ Staticcheck hit the known TLS issue; looking up the documented workaround.
+
+  Listed 1 directory, ran 1 shell command (ctrl+o to expand)
+
+⏺ Lint passes with the documented workaround, and no existing package changed,
+  so integration tests are unaffected. I'm recording the concrete rules I chose
+  in ARCHITECTURE §8 next, matching how §11.1 records the CP6 contracts.
+
+⏺ Update(docs/ARCHITECTURE.md)
+  ⎿  Added 11 lines
+      533  
+      534  Result shape: `{errors[], warnings[], sms:{chars_worst_case, e
+           ncoding, segments_worst_case}, subject:{chars_worst_case}, ren
+           dered_example}`.
+      535  
+      536 +### 8.1 Content contract as implemented (CP11)                
+      537 +                                                              
+      538 +`internal/content` is pure (no I/O, no SDK) and depends only o
+          +n `segment` (channels, field-error shape, city catalog). `cont
+          +ent.Parse(Draft, channels)` is the single entry point for AI o
+          +utput, edits, `validate`, prepare and stored rows read back; a
+          + `Content` exists only as Parse's output, so the renderer neve
+          +r sees unvalidated text.                                      
+      539 +- **Normalization**: invalid UTF-8 → `invalid_encoding`; other
+          +wise NFC, then trim leading/trailing whitespace. Positions in 
+          +messages are 1-based characters of the normalized text.       
+      540 +- **Placeholders**: exactly `{{name}}` or `{{name|fallback}}`,
+          + name ∈ registry (case-sensitive). `{` and `}` are reserved (n
+          +o escape): a stray brace, `}}` or unterminated `{{` → `unbalan
+          +ced_delimiter`; empty, spaced, dotted, filtered, called, neste
+          +d or multi-pipe placeholders → `malformed_placeholder`; a well
+          +-formed but unregistered name → `unknown_variable` (with `allo
+          +wed`). Fallbacks are non-empty, single-line, without surroundi
+          +ng whitespace (`invalid_fallback`). Rendering is one literal s
+          +ubstitution pass; values are never re-parsed.                 
+      541 +- **Characters**: `\n` allowed in SMS and email body, not in t
+          +he subject; all other C0/C1 controls (incl. `\t`, `\r`), U+202
+          +8/2029, bidirectional controls, BOM and noncharacters → `inval
+          +id_character`. Text without a visible character (letter, numbe
+          +r, punctuation, symbol) → `empty`. Markup-like `<tag`, `</`, `
+          +<!`, `<?` → `markup_not_allowed` (plain-text policy, not a san
+          +itizer; `<3`, `a < b` are fine).                              
+      542 +- **Channels**: every provided field is validated whether or n
+          +ot its channel is selected; a selected channel's fields are re
+          +quired (`required` if absent, `empty` if blank); subject and b
+          +ody form a pair; unselected blank fields count as absent; cont
+          +ent must contain at least one channel (path `""`, `empty`).   
+      543 +- **Errors** use the shared `{path, code, message, allowed?}` 
+          +shape with paths `sms_body`, `email_subject`, `email_body`, `c
+          +hannels`; order is field order, then presence → encoding → cha
+          +racters → markup → placeholders → length; at most 10 per field
+          + plus one `too_many`. Messages never echo input. Length statis
+          +tics are returned for every field that parsed (`{chars_worst_c
+          +ase, limit}`, also for `body`); `rendered_example` uses fixed 
+          +fictional values and only when there are no errors. Warning im
+          +plemented: `first_name_not_used` (email body). Encoding/segmen
+          +t warnings are B-tier; "offer not mentioned" needs the content
+          + brief and belongs to the generator.                          
+      544 +- **Rendering** (`RenderSMS`, `RenderEmail`) is deterministic.
+          + Values are NFC-normalized and trimmed; an empty value uses th
+          +e fallback, and without one fails with `missing_value` (never 
+          +rendered as empty). Values over the declared maximum (`value_t
+          +oo_long`) or with control characters (`invalid_value`) fail; n
+          +othing is truncated. The rendered length is asserted (`content
+          +_too_long`). The email footer (`content.EmailFooter`) is appen
+          +ded after `"\n\n-- \n"`, outside the body budget.             
+      545 +- **Versions**: AI generation always creates a new version (`o
+          +rigin=ai`, model + prompt version required); an edit whose can
+          +onical text equals the current version is a no-op; any other c
+          +hange creates version `n+1` (`origin=edited`, no model). Appro
+          +val binds the immutable version id.                           
+      546 +                                                              
+      547  ---
+      548  
+      549  ## 9. Approval and audience snapshot
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ CP11 is finished: the new content package validates SMS and email templates,
+  checks personalization placeholders strictly, and renders messages
+  deterministically. make test, go test -race ./... and make lint all pass, and
+  both fuzz tests ran with no crashes. Nothing is committed, and CP12 hasn't
+  started.
+
+  Roadmap mapping: the roadmap has no checkpoint numbers; Slice 2 is a single
+  block. CP11 is its first task, "content: template parser/renderer with
+  fallbacks, variable registry, NFC, validator (§8), rendered example". The
+  generator, streaming, endpoints and frontend come in later checkpoints. The
+  campaign_contents table already matches what's needed, so there is no
+  migration.
+
+  1. Files
+
+  - New: backend/internal/content/, containing variables.go, template.go,
+    content.go, render.go and version.go, plus tests in content_test.go,
+    render_test.go, version_test.go and fuzz_test.go.
+  - Changed: docs/ARCHITECTURE.md has a new §8.1, "Content contract as
+    implemented (CP11)", in the same style as the existing §11.1.
+  - Dependencies: content imports only segment (for channels, the shared
+    field-error shape and the city list). No new libraries, no text/template, no
+    SDK.
+
+  2. Content model and public functions
+
+  - Input: Draft{SMSBody, EmailSubject, EmailBody *string}. nil means "not
+    provided", and the JSON shape matches the planned content request body.
+  - Entry point: Parse(Draft, channels) (Content, Result). Validate is the same
+    call without the content.
+  - Content: its fields are private, so it can only come out of a successful
+    Parse. This is the guarantee that unvalidated placeholder syntax can't reach
+    delivery. Methods:
+    - SMSBody, EmailSubject, EmailBody, Has, Channels
+    - Equal
+    - Draft(), which returns the normalized text to store
+    - RenderSMS, RenderEmail
+  - Result: {errors, warnings, sms|subject|body: {chars_worst_case, limit}, 
+    rendered_example}, plus OK() and Err(). Err() returns a *ValidationError
+    that matches ErrInvalidContent.
+  - Values{first_name, last_name, city}: the frozen per-recipient values used at
+    delivery. Render failures return a *RenderError with a field, variable and
+    code, and never include the value itself.
+  - Versions: Provenance{Origin, Model, PromptVersion} and Version, plus
+    NextVersion(prev, content, provenance).
+
+  3. Placeholder syntax
+
+  - Allowed variables: first_name (max 20), last_name (max 25) and city (max 14,
+    the longest province name, "Afyonkarahisar"). Names are case-sensitive.
+  - Allowed forms: only {{name}} and {{name|fallback}}. The characters { and }
+    are reserved and there is no escape.
+  - Rejected:
+
+  ┌───────────────────────┬──────────────────────────────────────────────────┐
+  │         Error         │                      Covers                      │
+  ├───────────────────────┼──────────────────────────────────────────────────┤
+  │ malformed_placeholder │ spaces inside the braces, .X, filters, function  │
+  │                       │ calls, #/> sections, more than one |, nesting    │
+  ├───────────────────────┼──────────────────────────────────────────────────┤
+  │ unknown_variable      │ well-formed but unregistered names, such as      │
+  │                       │ misspellings, {{email}} or {{phone}}             │
+  ├───────────────────────┼──────────────────────────────────────────────────┤
+  │ unbalanced_delimiter  │ a stray brace or an unclosed {{                  │
+  ├───────────────────────┼──────────────────────────────────────────────────┤
+  │ invalid_fallback      │ an empty fallback, a fallback with leading or    │
+  │                       │ trailing spaces, or a multi-line fallback        │
+  └───────────────────────┴──────────────────────────────────────────────────┘
+
+  4–5. Limits and how characters are counted
+
+  - Limits: SMS 160, subject 80, body 5,000. They apply to the worst-case count 
+    of Unicode characters (code points) after NFC normalization and 
+    personalization. Each placeholder counts as the larger of its variable's
+    maximum and its fallback's length.
+  - Normalization: text is normalized to NFC and trimmed. Anything over the
+    limit is rejected, never truncated.
+  - Line breaks: allowed in SMS and email body, not in the subject. Every other
+    control character is rejected, including tab, \r, bidirectional-override
+    characters and the BOM.
+  - Empty text: text that is blank or contains only invisible characters is
+    treated as empty.
+  - Markup: markup such as <p> is rejected because content is plain text only.
+  - Rendering:
+    - A missing value uses its fallback. With no fallback, rendering fails; it
+      never produces something like "Hi ,".
+    - An over-length or control-character value fails rendering. It is not
+      truncated and does not switch to the fallback.
+    - The rendered length is checked again at the end.
+    - The fixed email footer is added outside the 5,000-character body budget.
+
+  6. Versioning and approval
+
+  - When a new version is created:
+    - An AI generation always creates a new version.
+    - An edit whose normalized text equals the current version creates nothing.
+      This prevents an unchanged save from revoking an approval.
+    - Any other change creates version n+1.
+  - Provenance: AI versions require a model and a prompt version; edited
+    versions must have neither.
+  - Channels:
+    - Every field that is provided gets validated, whether or not its channel is
+      selected.
+    - Selected channels must have their fields filled in.
+    - Subject and body must be provided together.
+  - Approval: approval will bind the immutable version id. Approval preparation
+    should call Parse(stored, selectedChannels) again.
+
+  7. Tests
+
+  - Scale: 220 test runs, 96.7% statement coverage, Docker-free.
+  - Coverage: all 15 categories you listed, with boundaries at 160/161, 80/81
+    and 5000/5001, including cases with placeholders.
+  - Error shape: a test pins the error JSON exactly and checks that error
+    messages never repeat the input.
+  - Fuzzing:
+    - FuzzParse ran for 45 seconds. It checks for panics, that accepted content
+      never exceeds the limits, and that values at their maximum lengths render
+      within the limits.
+    - FuzzRender ran for 30 seconds. It checks that a value can never put a line
+      break or control character into the subject.
+  - Not run: integration tests, because no existing package changed.
+
+  8. Ambiguities and choices I made
+
+  The documents didn't settle these, so I chose and recorded each in §8.1:
+  - Braces are reserved, with no escape.
+  - The exact fallback rules.
+  - Plain-text markup is rejected.
+  - Leading and trailing whitespace is trimmed.
+  - An empty value with no fallback is a render error.
+  - The email-pair rule.
+  - The wording of the footer.
+  - I added a body length counter, which is not in the §8 result shape.
+  - Gap in the docs: §8.3 says database constraints guarantee the maximum
+    lengths, but users.city has no length check. The renderer enforces the limit
+    anyway.
+  - Deferred: the encoding and SMS-segment warnings are B-tier work. The "offer
+    not mentioned" warning needs the content brief, so it belongs with the
+    generator.
+
+  9. What CP12 builds on this
+
+  - Generator: the AI generator (prompt v1 listing the variables from
+    Variables(), plus the stream extractor) runs every result through
+    content.Parse. One repair turn uses Result.Errors, and the saved version
+    comes from NextVersion.
+  - Repository: a content repository whose insert and read-back both go through
+    Parse.
+  - Endpoints: POST /content/validate and PUT /content return Result as is.
+
+❯ CP11 code review is complete. The content domain, placeholder parser,         
+  worst-case character counts, renderer and immutable version rules are         
+  accepted.                                                                     
+  I found one focused edge case to fix before committing CP11.                  
+  Problem: Invisible-only personalization values                                
+  The content validator already uses hasVisible to reject content fields        
+  containing no visible characters.                                             
+  However, the placeholder parser and recipient renderer do not consistently    
+  apply this rule to:                                                           
+                                                                                
+  1. Placeholder fallback text.                                                 
+  2. Actual recipient personalization values.                                   
+                                                                                
+  For example, U+200B ZERO WIDTH SPACE is not removed by strings.TrimSpace, so: 
+                                                                                
+  - {{first_name|<invisible-only fallback>}} can be accepted.                   
+  - A recipient's first name consisting only of zero-width characters can be    
+  treated as present, bypassing the fallback.                                   
+                                                                                
+  Required correction                                                           
+  Make the smallest targeted change.                                            
+  1. Fallback validation                                                        
+     In parsePlaceholder, reject fallback text that contains no visible         
+  characters according to the existing hasVisible policy.                       
+     Use the existing CodeInvalidFallback error.                                
+     Do not reject legitimate Unicode names, combining characters, emoji        
+  sequences, or normal text containing formatting characters alongside visible  
+  characters unless an existing documented policy already forbids them.         
+  2. Recipient rendering                                                        
+     In resolveValue, treat a normalized recipient value with no visible        
+  characters as missing.                                                        
+                                                                                
+  - If a fallback exists, use it.                                               
+  - Otherwise return RenderMissingValue.                                        
+  - Preserve the current behavior for malformed UTF-8, forbidden control        
+  characters and over-length visible values.                                    
+  - Never truncate or silently substitute for a nonempty but invalid value.     
+                                                                                
+  3. Tests                                                                      
+     Add focused tests for:                                                     
+                                                                                
+  - Invisible-only fallback rejection.                                          
+  - Invisible-only first_name with fallback.                                    
+  - Invisible-only first_name without fallback.                                 
+  - Invisible-only last_name and city.                                          
+  - Valid Turkish characters and emoji.                                         
+  - Visible text combined with legitimate zero-width joiners.                   
+  - Existing SMS/email worst-case length behavior remaining unchanged.          
+                                                                                
+  Use real Unicode code points such as U+200B and U+200D in test fixtures.      
+  4. Documentation and verification                                             
+  Update the CP11 contract notes in docs/ARCHITECTURE.md only if necessary.     
+  Run:                                                                          
+                                                                                
+  - Content package unit tests.                                                 
+  - Content fuzz tests if practical.                                            
+  - make test.                                                                  
+  - go test -race ./....                                                        
+  - make lint.                                                                  
+                                                                                
+  No live Anthropic API calls.                                                  
+  Do not change the content model, versioning rules, database schema, parser    
+  grammar or unrelated application code.                                        
+  Do not commit and do not start CP12.                                          
+  Report the exact changes and test results, then stop.                         
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ Bash(python3 - <<'EOF'
+      p='template.go'…)
+  ⎿  19-const (
+     20-     // RenderMissingValue: the value is empty and the placeholder
+     has n
+     o
+     … +2 lines (ctrl+o to expand)
+  ⎿  Updated backend/internal/content/template.go (+9 -4)
+      107                  return "", &RenderError{Field: field, Variable
+           : p.ph.Variable, Code: RenderInvalidValue}
+      108          }
+      109          val := strings.TrimSpace(norm.NFC.String(raw))
+      110 -        if val == "" {                                        
+      110 +        // Forbidden characters are checked first: a non-empty
+          + but invalid value                                            
+      111 +        // fails and is never replaced by the fallback.       
+      112 +        if strings.ContainsFunc(val, func(r rune) bool { retur
+          +n forbiddenRune(r, false) != "" }) {                          
+      113 +                return "", &RenderError{Field: field, Variable
+          +: p.ph.Variable, Code: RenderInvalidValue}                    
+      114 +        }                                                     
+      115 +        // Empty, or only invisible characters (e.g. U+200B): 
+          +the value is missing.                                         
+      116 +        if !hasVisible(val) {                                 
+      117                  if p.ph.HasFallback {
+      118                          return p.ph.Fallback, nil
+      119                  }
+      120                  return "", &RenderError{Field: field, Variable
+           : p.ph.Variable, Code: RenderMissingValue}
+      121          }
+      116 -        if strings.ContainsFunc(val, func(r rune) bool { retur
+          -n forbiddenRune(r, false) != "" }) {                          
+      117 -                return "", &RenderError{Field: field, Variable
+          -: p.ph.Variable, Code: RenderInvalidValue}                    
+      118 -        }                                                     
+      122          if utf8.RuneCountInString(val) > p.max {
+      123                  return "", &RenderError{Field: field, Variable
+           : p.ph.Variable, Code: RenderValueTooLong}
+      124          }
+     ...
+      249                          return ph, v, CodeInvalidFallback, "ha
+           s a fallback that starts or ends with whitespace", nil
+      250                  case strings.ContainsFunc(fallback, func(r run
+           e) bool { return forbiddenRune(r, false) != "" }):
+      251                          return ph, v, CodeInvalidFallback, "ha
+           s a fallback with a line break or control character", nil
+      252 +                case !hasVisible(fallback):                   
+      253 +                        return ph, v, CodeInvalidFallback, "ha
+          +s a fallback without visible characters", nil                 
+      254                  }
+      255          }
+      256          return Placeholder{Variable: v.Name, Fallback: fallbac
+           k, HasFallback: hasFallback}, v, "", "", nil
+
+⏺ Bash(sed -i '' 's|// RenderMissingValue: the value is empty and the
+      placeholder has no|// RenderMissingValue: the value is empty or has no
+      visible characters\n\t// (…)
+  ⎿  const (
+             // RenderMissingValue: the value is empty or has no visible
+     characters
+             // (e.g. only U+200B) and the placeholder has no
+     … +7 lines (ctrl+o to expand)
+  ⎿  Updated backend/internal/content/render.go (+2 -1)
+      17  
+      18  // Render error codes.
+      19  const (
+      20 -        // RenderMissingValue: the value is empty and the place
+         -holder has no                                                  
+      20 +        // RenderMissingValue: the value is empty or has no vis
+         +ible characters                                                
+      21 +        // (e.g. only U+200B) and the placeholder has no       
+      22          // fallback. Never rendered as an empty string ("Hi ,")
+          .
+      23          RenderMissingValue = "missing_value"
+      24          // RenderInvalidValue: the value is not valid UTF-8 or 
+          contains control
+
+⏺ Bash(python3 - <<'EOF'
+      p='render.go'…)
+  ⎿  const (
+             // RenderMissingValue: the value is empty or has no visible
+     characters
+             // (e.g. only U+200B) and the placeholder has no fallback.
+     Never rende
+     … +5 lines (ctrl+o to expand)
+  ⎿  Updated backend/internal/content/render.go (+2 -2)
+      18  // Render error codes.
+      19  const (
+      20          // RenderMissingValue: the value is empty or has no vis
+          ible characters
+      21 -        // (e.g. only U+200B) and the placeholder has no       
+      22 -        // fallback. Never rendered as an empty string ("Hi ,")
+         -.                                                              
+      21 +        // (e.g. only U+200B) and the placeholder has no fallba
+         +ck. Never rendered                                             
+      22 +        // as an empty string ("Hi ,").                        
+      23          RenderMissingValue = "missing_value"
+      24          // RenderInvalidValue: the value is not valid UTF-8 or 
+          contains control
+      25          // characters (e.g. a line break that would break an em
+          ail subject).
+
+⏺ Fix is in; existing tests still pass. Adding the focused tests with real
+  U+200B/U+200D code points.
+
+⏺ Write(backend/internal/content/invisible_test.go)
+  ⎿  Wrote 159 lines to backend/internal/content/invisible_test.go
+       1 package content
+       2 
+       3 import (
+       4   "slices"
+       5   "strings"
+       6   "testing"
+       7 )
+       8 
+       9 // Invisible code points used as fixtures (real code points, bui
+         lt with r()).
+     … +150 lines (ctrl+o to expand)
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ Tests pass. Updating the two §8.1 sentences that describe fallbacks and empty
+  values.
+
+⏺ Bash(cd /Users/bilgem/Desktop/devel/leet/insider-case/insider-campaign-compose
+      r-case && python3 - <<'EOF'
+      p='docs/ARCHITECTURE.md'…)
+  ⎿   docs/ARCHITECTURE.md | 11 +++++++++++
+      1 file changed, 11 insertions(+)
+  ⎿  Updated docs/ARCHITECTURE.md (+2 -2)
+      537  
+      538  `internal/content` is pure (no I/O, no SDK) and depends only o
+           n `segment` (channels, field-error shape, city catalog). `cont
+           ent.Parse(Draft, channels)` is the single entry point for AI o
+           utput, edits, `validate`, prepare and stored rows read back; a
+            `Content` exists only as Parse's output, so the renderer neve
+           r sees unvalidated text.
+      539  - **Normalization**: invalid UTF-8 → `invalid_encoding`; other
+           wise NFC, then trim leading/trailing whitespace. Positions in 
+           messages are 1-based characters of the normalized text.
+      540 -- **Placeholders**: exactly `{{name}}` or `{{name|fallback}}`,
+          - name ∈ registry (case-sensitive). `{` and `}` are reserved (n
+          -o escape): a stray brace, `}}` or unterminated `{{` → `unbalan
+          -ced_delimiter`; empty, spaced, dotted, filtered, called, neste
+          -d or multi-pipe placeholders → `malformed_placeholder`; a well
+          --formed but unregistered name → `unknown_variable` (with `allo
+          -wed`). Fallbacks are non-empty, single-line, without surroundi
+          -ng whitespace (`invalid_fallback`). Rendering is one literal s
+          -ubstitution pass; values are never re-parsed.                 
+      540 +- **Placeholders**: exactly `{{name}}` or `{{name|fallback}}`,
+          + name ∈ registry (case-sensitive). `{` and `}` are reserved (n
+          +o escape): a stray brace, `}}` or unterminated `{{` → `unbalan
+          +ced_delimiter`; empty, spaced, dotted, filtered, called, neste
+          +d or multi-pipe placeholders → `malformed_placeholder`; a well
+          +-formed but unregistered name → `unknown_variable` (with `allo
+          +wed`). Fallbacks are single-line, without surrounding whitespa
+          +ce, and contain at least one visible character, i.e. a letter,
+          + number, punctuation or symbol (`invalid_fallback`). Rendering
+          + is one literal substitution pass; values are never re-parsed.
+      541  - **Characters**: `\n` allowed in SMS and email body, not in t
+           he subject; all other C0/C1 controls (incl. `\t`, `\r`), U+202
+           8/2029, bidirectional controls, BOM and noncharacters → `inval
+           id_character`. Text without a visible character (letter, numbe
+           r, punctuation, symbol) → `empty`. Markup-like `<tag`, `</`, `
+           <!`, `<?` → `markup_not_allowed` (plain-text policy, not a san
+           itizer; `<3`, `a < b` are fine).
+      542  - **Channels**: every provided field is validated whether or n
+           ot its channel is selected; a selected channel's fields are re
+           quired (`required` if absent, `empty` if blank); subject and b
+           ody form a pair; unselected blank fields count as absent; cont
+           ent must contain at least one channel (path `""`, `empty`).
+      543  - **Errors** use the shared `{path, code, message, allowed?}` 
+           shape with paths `sms_body`, `email_subject`, `email_body`, `c
+           hannels`; order is field order, then presence → encoding → cha
+           racters → markup → placeholders → length; at most 10 per field
+            plus one `too_many`. Messages never echo input. Length statis
+           tics are returned for every field that parsed (`{chars_worst_c
+           ase, limit}`, also for `body`); `rendered_example` uses fixed 
+           fictional values and only when there are no errors. Warning im
+           plemented: `first_name_not_used` (email body). Encoding/segmen
+           t warnings are B-tier; "offer not mentioned" needs the content
+            brief and belongs to the generator.
+      544 -- **Rendering** (`RenderSMS`, `RenderEmail`) is deterministic.
+          - Values are NFC-normalized and trimmed; an empty value uses th
+          -e fallback, and without one fails with `missing_value` (never 
+          -rendered as empty). Values over the declared maximum (`value_t
+          -oo_long`) or with control characters (`invalid_value`) fail; n
+          -othing is truncated. The rendered length is asserted (`content
+          -_too_long`). The email footer (`content.EmailFooter`) is appen
+          -ded after `"\n\n-- \n"`, outside the body budget.             
+      544 +- **Rendering** (`RenderSMS`, `RenderEmail`) is deterministic.
+          + Values are NFC-normalized and trimmed. Malformed UTF-8 or a f
+          +orbidden character fails first (`invalid_value`, never replace
+          +d by the fallback); a value without a visible character (empty
+          +, or only e.g. U+200B/U+200D) is missing: it uses the fallback
+          +, and without one fails with `missing_value` (never rendered a
+          +s empty). Values over the declared maximum (`value_too_long`) 
+          +or with control characters (`invalid_value`) fail; nothing is 
+          +truncated. The rendered length is asserted (`content_too_long`
+          +). The email footer (`content.EmailFooter`) is appended after 
+          +`"\n\n-- \n"`, outside the body budget.                       
+      545  - **Versions**: AI generation always creates a new version (`o
+           rigin=ai`, model + prompt version required); an edit whose can
+           onical text equals the current version is a no-op; any other c
+           hange creates version `n+1` (`origin=edited`, no model). Appro
+           val binds the immutable version id.
+      546  
+      547  ---
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ Fixed: a fallback with no visible characters is now rejected, and a recipient
+  value with no visible characters (for example only U+200B) is treated as
+  missing. Unit tests, both fuzz tests, make test, go test -race ./... and make 
+  lint all pass. Nothing is committed and CP12 has not started.
+
+  Changes
+
+  1. Fallback check, backend/internal/content/template.go, parsePlaceholder. One
+  new rule after the existing fallback checks:
+  case !hasVisible(fallback):
+      return ph, v, CodeInvalidFallback, "has a fallback without visible 
+  characters", nil
+  It uses the existing hasVisible policy (a letter, number, punctuation or
+  symbol). Fallbacks that mix visible text with joiners, combining marks or
+  emoji are still accepted.
+
+  2. Recipient values, template.go, resolveValue. I reordered two checks and
+  widened the "missing" test from val == "" to !hasVisible(val). The order is
+  now:
+  1. Malformed UTF-8 → invalid_value (unchanged).
+  2. NFC normalization and trimming (unchanged).
+  3. Forbidden characters → invalid_value. This check moved ahead of the
+     "missing" check, so a non-empty invalid value such as U+200B plus NUL, or a
+     lone bidi override, fails instead of falling back. An empty string can't
+     contain forbidden characters, so earlier behaviour is the same.
+  4. No visible character → use the fallback if there is one, otherwise
+     missing_value.
+  5. Over-length → value_too_long (unchanged).
+
+  3. Comment. The RenderMissingValue comment in render.go now says it covers
+  invisible-only values too.
+
+  4. Docs. Two sentences in docs/ARCHITECTURE.md §8.1 now state the
+  visible-character rule for fallbacks and the order of the value checks.
+
+  Nothing else changed: the content model, grammar, version rules, schema,
+  worst-case counting and unrelated code are untouched.
+
+  New tests (backend/internal/content/invisible_test.go)
+
+  The fixtures are built from real code points: U+200B, U+200C, U+200D, U+2060,
+  U+00A0 and U+0301.
+  - Rejected fallbacks: U+200B, U+200B+U+200D, U+200C, U+2060, a combining mark
+    alone, a run of U+200D, a no-break space, and mixed combinations.
+  - Accepted fallbacks: Turkish text, capital İĞÜŞÖÇ, 👋, 👩+U+200D+💻, visible
+    text containing U+200B or U+200C, and a decomposed accent.
+  - Invisible values:
+    - first_name (U+200B; U+200B+U+200D+U+2060; spaces mixed with U+200B; a
+      combining mark alone): uses the fallback, or missing_value when there is
+      none.
+    - last_name (U+200B): uses the fallback, or missing_value when there is
+      none.
+    - city (U+200C; U+2060): uses the fallback, or missing_value when there is
+      none.
+  - Valid values render unchanged: Turkish names, decomposed Turkish, emoji,
+    emoji joined with U+200D, and names with U+200C or U+200B inside visible
+    text.
+  - Invalid values never fall back: U+200B+NUL, a bidi override, a byte-order
+    mark, U+200B with a line break, and malformed UTF-8 all give invalid_value.
+    A 21-character value, or one padded with U+200B, gives value_too_long.
+  - Worst-case counts unchanged: a fallback with invisible characters still
+    counts every code point (26). The SMS limits 160/161 and the email subject
+    80 and body 5,000 are still met exactly.
+
+  Results
+
+  - Content package: all tests pass, 96.7% statement coverage.
+  - FuzzParse and FuzzRender: 30 seconds each, both pass with no crashes.
+  - make test: all Go packages and 118 frontend tests pass, and the type check
+    passes.
+  - go test -race ./...: all packages pass.
+  - make lint: go vet and staticcheck are clean. Staticcheck needs the
+    documented env -u SSL_CERT_FILE workaround to download.
+  - No live Anthropic calls were made.
