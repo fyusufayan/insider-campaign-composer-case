@@ -66,7 +66,7 @@ type AITask struct {
 
 // Defaults of the segment interpretation task (CLAUDE_SEGMENT_*).
 const (
-	defaultSegmentModel     = "claude-opus-5-5"
+	defaultSegmentModel     = "claude-haiku-5-5"
 	defaultSegmentEffort    = "low"
 	defaultSegmentTimeout   = 45 * time.Second
 	defaultSegmentMaxTokens = 4000

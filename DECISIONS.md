@@ -205,13 +205,15 @@ A request is never issued after its slot deadline: `gatedSender.Attempt` aborts 
 
 ---
 
-## ADR-015 — Model selection per task via environment; `claude-opus-5-5` by default; Day 2 evaluation
+## ADR-015 — Model selection per task via environment; `claude-haiku-5-5` for interpretation, `claude-opus-5-5` for content; evaluation
 
 **Context.** Interpretation and content generation have different quality/latency profiles. The model must not be hardcoded.
 
 **Alternatives.** (a) One global model constant. (b) Per-task model and effort via environment variables.
 
-**Decision.** (b): `CLAUDE_SEGMENT_MODEL`, `CLAUDE_CONTENT_MODEL` (both default `claude-opus-5-5`), effort `low`/`medium` respectively. A Day 2 evaluation (12 briefs) compares `claude-sonnet-5-5` per task; switching is an env change.
+**Decision.** (b): `CLAUDE_SEGMENT_MODEL` (default `claude-haiku-5-5`) and `CLAUDE_CONTENT_MODEL` (default `claude-opus-5-5`), effort `low`/`medium` respectively. The 12-brief evaluation compares models per task; switching is an env change, never a runtime fallback.
+
+**Update (CP10).** Interpretation is a narrow translation into a closed DSL; validation, normalization, SQL compilation, consent and audience rules are deterministic backend code, so reliable structured output, latency and cost matter more than maximum reasoning. One live call with `claude-haiku-5-5` (effort `low`, adaptive thinking, native `output_config.format` JSON schema, SDK retries off) on the example brief "Target customers in Istanbul who abandoned their cart in the last 30 days." returned `end_turn` in 4.3 s with 5,138 input / 294 output tokens (≈ $0.0007), passed strict decode and semantic validation without a repair turn, and produced exactly `city eq istanbul` AND `abandoned_cart within 30 days`; the persisted audience matched an independent SQL count. The interpretation default therefore moved from `claude-opus-5-5` to `claude-haiku-5-5`. One brief is evidence of compatibility, not of quality across briefs: the 12-brief evaluation (incl. ambiguous and unsupported briefs) should confirm it, with `claude-sonnet-5-5` as the explicit alternative. Content generation was not evaluated and keeps `claude-opus-5-5`.
 
 **Reasoning.** Quality and predictable structured output are prioritized; costs per campaign are cents. Measurement, not assumption, decides any switch.
 

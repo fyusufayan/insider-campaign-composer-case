@@ -458,7 +458,7 @@ The prepare step computes this partition from the same query that inserts the he
 - Retries: the SDK retries connection errors, 408, 409, 429, ≥500 (honouring `x-should-retry`) up to `CLAUDE_MAX_RETRIES` (default 2, range 0–5) with 0.5 s·2ⁿ backoff (≤ 8 s, jittered) or the server's `retry-after(-ms)`. The **only** time budget is the interpreter's `context.WithTimeout(CLAUDE_SEGMENT_TIMEOUT)`, which spans all SDK attempts and is never exceeded (a long `retry-after` simply ends in a timeout). **No** per-attempt `option.WithRequestTimeout` is set: the SDK retries an attempt that hit it, which would abandon and re-bill a slow but healthy generation. Worst case per interpretation: 3 logical requests (answer, repair, one truncation retry) × (1 + retries) HTTP attempts, all inside the one deadline.
 - Errors: `errors.As(err, &apiErr *anthropic.Error)` → `llm.Error{StatusCode, RequestID}`; 408/409/429/5xx → `llm.ErrUnavailable` (retryable), other 4xx (400 incl. schema rejection, 401, 403, 404 unknown model, 413) → `llm.ErrRejected`; transport errors → `ErrUnavailable` (status 0); the caller's cancellation/deadline → the context error. The message is rebuilt from metadata (status, API error type, request id) because `*anthropic.Error.Error()` embeds the raw response body; transport failures get the fixed message "anthropic transport failure" (their text may carry URLs, proxy credentials or quoted bytes). 2xx responses with a non-text content block (anything but text/thinking) or `end_turn` without text are `ErrUnavailable`, never output. Stop reasons other than end_turn/max_tokens/refusal/stop_sequence pass through verbatim and are rejected by the interpreter. `ai` maps these to `ErrLLMUnavailable`, `ErrLLMRejected`, `ErrLLMRefused`, `ErrLLMTruncated`, `ErrOutputInvalid`. The adapter logs one metadata line per call (task, models, effort, stop reason, tokens, latency, provider request id) — never prompts, briefs, outputs or the key.
 - `Stream` on the Anthropic client returns `ErrRejected` without contacting the provider until content generation (Slice 2) implements it.
-- Model constraints honoured (Opus 5.5): thinking always on (controlled by effort only), no forced `tool_choice`, no assistant prefill.
+- Model constraints honoured (Opus 5.5, Haiku 5.5, Sonnet 5.5): thinking always on (controlled by effort only), no forced `tool_choice`, no assistant prefill.
 - Server-side refusal fallback (beta Messages API) is **not** used in core; refusals are surfaced to the marketer.
 
 ### 7.2 Abstraction
@@ -475,7 +475,7 @@ Implementations: `anthropic` (real), `scripted` (tests: queued responses/errors,
 ### 7.3 Configuration (model never hardcoded)
 ```
 LLM_PROVIDER=auto|anthropic|demo        ANTHROPIC_API_KEY=…
-CLAUDE_SEGMENT_MODEL=claude-opus-5-5    CLAUDE_SEGMENT_EFFORT=low     CLAUDE_SEGMENT_TIMEOUT=45s  CLAUDE_SEGMENT_MAX_TOKENS=4000
+CLAUDE_SEGMENT_MODEL=claude-haiku-5-5   CLAUDE_SEGMENT_EFFORT=low     CLAUDE_SEGMENT_TIMEOUT=45s  CLAUDE_SEGMENT_MAX_TOKENS=4000
 CLAUDE_CONTENT_MODEL=claude-opus-5-5    CLAUDE_CONTENT_EFFORT=medium  CLAUDE_CONTENT_TIMEOUT=90s  CLAUDE_CONTENT_MAX_TOKENS=8000
 CLAUDE_MAX_RETRIES=2                    # 0–5, SDK retries per model request
 ```
@@ -493,7 +493,7 @@ CLAUDE_MAX_RETRIES=2                    # 0–5, SDK retries per model request
 - **No fallback at runtime**: when the Anthropic provider is selected, every failure (transport, 4xx/5xx after SDK retries, refusal, truncation, invalid output after the repair turn, timeout) is returned to the caller as the mapped domain error and surfaced as an actionable API error (§7.5). Demo output is never substituted.
 - **Unit tests** never read `LLM_PROVIDER`; they construct `llm.Scripted` explicitly. `demo` is used only for running the app (Compose, Playwright) and in its own unit tests.
 
-The model string flows config → service → `llm.Request.Model` and is persisted with every AI result. Day 2 runs a 12-brief evaluation of `claude-opus-5-5` vs `claude-sonnet-5-5` per task; switching is an env change.
+The model string flows config → service → `llm.Request.Model` and is persisted with every AI result. Interpretation defaults to `claude-haiku-5-5` (ADR-015; verified live in CP10); content generation keeps `claude-opus-5-5` until it is evaluated. The 12-brief evaluation compares models per task; switching is an env change, never a runtime fallback.
 
 ### 7.4 Prompts
 Versioned templates (`segment_v1`, `content_v1`). The interpretation system prompt contains the **field catalog generated from the registry**, operator semantics, rules (never invent fields; put inexpressible requests in `unsupported`; state interpretation choices in `assumptions`) and few-shot examples. The brief is wrapped in `<brief>` tags and declared as data. The content prompt receives the content brief, selected channels, allowed variables and limits (target SMS ≤150, subject ≤70 to leave headroom), plain-text only. **No customer data is ever sent to the LLM.**

@@ -183,7 +183,7 @@ func TestSegmentTaskConfig(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := AITask{Model: "claude-opus-5-5", Effort: "low", Timeout: 45 * time.Second, MaxTokens: 4000}
+	want := AITask{Model: "claude-haiku-5-5", Effort: "low", Timeout: 45 * time.Second, MaxTokens: 4000}
 	if cfg.Segment != want {
 		t.Errorf("defaults = %+v, want %+v", cfg.Segment, want)
 	}

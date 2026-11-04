@@ -147,7 +147,8 @@ audience. Nothing is sent
 to Claude.
 
 Model names come only from configuration (`CLAUDE_SEGMENT_MODEL`, default
-`claude-opus-5-5`, plus `_EFFORT`, `_TIMEOUT`, `_MAX_TOKENS`, and
+`claude-haiku-5-5`; set `claude-sonnet-5-5` or `claude-opus-5-5` to use another
+model, plus `_EFFORT`, `_TIMEOUT`, `_MAX_TOKENS`, and
 `CLAUDE_MAX_RETRIES`, default 2). `_TIMEOUT` is the total budget of one
 interpretation, SDK retries included. All variables are
 listed in `.env.example`; Compose reads an uncommitted `.env` in the repository
@@ -194,6 +195,16 @@ no API key):
 ```bash
 make test-integration
 ```
+
+Live Anthropic verification is manual and billable; it is never part of
+`make test` or the smoke test. `backend/test/live/liveapi` (build tag `live`)
+serves the real API with the Anthropic adapter's transport wrapped in a
+persistent request counter (`backend/test/live/budget`) that refuses any request
+beyond 3, and it only starts with `LLM_PROVIDER=anthropic`,
+`CLAUDE_MAX_RETRIES=0`, an allowed model and an absolute `LIVE_BUDGET_FILE`
+outside the repository. The counter fails closed: it must be created
+deliberately (`echo 0 > "$LIVE_BUDGET_FILE"`); a missing or corrupt counter sends
+nothing.
 
 Lint (gofmt, go vet, staticcheck):
 

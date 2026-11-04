@@ -64,7 +64,7 @@ Every slice ends with a working end-to-end result in the browser, its tests, and
 **Tasks**
 - `llm/anthropic.go`: SDK v2 client, `OutputConfig` JSON schema + effort, timeouts, `WithMaxRetries`, `*anthropic.Error` mapping, `stop_reason` handling (refusal, max_tokens), usage/latency logging, `LLM_PROVIDER=auto`.
 - Error UX in Vue (retryable vs. not, refusal, invalid output with raw proposal).
-- `make eval-segment MODEL=…`: 12 briefs (incl. ambiguous and unsupported ones) with expected normalized rules; reports exact-match, validation failures, repair rate, latency. Run for `claude-opus-5-5` and `claude-sonnet-5-5` **after confirming the spend**.
+- `make eval-segment MODEL=…`: 12 briefs (incl. ambiguous and unsupported ones) with expected normalized rules; reports exact-match, validation failures, repair rate, latency. Run for `claude-haiku-5-5` (interpretation default since CP10) and `claude-sonnet-5-5` **after confirming the spend**.
 - Core metrics `llm_requests_total`, `llm_request_duration_seconds`.
 
 **Tests.** Scripted refusal/truncation/timeout/cancellation; error mapping unit tests; provider-selection table (`auto`/`anthropic`/`demo` × key present/absent; `anthropic` without key fails startup); Anthropic failure returns an error and never demo output; optional `make smoke-claude`.
