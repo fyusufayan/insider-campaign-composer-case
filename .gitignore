@@ -1,0 +1,30 @@
+# OS / editor
+.DS_Store
+.idea/
+*.swp
+*~
+
+# Local environment and secrets (never commit ANTHROPIC_API_KEY)
+.env
+.env.*
+!.env.example
+
+# Go build and test artifacts
+backend/bin/
+*.test
+*.out
+coverage.*
+*.prof
+
+# Frontend dependencies and build artifacts
+node_modules/
+frontend/dist/
+frontend/coverage/
+.vite/
+*.tsbuildinfo
+playwright-report/
+test-results/
+
+# Logs and scratch files
+*.log
+tmp/
