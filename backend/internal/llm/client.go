@@ -2,9 +2,9 @@
 // §7.2, ADR-016). It knows nothing about campaigns, segments or SQL: callers
 // (package ai) own prompts, schemas, decoding, validation and repair.
 //
-// Implementations: Scripted (unit tests), Demo (running the app without an
-// API key). The Anthropic implementation arrives in Slice 1b and is the only
-// code that may import the Anthropic SDK.
+// Implementations: Anthropic (production; anthropic.go is the only code that
+// imports the Anthropic SDK), Scripted (unit tests), Demo (running the app
+// without an API key).
 package llm
 
 import (

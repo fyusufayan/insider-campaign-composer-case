@@ -35,6 +35,9 @@ check-unit-isolation:
 	@cd $(BACKEND) && if go list -deps -test ./... | grep -q '^github.com/testcontainers/'; then \
 		echo "error: a unit test package depends on testcontainers; move it behind the integration build tag" >&2; exit 1; \
 	fi
+	@cd $(BACKEND) && if go list -deps ./cmd/... | grep -q '/internal/llm/anthropictest$$'; then \
+		echo "error: a production binary depends on the test-only anthropictest package" >&2; exit 1; \
+	fi
 
 .PHONY: test-integration
 test-integration: ## Integration tests (requires Docker)

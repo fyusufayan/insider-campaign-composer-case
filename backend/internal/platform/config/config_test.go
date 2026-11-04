@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -207,6 +208,27 @@ func TestSegmentTaskConfig(t *testing.T) {
 	} {
 		if _, err := Load(env(with(validEnv(), kv[0], kv[1]))); err == nil || !strings.Contains(err.Error(), kv[0]) {
 			t.Errorf("%s=%q: err = %v", kv[0], kv[1], err)
+		}
+	}
+}
+
+func TestLLMMaxRetries(t *testing.T) {
+	cfg, err := Load(env(validEnv()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.LLM.MaxRetries != 2 {
+		t.Errorf("default MaxRetries = %d, want 2", cfg.LLM.MaxRetries)
+	}
+	for _, v := range []string{"0", "5"} {
+		cfg, err := Load(env(with(validEnv(), "CLAUDE_MAX_RETRIES", v)))
+		if err != nil || strconv.Itoa(cfg.LLM.MaxRetries) != v {
+			t.Errorf("CLAUDE_MAX_RETRIES=%s: %d, %v", v, cfg.LLM.MaxRetries, err)
+		}
+	}
+	for _, v := range []string{"-1", "6", "two"} {
+		if _, err := Load(env(with(validEnv(), "CLAUDE_MAX_RETRIES", v))); err == nil || !strings.Contains(err.Error(), "CLAUDE_MAX_RETRIES") {
+			t.Errorf("CLAUDE_MAX_RETRIES=%q: err = %v", v, err)
 		}
 	}
 }

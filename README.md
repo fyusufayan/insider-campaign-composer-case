@@ -5,8 +5,9 @@ typed audience rule, the backend validates it and shows a live,
 database-backed audience preview. No real messages are sent.
 
 Design and rationale: `docs/ARCHITECTURE.md`, `DECISIONS.md`, `docs/ROADMAP.md`,
-`CLAUDE.md`. Current scope: **Slice 1a** — brief → demo interpretation →
-validated segment → audience preview. Content generation, approval and sending
+`CLAUDE.md`. Current scope: **Slice 1a** plus the start of **Slice 1b** — brief →
+interpretation (demo, or real Claude when a key is configured) → validated
+segment → audience preview. Content generation, approval and sending
 come in later slices.
 
 ## Quick start (Docker only)
@@ -110,10 +111,34 @@ The provider is chosen once at API startup from `LLM_PROVIDER`:
 | `anthropic` | empty | startup fails with a configuration error |
 | `demo` | any | `demo` |
 
-There is never a runtime fallback from Anthropic to demo. **In Slice 1a the
-Anthropic client is not implemented yet**: a resolved `anthropic` provider stops
-the API at startup. If your shell exports `ANTHROPIC_API_KEY`, start with
-`LLM_PROVIDER=demo docker compose up --build`.
+There is never a runtime fallback from Anthropic to demo: once `anthropic` is
+selected, every provider failure (authentication, rate limit, outage, timeout,
+refusal, invalid output) is returned as an API error. Startup makes no model
+call, so an invalid key only shows up on the first interpretation (as
+`llm_rejected`). `/readyz` reports the selected `llm_provider`.
+
+**Keep running demo mode** (no key, nothing sent to Claude): leave
+`ANTHROPIC_API_KEY` empty, or force it even if your shell exports a key:
+
+```bash
+LLM_PROVIDER=demo docker compose up --build
+```
+
+**Use real Claude locally.** ⚠️ Every interpretation is a billable Anthropic API
+request (up to three requests: the first answer, at most one repair turn and at
+most one retry after truncation, each with up to `CLAUDE_MAX_RETRIES` automatic
+SDK retries). Put the key in the uncommitted `.env` (git-ignored) or export it
+only in your shell, never in a tracked file:
+
+```bash
+cp .env.example .env    # then set ANTHROPIC_API_KEY=… in .env (never commit it)
+```
+
+```bash
+LLM_PROVIDER=anthropic docker compose up --build
+```
+
+With `LLM_PROVIDER=anthropic` and no key the API refuses to start.
 
 Demo limitations: the demo interpreter is a deterministic keyword matcher, not
 language understanding. It recognizes a fixed set of keywords and declines
@@ -122,7 +147,9 @@ audience. Nothing is sent
 to Claude.
 
 Model names come only from configuration (`CLAUDE_SEGMENT_MODEL`, default
-`claude-opus-5-5`, plus `_EFFORT`, `_TIMEOUT`, `_MAX_TOKENS`). All variables are
+`claude-opus-5-5`, plus `_EFFORT`, `_TIMEOUT`, `_MAX_TOKENS`, and
+`CLAUDE_MAX_RETRIES`, default 2). `_TIMEOUT` is the total budget of one
+interpretation, SDK retries included. All variables are
 listed in `.env.example`; Compose reads an uncommitted `.env` in the repository
 root. Never commit `.env` or an API key.
 
@@ -143,7 +170,9 @@ SEED_REFERENCE_TIME="$(date -u +%Y-%m-%dT00:00:00Z)" docker compose up --build
 
 ## Tests
 
-Unit tests need no Docker and no API key:
+Unit tests need no Docker, no API key and no network; the Anthropic adapter is
+tested against an offline HTTP transport that records the exact request JSON
+and returns scripted Messages API responses (no test calls Anthropic):
 
 ```bash
 make test
@@ -159,7 +188,8 @@ cd backend && go test ./... && go test -race ./...
 cd frontend && npm ci && npm test && npm run typecheck && npm run build
 ```
 
-Integration tests (PostgreSQL via testcontainers; requires Docker):
+Integration tests (PostgreSQL via testcontainers; requires Docker; also offline,
+no API key):
 
 ```bash
 make test-integration

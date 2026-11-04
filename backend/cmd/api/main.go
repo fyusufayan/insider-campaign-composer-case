@@ -45,9 +45,10 @@ func run(log *slog.Logger) error {
 	if cfg.LLM.FellBackToDemo() {
 		log.Warn("ANTHROPIC_API_KEY is not set; LLM_PROVIDER=auto selected the demo provider (mock AI output)")
 	}
-	// Selected once at startup; a resolved anthropic provider fails here until
-	// Slice 1b and never falls back to demo (invariant 17).
-	llmClient, err := llm.New(cfg.LLM, ai.DemoResponders())
+	// Selected once at startup and never replaced: an Anthropic failure is
+	// returned to the caller, never answered with demo output (invariant 17).
+	// No request is made here; the key is first used by a real interpretation.
+	llmClient, err := llm.New(cfg.LLM, ai.DemoResponders(), log)
 	if err != nil {
 		return err
 	}
@@ -61,7 +62,9 @@ func run(log *slog.Logger) error {
 		return err
 	}
 	log.Info("configuration loaded", "http_addr", cfg.HTTPAddr, "llm_provider", cfg.LLM.Provider,
-		"segment_model", cfg.Segment.Model, "segment_prompt_version", ai.SegmentPromptVersion)
+		"llm_max_retries", cfg.LLM.MaxRetries, "segment_model", cfg.Segment.Model, "segment_effort", cfg.Segment.Effort,
+		"segment_timeout", cfg.Segment.Timeout.String(), "segment_max_tokens", cfg.Segment.MaxTokens,
+		"segment_prompt_version", ai.SegmentPromptVersion)
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()

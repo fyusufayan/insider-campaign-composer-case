@@ -44,6 +44,9 @@ type LLM struct {
 	Provider LLMProvider
 	// APIKey is ANTHROPIC_API_KEY, trimmed. Empty when Provider is demo.
 	APIKey Secret
+	// MaxRetries is CLAUDE_MAX_RETRIES: the Anthropic SDK's automatic
+	// retries per model request (connection errors, 408, 409, 429, 5xx).
+	MaxRetries int
 }
 
 // FellBackToDemo reports whether auto resolved to demo because no API key is set.
@@ -75,6 +78,13 @@ var allowedEfforts = []string{"low", "medium", "high", "max"}
 const (
 	maxAITimeout   = 10 * time.Minute
 	maxAIMaxTokens = 64000
+)
+
+// CLAUDE_MAX_RETRIES bounds: every retry is another provider request inside
+// the same task timeout, so the ceiling keeps amplification small.
+const (
+	defaultLLMMaxRetries = 2
+	maxLLMMaxRetries     = 5
 )
 
 // Config is the validated configuration of the api process.
@@ -109,6 +119,15 @@ func Load(getenv func(string) string) (Config, error) {
 	llm, err := resolveLLM(get("LLM_PROVIDER"), get("ANTHROPIC_API_KEY"))
 	if err != nil {
 		errs = append(errs, err)
+	}
+	llm.MaxRetries = defaultLLMMaxRetries
+	if v := get("CLAUDE_MAX_RETRIES"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n < 0 || n > maxLLMMaxRetries {
+			errs = append(errs, fmt.Errorf("CLAUDE_MAX_RETRIES must be an integer in [0, %d] (got %q)", maxLLMMaxRetries, v))
+		} else {
+			llm.MaxRetries = n
+		}
 	}
 	cfg.LLM = llm
 

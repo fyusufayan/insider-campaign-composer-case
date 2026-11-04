@@ -162,53 +162,64 @@ func TestRetryable(t *testing.T) {
 	}
 }
 
-// Provider selection (ARCHITECTURE §7.3) from real configuration: demo when
-// selected, an explicit failure — never demo — when anthropic is resolved.
+// Provider selection (ARCHITECTURE §7.3) from real configuration: demo only
+// when selected or when auto has no key; a resolved anthropic provider always
+// yields the Anthropic client (never demo), and explicit anthropic without a
+// key fails configuration. Selection performs no I/O and calls no responder.
 func TestNewSelectsProvider(t *testing.T) {
 	const key = "sk-ant-test"
 	tests := []struct {
 		provider, key string
-		wantDemo      bool
-		wantErr       error
-		wantCfgErr    bool
+		want          string // "demo", "anthropic" or "config error"
 	}{
-		{"", "", true, nil, false},
-		{"auto", "", true, nil, false},
-		{"auto", key, false, ErrAnthropicNotAvailable, false},
-		{"anthropic", key, false, ErrAnthropicNotAvailable, false},
-		{"anthropic", "", false, nil, true},
-		{"demo", "", true, nil, false},
-		{"demo", key, true, nil, false},
+		{"", "", "demo"},
+		{"auto", "", "demo"},
+		{"auto", key, "anthropic"},
+		{"anthropic", key, "anthropic"},
+		{"anthropic", "", "config error"},
+		{"demo", "", "demo"},
+		{"demo", key, "demo"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.provider+"/"+tt.key, func(t *testing.T) {
 			env := map[string]string{"DATABASE_URL": "postgres://x", "LLM_PROVIDER": tt.provider, "ANTHROPIC_API_KEY": tt.key}
 			cfg, err := config.Load(func(k string) string { return env[k] })
-			if tt.wantCfgErr {
-				if err == nil {
-					t.Fatal("configuration accepted")
+			if tt.want == "config error" {
+				if err == nil || !strings.Contains(err.Error(), "ANTHROPIC_API_KEY") {
+					t.Fatalf("configuration error = %v", err)
 				}
 				return
 			}
 			if err != nil {
 				t.Fatal(err)
 			}
-			c, err := New(cfg.LLM, nil)
-			if tt.wantErr != nil {
-				if !errors.Is(err, tt.wantErr) || c != nil {
-					t.Fatalf("New = %T, %v; want %v and no client", c, err, tt.wantErr)
-				}
-				return
-			}
+			responderCalls := 0
+			responders := map[string]DemoResponder{"t": func(Request) (string, error) { responderCalls++; return "", nil }}
+			c, err := New(cfg.LLM, responders, nil)
 			if err != nil {
 				t.Fatal(err)
 			}
-			if _, ok := c.(*Demo); ok != tt.wantDemo {
-				t.Errorf("client = %T", c)
+			switch tt.want {
+			case "demo":
+				if _, ok := c.(*Demo); !ok {
+					t.Errorf("client = %T, want *Demo", c)
+				}
+			case "anthropic":
+				if _, ok := c.(*Anthropic); !ok {
+					t.Errorf("client = %T, want *Anthropic", c)
+				}
+			}
+			if responderCalls != 0 {
+				t.Error("selection invoked a demo responder")
 			}
 		})
 	}
-	if _, err := New(config.LLM{Provider: config.LLMProviderAuto}, nil); err == nil {
+	if _, err := New(config.LLM{Provider: config.LLMProviderAuto}, nil, nil); err == nil {
 		t.Error("unresolved provider accepted")
+	}
+	// A resolved anthropic provider with an unusable key fails at startup
+	// instead of degrading to demo.
+	if c, err := New(config.LLM{Provider: config.LLMProviderAnthropic}, nil, nil); err == nil || c != nil {
+		t.Errorf("anthropic without key = %T, %v", c, err)
 	}
 }

@@ -201,7 +201,7 @@ A request is never issued after its slot deadline: `gatedSender.Attempt` aborts 
 
 **Reasoning.** Maintained, typed streaming (`NewStreaming` + `Accumulate`), typed errors (`*anthropic.Error`), built-in retries. Forced tool use is rejected by the default model; structured outputs remove most syntax failures; the schema cannot express ranges/lengths, so local validation remains mandatory. One repair turn bounds cost and latency.
 
-**Trade-offs.** Coupling to SDK types is confined to `llm/anthropic.go`. v2.5.0 is very recent; fallback to v2.4.0 if issues arise. Server-side refusal fallbacks (beta API) are not used.
+**Trade-offs.** Coupling to SDK types is confined to `llm/anthropic.go`. v2.5.0 is very recent; fallback to v2.4.0 if issues arise. Server-side refusal fallbacks (beta API) are not used. The adapter disables the SDK's environment credential autoload (`option.WithoutEnvironmentDefaults`) so `ANTHROPIC_API_KEY` from our config is the only credential, sets no per-attempt request timeout (a timed-out attempt would be retried and re-billed; the interpreter's single deadline bounds all attempts) and sends adaptive thinking explicitly (implemented in CP9; details in ARCHITECTURE §7.1).
 
 ---
 
