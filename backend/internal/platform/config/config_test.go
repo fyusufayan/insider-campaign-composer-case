@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"strings"
 	"testing"
+	"time"
 )
 
 const testKey = "sk-ant-test-0123456789"
@@ -172,6 +173,40 @@ func TestSecretsNeverRendered(t *testing.T) {
 		}
 		if !strings.Contains(out, redacted) {
 			t.Errorf("%s rendering lacks %s marker: %s", name, redacted, out)
+		}
+	}
+}
+
+func TestSegmentTaskConfig(t *testing.T) {
+	cfg, err := Load(env(validEnv()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := AITask{Model: "claude-opus-5-5", Effort: "low", Timeout: 45 * time.Second, MaxTokens: 4000}
+	if cfg.Segment != want {
+		t.Errorf("defaults = %+v, want %+v", cfg.Segment, want)
+	}
+	cfg, err = Load(env(with(validEnv(),
+		"CLAUDE_SEGMENT_MODEL", "claude-sonnet-5-5", "CLAUDE_SEGMENT_EFFORT", "medium",
+		"CLAUDE_SEGMENT_TIMEOUT", "30s", "CLAUDE_SEGMENT_MAX_TOKENS", "8000")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want = AITask{Model: "claude-sonnet-5-5", Effort: "medium", Timeout: 30 * time.Second, MaxTokens: 8000}
+	if cfg.Segment != want {
+		t.Errorf("overrides = %+v, want %+v", cfg.Segment, want)
+	}
+	for _, kv := range [][2]string{
+		{"CLAUDE_SEGMENT_MODEL", "two words"},
+		{"CLAUDE_SEGMENT_EFFORT", "extreme"},
+		{"CLAUDE_SEGMENT_TIMEOUT", "soon"},
+		{"CLAUDE_SEGMENT_TIMEOUT", "-1s"},
+		{"CLAUDE_SEGMENT_TIMEOUT", "1h"},
+		{"CLAUDE_SEGMENT_MAX_TOKENS", "0"},
+		{"CLAUDE_SEGMENT_MAX_TOKENS", "lots"},
+	} {
+		if _, err := Load(env(with(validEnv(), kv[0], kv[1]))); err == nil || !strings.Contains(err.Error(), kv[0]) {
+			t.Errorf("%s=%q: err = %v", kv[0], kv[1], err)
 		}
 	}
 }

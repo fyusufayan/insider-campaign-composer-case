@@ -3,7 +3,6 @@ package main
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -12,7 +11,9 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/fyusufayan/insider-campaign-composer-case/backend/internal/ai"
 	"github.com/fyusufayan/insider-campaign-composer-case/backend/internal/httpapi"
+	"github.com/fyusufayan/insider-campaign-composer-case/backend/internal/llm"
 	"github.com/fyusufayan/insider-campaign-composer-case/backend/internal/platform/config"
 	"github.com/fyusufayan/insider-campaign-composer-case/backend/internal/platform/db"
 	"github.com/fyusufayan/insider-campaign-composer-case/backend/internal/platform/logging"
@@ -39,16 +40,27 @@ func run(log *slog.Logger) error {
 		return err
 	}
 
-	switch cfg.LLM.Provider {
-	case config.LLMProviderDemo:
-		if cfg.LLM.FellBackToDemo() {
-			log.Warn("ANTHROPIC_API_KEY is not set; LLM_PROVIDER=auto selected the demo provider (mock AI output)")
-		}
-	case config.LLMProviderAnthropic:
-		// Never fall back to demo when anthropic was selected (invariant 17).
-		return errors.New("LLM provider anthropic is not available in this build; use LLM_PROVIDER=demo or unset ANTHROPIC_API_KEY")
+	if cfg.LLM.FellBackToDemo() {
+		log.Warn("ANTHROPIC_API_KEY is not set; LLM_PROVIDER=auto selected the demo provider (mock AI output)")
 	}
-	log.Info("configuration loaded", "http_addr", cfg.HTTPAddr, "llm_provider", cfg.LLM.Provider)
+	// Selected once at startup; a resolved anthropic provider fails here until
+	// Slice 1b and never falls back to demo (invariant 17).
+	llmClient, err := llm.New(cfg.LLM, ai.DemoResponders())
+	if err != nil {
+		return err
+	}
+	interpreter, err := ai.NewInterpreter(llmClient, ai.InterpreterConfig{
+		Model:     cfg.Segment.Model,
+		Effort:    llm.Effort(cfg.Segment.Effort),
+		Timeout:   cfg.Segment.Timeout,
+		MaxTokens: cfg.Segment.MaxTokens,
+	})
+	if err != nil {
+		return err
+	}
+	_ = interpreter // used by the campaign service (CP6)
+	log.Info("configuration loaded", "http_addr", cfg.HTTPAddr, "llm_provider", cfg.LLM.Provider,
+		"segment_model", cfg.Segment.Model, "segment_prompt_version", ai.SegmentPromptVersion)
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()

@@ -1,0 +1,326 @@
+{
+  "$defs": {
+    "condition": {
+      "anyOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "field": {
+              "enum": [
+                "city",
+                "country",
+                "gender",
+                "age",
+                "signup_days_ago",
+                "last_active_days_ago",
+                "language"
+              ],
+              "type": "string"
+            },
+            "op": {
+              "enum": [
+                "eq",
+                "neq",
+                "in",
+                "not_in",
+                "gte",
+                "lte",
+                "between"
+              ],
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "attribute"
+              ],
+              "type": "string"
+            },
+            "value": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "integer"
+                },
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "max": {
+                      "type": "integer"
+                    },
+                    "min": {
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "min",
+                    "max"
+                  ],
+                  "type": "object"
+                }
+              ]
+            }
+          },
+          "required": [
+            "type",
+            "field",
+            "op",
+            "value"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "category_in": {
+              "items": {
+                "enum": [
+                  "beauty",
+                  "books",
+                  "electronics",
+                  "fashion",
+                  "grocery",
+                  "home",
+                  "sports",
+                  "toys"
+                ],
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "count": {
+              "type": "integer"
+            },
+            "event": {
+              "enum": [
+                "cart_add",
+                "purchase"
+              ],
+              "type": "string"
+            },
+            "op": {
+              "enum": [
+                "exists",
+                "not_exists",
+                "count_gte",
+                "count_lte"
+              ],
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "event"
+              ],
+              "type": "string"
+            },
+            "within_days": {
+              "type": "integer"
+            }
+          },
+          "required": [
+            "type",
+            "event",
+            "op",
+            "within_days"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "predicate": {
+              "enum": [
+                "abandoned_cart"
+              ],
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "behavior"
+              ],
+              "type": "string"
+            },
+            "within_days": {
+              "type": "integer"
+            }
+          },
+          "required": [
+            "type",
+            "predicate",
+            "within_days"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "group": {
+      "additionalProperties": false,
+      "properties": {
+        "conditions": {
+          "items": {
+            "$ref": "#/$defs/condition"
+          },
+          "type": "array"
+        },
+        "match": {
+          "enum": [
+            "all",
+            "any"
+          ],
+          "type": "string"
+        }
+      },
+      "required": [
+        "match",
+        "conditions"
+      ],
+      "type": "object"
+    },
+    "rule": {
+      "additionalProperties": false,
+      "properties": {
+        "conditions": {
+          "items": {
+            "$ref": "#/$defs/condition"
+          },
+          "type": "array"
+        },
+        "groups": {
+          "items": {
+            "$ref": "#/$defs/group"
+          },
+          "type": "array"
+        },
+        "match": {
+          "enum": [
+            "all",
+            "any"
+          ],
+          "type": "string"
+        }
+      },
+      "required": [
+        "match",
+        "conditions"
+      ],
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "assumptions": {
+      "description": "Interpretation choices you made where the brief was ambiguous.",
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "content_brief": {
+      "additionalProperties": false,
+      "properties": {
+        "goal": {
+          "description": "Short snake_case campaign goal, e.g. cart_recovery.",
+          "type": "string"
+        },
+        "length": {
+          "enum": [
+            "short",
+            "medium",
+            "long"
+          ],
+          "type": "string"
+        },
+        "offer": {
+          "anyOf": [
+            {
+              "additionalProperties": false,
+              "properties": {
+                "kind": {
+                  "enum": [
+                    "none",
+                    "free_shipping"
+                  ],
+                  "type": "string"
+                }
+              },
+              "required": [
+                "kind"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "kind": {
+                  "enum": [
+                    "percent_discount"
+                  ],
+                  "type": "string"
+                },
+                "value": {
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "kind",
+                "value"
+              ],
+              "type": "object"
+            }
+          ]
+        },
+        "tone": {
+          "description": "Tone of voice, e.g. friendly.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "goal",
+        "length",
+        "offer",
+        "tone"
+      ],
+      "type": "object"
+    },
+    "interpretation": {
+      "description": "One plain-language sentence describing the selected audience.",
+      "type": "string"
+    },
+    "segment": {
+      "$ref": "#/$defs/rule"
+    },
+    "suggested_channels": {
+      "items": {
+        "enum": [
+          "sms",
+          "email"
+        ],
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "unsupported": {
+      "description": "Requested criteria that cannot be expressed with the supported fields; never approximated in the rule.",
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    }
+  },
+  "required": [
+    "segment",
+    "interpretation",
+    "assumptions",
+    "unsupported",
+    "suggested_channels",
+    "content_brief"
+  ],
+  "type": "object"
+}

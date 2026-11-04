@@ -468,7 +468,7 @@ type Client interface {
 }
 // Request{Model, System, Messages, JSONSchema, MaxTokens, Effort}; Response{Text, StopReason, Usage, Model}
 ```
-Implementations: `anthropic` (real), `scripted` (tests: queued responses/errors, chunked streams, delays), `demo` (deterministic keyword-based results with simulated streaming; selected per §7.3; UI shows a "Mock AI" badge). `ai.Interpreter` and `ai.Generator` own prompts, schemas, decoding, validation and repair, so tests with `scripted` exercise all of it.
+Implementations: `anthropic` (real), `scripted` (tests: queued responses/errors, chunked streams, delays), `demo` (deterministic keyword-based results with simulated streaming; selected per §7.3; UI shows a "Mock AI" badge). The demo is a heuristic keyword matcher, not language understanding: it never emits a rule broader than the brief — when nothing is recognized, or a recognized targeting requirement cannot be expressed (unsupported concept, invalid or out-of-range value, category on an abandoned cart, only unsupported channels), it declines with field-level problems, surfaced as a non-retryable `invalid_brief` without a repair turn. Unsupported offers are content preferences and are reported in `unsupported`/`assumptions` without blocking the audience. `ai.Interpreter` and `ai.Generator` own prompts, schemas, decoding, validation and repair, so tests with `scripted` exercise all of it.
 
 ### 7.3 Configuration (model never hardcoded)
 ```

@@ -10,6 +10,7 @@ import (
 	"net"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // LLMProvider is the LLM implementation selected once at startup.
@@ -51,11 +52,38 @@ func (l LLM) FellBackToDemo() bool {
 	return l.Requested == LLMProviderAuto && l.Provider == LLMProviderDemo
 }
 
+// AITask is the model configuration of one AI use case (ARCHITECTURE §7.3).
+// Model names come only from here (invariant 17).
+type AITask struct {
+	Model     string
+	Effort    string
+	Timeout   time.Duration
+	MaxTokens int
+}
+
+// Defaults of the segment interpretation task (CLAUDE_SEGMENT_*).
+const (
+	defaultSegmentModel     = "claude-opus-5-5"
+	defaultSegmentEffort    = "low"
+	defaultSegmentTimeout   = 45 * time.Second
+	defaultSegmentMaxTokens = 4000
+)
+
+// Effort values accepted for CLAUDE_*_EFFORT.
+var allowedEfforts = []string{"low", "medium", "high", "max"}
+
+const (
+	maxAITimeout   = 10 * time.Minute
+	maxAIMaxTokens = 64000
+)
+
 // Config is the validated configuration of the api process.
 type Config struct {
 	DatabaseURL Secret // may contain credentials
 	HTTPAddr    string
 	LLM         LLM
+	// Segment configures brief interpretation (CLAUDE_SEGMENT_*).
+	Segment AITask
 }
 
 // Load reads configuration through getenv (os.Getenv in production) and
@@ -83,6 +111,13 @@ func Load(getenv func(string) string) (Config, error) {
 		errs = append(errs, err)
 	}
 	cfg.LLM = llm
+
+	seg, segErrs := loadAITask(get, "CLAUDE_SEGMENT", AITask{
+		Model: defaultSegmentModel, Effort: defaultSegmentEffort,
+		Timeout: defaultSegmentTimeout, MaxTokens: defaultSegmentMaxTokens,
+	})
+	errs = append(errs, segErrs...)
+	cfg.Segment = seg
 
 	if len(errs) > 0 {
 		return Config{}, fmt.Errorf("invalid configuration: %w", errors.Join(errs...))
@@ -115,6 +150,50 @@ func resolveLLM(requested, apiKey string) (LLM, error) {
 	default:
 		return LLM{}, fmt.Errorf("LLM_PROVIDER must be one of auto, anthropic, demo (got %q)", requested)
 	}
+}
+
+// loadAITask reads <prefix>_MODEL, _EFFORT, _TIMEOUT and _MAX_TOKENS.
+func loadAITask(get func(string) string, prefix string, def AITask) (AITask, []error) {
+	var errs []error
+	t := def
+	if v := get(prefix + "_MODEL"); v != "" {
+		t.Model = v
+	}
+	if strings.ContainsAny(t.Model, " \t\n") {
+		errs = append(errs, fmt.Errorf("%s_MODEL must not contain whitespace", prefix))
+	}
+	if v := get(prefix + "_EFFORT"); v != "" {
+		t.Effort = v
+	}
+	if !contains(allowedEfforts, t.Effort) {
+		errs = append(errs, fmt.Errorf("%s_EFFORT must be one of %s (got %q)", prefix, strings.Join(allowedEfforts, ", "), t.Effort))
+	}
+	if v := get(prefix + "_TIMEOUT"); v != "" {
+		d, err := time.ParseDuration(v)
+		if err != nil || d <= 0 || d > maxAITimeout {
+			errs = append(errs, fmt.Errorf("%s_TIMEOUT must be a duration in (0, %s] (got %q)", prefix, maxAITimeout, v))
+		} else {
+			t.Timeout = d
+		}
+	}
+	if v := get(prefix + "_MAX_TOKENS"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n < 1 || n > maxAIMaxTokens {
+			errs = append(errs, fmt.Errorf("%s_MAX_TOKENS must be an integer in [1, %d] (got %q)", prefix, maxAIMaxTokens, v))
+		} else {
+			t.MaxTokens = n
+		}
+	}
+	return t, errs
+}
+
+func contains(set []string, s string) bool {
+	for _, v := range set {
+		if v == s {
+			return true
+		}
+	}
+	return false
 }
 
 func validateListenAddr(addr string) error {
