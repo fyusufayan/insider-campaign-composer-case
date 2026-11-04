@@ -1,0 +1,977 @@
+ ▐▛███▛█   Claude Code v2.1.318
+▝▜██████▀  Opus 5.5 · Claude Pro
+ ▝▝   ▝▝   ~/Desktop/devel/leet/insider-case/insider-campaign-composer-case
+
+
+❯ We are continuing Smart Campaign Composer development.                        
+  CP1–CP5 are complete, reviewed, tested, and committed. Begin CP6 — Campaign   
+  API, Persistence, Interpretation and Audience Preview in Slice 1a.            
+  Follow CLAUDE.md and the finalized design documents.                          
+  Read the relevant sections of docs/ARCHITECTURE.md (campaign lifecycle, HTTP  
+  API contracts, data model, transactions, interpretation persistence and       
+  audience statistics), applicable ADRs, and the CP6 roadmap requirements.      
+  Reuse existing code rather than introducing alternative validation or query   
+  paths.                                                                        
+  Important: Treat the documented HTTP methods, paths, request/response shapes, 
+  version semantics and status transitions as authoritative. Do not invent      
+  competing contracts from the examples below.                                  
+  Objective                                                                     
+  Connect the already implemented components into a working, persistent backend 
+  workflow:                                                                     
+  HTTP request → Campaign service → PostgreSQL persistence → AI interpretation  
+  → Validated segment → Audience preview → HTTP response.                       
+  No frontend yet. No approvals, delivery queue, mock sending or live Anthropic 
+  integration.                                                                  
+  1. Campaign domain and repository                                             
+  Implement the minimum campaign domain model, repository and service required  
+  by the CP6 API.                                                               
+  Support the documented draft lifecycle and the relevant fields from the       
+  existing campaigns schema:                                                    
+                                                                                
+  * ID, name, brief, status and selected channels.                              
+  * Segment rule and segment_version.                                           
+  * Interpretation metadata and content_brief.                                  
+  * Optimistic-concurrency version.                                             
+  * Created/updated timestamps and other relevant read fields.                  
+                                                                                
+  Reuse the existing database pool and error conventions.                       
+  Keep SQL parameterized and avoid leaking DB internals into the HTTP API.      
+  Do not add migrations unless a real schema blocker is demonstrated.           
+  2. Campaign API                                                               
+  Implement the CP6 endpoints from the architecture, including the documented   
+  equivalents of:                                                               
+                                                                                
+  * Create a draft campaign.                                                    
+  * Get campaign details.                                                       
+  * Update editable draft fields.                                               
+  * Interpret the campaign brief.                                               
+  * Preview the matched audience and exclusive channel partitions.              
+                                                                                
+  Use the exact route names, verbs, input types and response envelopes defined  
+  in the documents.                                                             
+  Validate:                                                                     
+                                                                                
+  * Campaign names and brief lengths.                                           
+  * UUID route parameters.                                                      
+  * Channels and their canonical ordering.                                      
+  * Required and forbidden request properties.                                  
+  * JSON types, trailing data and unknown fields.                               
+  * Optimistic-concurrency expectations.                                        
+                                                                                
+  Reuse existing HTTP middleware for request IDs, error envelopes, recovery and 
+  logging.                                                                      
+  Ensure internal errors do not expose secrets, raw LLM output, database URLs   
+  or customer contact data.                                                     
+  3. Interpretation transaction boundaries                                      
+  A network LLM call must never run while holding a PostgreSQL transaction or   
+  row lock.                                                                     
+  Use a safe workflow:                                                          
+                                                                                
+  1. Read the campaign and capture the relevant versions/state.                 
+  2. Call the Interpreter outside any database transaction.                     
+  3. Validate the resulting interpretation and segment through the existing     
+  pipeline.                                                                     
+  4. Open a short transaction.                                                  
+  5. Recheck campaign state and relevant version(s).                            
+  6. Persist the interpretation, normalized segment and content brief           
+  atomically if still current.                                                  
+  7. Commit, otherwise return the documented version-conflict response.         
+                                                                                
+  If the user changes the brief or other interpretation-sensitive state while   
+  AI processing is in progress, stale AI output must not overwrite newer edits. 
+  On LLM failure, refusal, invalid output, cancellation or a failed repair,     
+  preserve the previously committed campaign state.                             
+  Apply the documented initial-channel decision:                                
+                                                                                
+  * On the first successful interpretation only, copy suggested_channels into   
+  channels if `segment_version == 0` and the persisted channels are still       
+  empty.                                                                        
+  * Subsequent interpretations must never overwrite explicit user channel       
+  selections.                                                                   
+  * A user must be able to intentionally select an empty channel list.          
+                                                                                
+  Be careful not to treat an empty list as permission to overwrite the user's   
+  explicit choice later.                                                        
+  4. Campaign and segment versions                                              
+  Implement the exact documented lifecycle and version rules.                   
+  At minimum:                                                                   
+                                                                                
+  * Campaign.version supports optimistic concurrency.                           
+  * Segment_version advances according to the architecture's rules when the     
+  stored normalized segment changes.                                            
+  * No accidental version bump on a read.                                       
+  * No lost updates under concurrent requests.                                  
+  * Repeated AI interpretations must not accidentally reset channels or other   
+  user decisions.                                                               
+  * Status transitions must be validated rather than accepting arbitrary        
+  client-provided status.                                                       
+                                                                                
+  Where the documents distinguish campaign version from segment version,        
+  preserve that distinction.                                                    
+  5. Audience preview                                                           
+  Use the existing `segment.AudienceRepository` and compiled validated rules.   
+  Do not write another SQL compiler or a second implementation of consent and   
+  contact checks.                                                               
+  Return:                                                                       
+                                                                                
+  * Matched user count.                                                         
+  * Per-selected-channel eligible, no_consent and no_contact counts.            
+  * Reach partition.                                                            
+  * Total eligible messages.                                                    
+  * The documented computed-at timestamp and metadata.                          
+                                                                                
+  Preview must be read-only.                                                    
+  Handle:                                                                       
+                                                                                
+  * Campaign with no validated segment.                                         
+  * Empty selected channels.                                                    
+  * Rules with no matches.                                                      
+  * Invalid channels.                                                           
+  * Cancelled or timed-out queries.                                             
+                                                                                
+  A preview is informational and must not create delivery rows or imply that an 
+  audience has been approved or frozen.                                         
+  6. Tests                                                                      
+  Docker-independent unit and HTTP tests                                        
+  Use mocks/fakes for service dependencies and Scripted LLM where appropriate.  
+  Test:                                                                         
+                                                                                
+  * Create, get and update request validation.                                  
+  * Unknown JSON properties and wrong types.                                    
+  * Invalid UUIDs and missing campaigns.                                        
+  * Version conflict mapping.                                                   
+  * Invalid campaign state transitions.                                         
+  * First-interpretation channel defaulting.                                    
+  * User-supplied empty channels and subsequent interpretation.                 
+  * Failed interpretation preserves existing data.                              
+  * Repair success through the API.                                             
+  * Refusal, truncation, unsupported demo targeting and provider failure        
+  mapping.                                                                      
+  * Response envelopes, request IDs and safe error messages.                    
+                                                                                
+  PostgreSQL integration tests                                                  
+  Use the existing Testcontainers infrastructure and integration build tag.     
+  Test the real HTTP → service → database path where practical.                 
+  Include:                                                                      
+                                                                                
+  * Successful create → interpret → preview → get.                              
+  * Persisted normalized segment survives database readback.                    
+  * Segment and campaign version behavior.                                      
+  * Two concurrent updates with the same expected version: exactly one          
+  succeeds.                                                                     
+  * A brief update racing a long-running scripted interpretation: stale AI      
+  output is rejected, not persisted.                                            
+  * No database transaction remains open while the scripted LLM is blocked.     
+  * No contact or consent values appear in API responses.                       
+  * Empty channels produce zero eligible messages while preserving matched      
+  users.                                                                        
+  * Invalid/failed interpretation leaves the previous committed state intact.   
+  * Audience preview counts agree with the existing independently tested        
+  segment repository.                                                           
+                                                                                
+  Avoid sleeps for concurrency ordering. Use explicit synchronization signals,  
+  transaction/lock observations and bounded deadlines.                          
+  7. Wiring and configuration                                                   
+  Wire the services and handlers into `cmd/api` using the existing              
+  configuration and provider-selection rules.                                   
+                                                                                
+  * No key → demo mode works.                                                   
+  * Anthropic mode without the real client remains explicitly unsupported at    
+  this stage.                                                                   
+  * Do not silently fall back to demo after a provider error.                   
+  * No new infrastructure or API credentials are needed for this checkpoint.    
+                                                                                
+  Expose only the endpoints already authorized by CP6.                          
+  8. Scope boundaries                                                           
+  Do not implement:                                                             
+                                                                                
+  * CP7 Vue frontend.                                                           
+  * CP8 Docker Compose orchestration.                                           
+  * Content generation or streaming.                                            
+  * Approval prepare/confirm/send.                                              
+  * Delivery worker, retries, rate limiting or mock provider.                   
+  * Real Anthropic API calls.                                                   
+  * Any paid API request.                                                       
+                                                                                
+  Keep the design modular, straightforward and focused on the current vertical  
+  slice.                                                                        
+  9. Verification                                                               
+  Run:                                                                          
+                                                                                
+  * `make test`                                                                 
+  * `go test -race ./...`                                                       
+  * `make test-integration`                                                     
+  * `make lint`                                                                 
+                                                                                
+  If staticcheck download fails with the existing TLS certificate issue,        
+  clearly distinguish that infrastructure failure from actual static analysis   
+  findings. You may use the already cached pinned version without weakening     
+  security checks for dependency downloads.                                     
+  10. Completion report                                                         
+  Report:                                                                       
+                                                                                
+  1. Files created or modified.                                                 
+  2. Exact HTTP endpoint contracts.                                             
+  3. Campaign service/repository public APIs.                                   
+  4. Transaction and optimistic-concurrency design.                             
+  5. First-interpretation and user-selected-channel behavior.                   
+  6. HTTP and PostgreSQL integration tests with results.                        
+  7. A concrete successful demo workflow, with request/response examples.       
+  8. Remaining limitations or architectural deviations.                         
+                                                                                
+  Do not commit anything.                                                       
+  Stop after CP6 and wait for review. Do not begin CP7.                         
+
+  Read 1 file, ran 1 shell command (ctrl+o to expand)
+
+⏺ Reading the CP6 context in previous sessions and ADRs before designing the
+  campaign layer.
+
+  Listed 1 directory, ran 2 shell commands (ctrl+o to expand)
+
+⏺ Design context gathered. Now reading the existing Go code I'll be wiring
+  together.
+
+  Searched for 1 pattern, read 1 file, ran 2 shell commands (ctrl+o to expand)
+
+⏺ Now the integration test support, existing tests, config and migration.
+
+  Listed 1 directory, ran 6 shell commands (ctrl+o to expand)
+
+⏺ Now writing the campaign package: domain model and pure state-transition rules
+  first.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ Write(backend/internal/campaign/campaign.go)
+  ⎿  Wrote 427 lines to backend/internal/campaign/campaign.go
+       1 // Package campaign owns the campaign aggregate: its fields, the
+          campaign state
+       2 // machine (ARCHITECTURE §5.2), the repository and the service t
+         hat the HTTP
+       3 // layer calls. It never talks to the LLM directly (only through
+       4 // ai.Interpreter) and never to the delivery provider.
+       5 package campaign
+       6 
+       7 import (
+       8   "bytes"
+     … +419 lines (ctrl+o to expand)
+
+⏺ Now the PostgreSQL repository.
+
+⏺ Write(backend/internal/campaign/repository.go)
+  ⎿  Wrote 221 lines to backend/internal/campaign/repository.go
+      1 package campaign
+      2 
+      3 import (
+      4   "bytes"
+      5   "context"
+      6   "encoding/json"
+      7   "errors"
+      8   "fmt"
+      9   "time"
+     … +212 lines (ctrl+o to expand)
+
+⏺ Now the service, which orchestrates read → LLM (no transaction) → locked
+  recheck-and-write → audience.
+
+⏺ Write(backend/internal/campaign/service.go)
+  ⎿  Wrote 222 lines to backend/internal/campaign/service.go
+       1 package campaign
+       2 
+       3 import (
+       4   "context"
+       5   "errors"
+       6   "fmt"
+       7   "log/slog"
+       8   "time"
+       9 
+      10   "github.com/jackc/pgx/v5/pgconn"
+     … +212 lines (ctrl+o to expand)
+
+⏺ Now the in-memory store used only by Docker-free tests.
+
+⏺ Write(backend/internal/campaign/campaigntest/memstore.go)
+  ⎿  Wrote 167 lines to backend/internal/campaign/campaigntest/memstore.go
+       1 // Package campaigntest provides test doubles for the campaign s
+         ervice so that
+       2 // the service and the HTTP layer can be unit-tested without Pos
+         tgreSQL. The
+       3 // PostgreSQL repository itself is covered by the integration te
+         sts. Only test
+       4 // code imports this package.
+       5 package campaigntest
+       6 
+       7 import (
+     … +160 lines (ctrl+o to expand)
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ Campaign layer compiles. Now the HTTP layer: strict body decoding, DTOs,
+  handlers, error mapping and readiness.
+
+⏺ Write(backend/internal/httpapi/decode.go)
+  ⎿  Wrote 274 lines to backend/internal/httpapi/decode.go
+       1 package httpapi
+       2 
+       3 import (
+       4   "bytes"
+       5   "encoding/json"
+       6   "errors"
+       7   "io"
+       8   "mime"
+       9   "net/http"
+      10   "slices"
+     … +264 lines (ctrl+o to expand)
+
+⏺ Update(backend/internal/httpapi/decode.go)
+  ⎿  Added 6 lines, removed 6 lines
+      231    if !ok {
+      232      return 0, false
+      233    }
+      234 +  // A JSON integer literal only: no fraction, exponent, strin
+          +g or bool.                                                    
+      235    n, err := strconv.ParseInt(string(bytes.TrimSpace(v)), 10, 6
+           4)
+      236 +  if errors.Is(err, strconv.ErrRange) {                       
+      237 +    b.add(key, fieldOutOfRange, "must be a positive integer") 
+      238 +    return 0, false                                           
+      239 +  }                                                           
+      240    if err != nil {
+      236 -    var f float64                                             
+      237 -    if json.Unmarshal(v, &f) == nil {                         
+      238 -      b.add(key, fieldWrongType, "must be an integer")        
+      239 -    } else {                                                  
+      240 -      b.add(key, fieldWrongType, "must be an integer")        
+      241 -    }                                                         
+      241 +    b.add(key, fieldWrongType, "must be an integer")          
+      242      return 0, false
+      243    }
+      244    if n < 1 || n > 1<<31-1 {
+
+⏺ Bash(python3 - <<'EOF'
+      import re…)
+  ⎿  internal/httpapi/errors.go
+  ⎿  Updated backend/internal/httpapi/errors.go (+23 -5)
+       8  // Error codes of the API error envelope (ARCHITECTURE §11). Co
+          des for later
+       9  // slices are added together with the code paths that return th
+          em.
+      10  const (
+      11 -        CodeValidationFailed = "validation_failed"             
+      12 -        CodeNotFound         = "not_found"                     
+      13 -        CodeMethodNotAllowed = "method_not_allowed"            
+      14 -        CodeInternal         = "internal"                      
+      11 +        CodeValidationFailed     = "validation_failed"         
+      12 +        CodeNotFound             = "not_found"                 
+      13 +        CodeMethodNotAllowed     = "method_not_allowed"        
+      14 +        CodeInternal             = "internal"                  
+      15 +        CodeUnsupportedMediaType = "unsupported_media_type"    
+      16 +        CodeInvalidState         = "invalid_state"             
+      17 +        CodeVersionConflict      = "version_conflict"          
+      18 +        CodeAudienceUnavailable  = "audience_unavailable"      
+      19 +        CodeRequestCancelled     = "request_cancelled"         
+      20 +        // AI codes; identical to ai.Code* (asserted by a test)
+         +.                                                              
+      21 +        CodeAIOutputInvalid = "ai_output_invalid"              
+      22 +        CodeLLMUnavailable  = "llm_unavailable"                
+      23 +        CodeLLMRejected     = "llm_rejected"                   
+      24 +        CodeLLMRefused      = "llm_refused"                    
+      25 +        CodeLLMTruncated    = "llm_truncated"                  
+      26 +        CodeInvalidBrief    = "invalid_brief"                  
+      27  )
+      28  
+      29  // FieldError is one entry of an error's details: a problem at 
+          a JSON path.
+     ...
+      41          Message   string
+      42          Details   []FieldError
+      43          Retryable bool
+      44 +        // RawProposal is the rejected model output of ai_outpu
+         +t_invalid                                                      
+      45 +        // (ARCHITECTURE §7.5). Untrusted text: clients display
+         + it escaped.                                                   
+      46 +        RawProposal string                                     
+      47  }
+      48  
+      49  func (e *APIError) Error() string { return e.Code + ": " + e.Me
+          ssage }
+     ...
+      57          Message   string       `json:"message"`
+      58          Details   []FieldError `json:"details"`
+      59          Retryable bool         `json:"retryable"`
+      60 +        // RawProposal is set only for ai_output_invalid.      
+      61 +        RawProposal string `json:"raw_proposal,omitempty"`     
+     … 12 more lines (ctrl+o to expand)
+
+⏺ Now DTOs, handlers and error mapping.
+
+⏺ Write(backend/internal/httpapi/dto.go)
+  ⎿  Wrote 89 lines to backend/internal/httpapi/dto.go
+       1 package httpapi
+       2 
+       3 import (
+       4   "encoding/json"
+       5   "time"
+       6 
+       7   "github.com/fyusufayan/insider-campaign-composer-case/backend/
+         internal/ai"
+       8   "github.com/fyusufayan/insider-campaign-composer-case/backend/
+         internal/campaign"
+     … +81 lines (ctrl+o to expand)
+⏺ Write(backend/internal/httpapi/campaigns.go)
+  ⎿  Wrote 259 lines to backend/internal/httpapi/campaigns.go
+       1 package httpapi
+       2 
+       3 import (
+       4   "context"
+       5   "errors"
+       6   "log/slog"
+       7   "net/http"
+       8 
+       9   "github.com/fyusufayan/insider-campaign-composer-case/backend/
+         internal/ai"
+     … +250 lines (ctrl+o to expand)
+
+⏺ Bash(python3 - <<'EOF'
+      p='internal/httpapi/campaigns.go'…)
+  ⎿  Updated backend/internal/httpapi/campaigns.go (+8 -3)
+       5          "errors"
+       6          "log/slog"
+       7          "net/http"
+       8 +        "strconv"                                              
+       9  
+      10          "github.com/fyusufayan/insider-campaign-composer-case/b
+          ackend/internal/ai"
+      11          "github.com/fyusufayan/insider-campaign-composer-case/b
+          ackend/internal/campaign"
+     ...
+      138          for i, n := range names {
+      139                  ch := segment.Channel(n)
+      140                  if ch != segment.ChannelSMS && ch != segment.C
+           hannelEmail {
+      140 -                        b.add("channels["+itoa(i)+"]", fieldNo
+          -tAllowed, "unknown channel", allowed...)                      
+      141 +                        b.add("channels["+strconv.Itoa(i)+"]",
+          + fieldNotAllowed, "unknown channel", allowed...)              
+      142                          continue
+      143                  }
+      144                  chs = append(chs, ch)
+     ...
+      185  // raw provider errors or customer data.
+      186  func (h *campaignHandlers) toAPIError(r *http.Request, err err
+           or) *APIError {
+      187          ctx := r.Context()
+      188 +        logAttrs := []any{"err", err}                         
+      189 +        if id, perr := campaign.ParseID(r.PathValue("id")); pe
+          +rr == nil {                                                   
+      190 +                logAttrs = append(logAttrs, "campaign_id", id.
+          +String())                                                     
+      191 +        }                                                     
+      192          if e, ok := ai.AsError(err); ok {
+      193                  return aiAPIError(e)
+      194          }
+     ...
+      210                  return &APIError{Status: http.StatusConflict, 
+           Code: CodeInvalidState,
+      211                          Message: string(stateErr.Op) + " is no
+           t allowed while the campaign is " + string(stateErr.Status) + 
+           ": " + stateErr.Reason}
+      212          case errors.Is(err, campaign.ErrAudienceUnavailable):
+      208 -                h.log.WarnContext(ctx, "audience statistics un
+          -available", "err", err)                                       
+      213 +                h.log.WarnContext(ctx, "audience statistics un
+          +available", logAttrs...)                                      
+      214                  return &APIError{Status: http.StatusServiceUna
+           vailable, Code: CodeAudienceUnavailable,
+      215                          Message: "audience statistics are temp
+           orarily unavailable; try again", Retryable: true}
+      216          case errors.Is(err, context.Canceled) && ctx.Err() != 
+           nil:
+      217                  h.log.InfoContext(ctx, "request cancelled by t
+           he client")
+      218                  return &APIError{Status: statusClientClosedReq
+           uest, Code: CodeRequestCancelled, Message: "request cancelled"
+           }
+      219          default:
+      215 -                h.log.ErrorContext(ctx, "request failed", "err
+          -", err)                                                       
+      220 +                h.log.ErrorContext(ctx, "request failed", logA
+          +ttrs...)                                                      
+      221                  return &APIError{Status: http.StatusInternalSe
+           rverError, Code: CodeInternal, Message: "internal server error
+           "}
+      222          }
+     … 1 more lines (ctrl+o to expand)
+
+⏺ Now readiness in platform/db and the router changes.
+
+⏺ Write(backend/internal/platform/db/ready.go)
+  ⎿  Wrote 43 lines to backend/internal/platform/db/ready.go
+       1 package db
+       2 
+       3 import (
+       4   "context"
+       5   "errors"
+       6   "fmt"
+       7 
+       8   "github.com/jackc/pgx/v5"
+       9   "github.com/jackc/pgx/v5/pgxpool"
+      10 )
+     … +33 lines (ctrl+o to expand)
+
+⏺ Write(backend/internal/httpapi/health.go)
+  ⎿  Wrote 47 lines to backend/internal/httpapi/health.go
+       1 package httpapi
+       2 
+       3 import (
+       4   "context"
+       5   "log/slog"
+       6   "net/http"
+       7   "time"
+       8 )
+       9 
+      10 // readinessTimeout bounds the readiness probe's database checks
+     … +38 lines (~1 KB) (ctrl+o to expand)
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ That's just gofmt. Now wiring cmd/api/main.go.
+
+⏺ Bash(python3 - <<'EOF'
+      p='cmd/api/main.go'…)
+  ⎿  ?
+     github.com/fyusufayan/insider-campaign-composer-case/backend/cmd/a
+     pi      [no test files]
+     ok
+     github.com/fyusufayan/insider-campaign-composer-case/backend/cmd/s
+     … +15 lines (ctrl+o to expand)
+  ⎿  Updated backend/cmd/api/main.go (+18 -2)
+      12          "time"
+      13  
+      14          "github.com/fyusufayan/insider-campaign-composer-case/b
+          ackend/internal/ai"
+      15 +        "github.com/fyusufayan/insider-campaign-composer-case/b
+         +ackend/internal/campaign"                                      
+      16          "github.com/fyusufayan/insider-campaign-composer-case/b
+          ackend/internal/httpapi"
+      17          "github.com/fyusufayan/insider-campaign-composer-case/b
+          ackend/internal/llm"
+      18          "github.com/fyusufayan/insider-campaign-composer-case/b
+          ackend/internal/platform/config"
+      19          "github.com/fyusufayan/insider-campaign-composer-case/b
+          ackend/internal/platform/db"
+      20          "github.com/fyusufayan/insider-campaign-composer-case/b
+          ackend/internal/platform/logging"
+      21 +        "github.com/fyusufayan/insider-campaign-composer-case/b
+         +ackend/internal/segment"                                       
+      22  )
+      23  
+      24  const (
+     ...
+      60          if err != nil {
+      61                  return err
+      62          }
+      61 -        _ = interpreter // used by the campaign service (CP6)  
+      63          log.Info("configuration loaded", "http_addr", cfg.HTTPA
+          ddr, "llm_provider", cfg.LLM.Provider,
+      64                  "segment_model", cfg.Segment.Model, "segment_pr
+          ompt_version", ai.SegmentPromptVersion)
+      65  
+     ...
+      72          }
+      73          defer pool.Close()
+      74  
+      75 +        campaigns, err := campaign.NewService(campaign.NewRepos
+         +itory(pool), segment.NewAudienceRepository(pool), interpreter, 
+         +log)                                                           
+      76 +        if err != nil {                                        
+      77 +                return err                                     
+      78 +        }                                                      
+      79 +        provider := string(cfg.LLM.Provider)                   
+      80 +        readiness := func(ctx context.Context) (httpapi.Readine
+         +ssReport, error) {                                             
+      81 +                report := httpapi.ReadinessReport{Database: "ok
+         +", LLMProvider: provider}                                      
+      82 +                st, err := db.Readiness(ctx, pool)             
+      83 +                report.MigrationVersion, report.MigrationDirty 
+         += st.Version, st.Dirty                                         
+      84 +                if err != nil {                                
+      85 +                        report.Database = "unavailable"        
+      86 +                }                                              
+      87 +                return report, err                             
+      88 +        }                                                      
+      89 +                                                               
+      90          srv := &http.Server{
+      91                  Addr:              cfg.HTTPAddr,
+     … 5 more lines (ctrl+o to expand)
+
+⏺ All wired and existing tests pass. Next: unit tests — pure state machine
+  first.
+
+⏺ Write(backend/internal/campaign/campaign_test.go)
+  ⎿  Wrote 321 lines to backend/internal/campaign/campaign_test.go
+       1 package campaign
+       2 
+       3 import (
+       4   "encoding/json"
+       5   "errors"
+       6   "slices"
+       7   "strings"
+       8   "testing"
+       9 
+      10   "github.com/fyusufayan/insider-campaign-composer-case/backend/
+     … +312 lines (~12 KB) (ctrl+o to expand)
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ Pure state-machine tests pass. Now service tests (in-memory store + scripted
+  LLM).
+
+⏺ Write(backend/internal/campaign/service_test.go)
+  ⎿  Wrote 304 lines to backend/internal/campaign/service_test.go
+       1 package campaign_test
+       2 
+       3 import (
+       4   "bytes"
+       5   "context"
+       6   "errors"
+       7   "log/slog"
+       8   "reflect"
+       9   "slices"
+      10   "strings"
+     … +294 lines (ctrl+o to expand)
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ Service tests pass under -race. Now the HTTP-level unit tests.
+
+⏺ Write(backend/internal/httpapi/campaigns_test.go)
+  ⎿  Wrote 582 lines to backend/internal/httpapi/campaigns_test.go
+       1 package httpapi
+       2 
+       3 import (
+       4   "bytes"
+       5   "context"
+       6   "encoding/json"
+       7   "errors"
+       8   "net/http"
+       9   "net/http/httptest"
+      10   "strconv"
+     … +572 lines (ctrl+o to expand)
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ Only an expectation detail (the malformed-JSON error carries the property
+  path, which is fine). Adjusting the test.
+
+⏺ Bash(sed -i '' 's|{"malformed", `{"name":`, 422,
+      \[\]string{":malformed_json"}}|{"malformed", `{"name":`, 422,
+      []string{"name:malformed_json"}}|' internal/httpapi/ca…)
+  ⎿  ok
+     github.com/fyusufayan/insider-campaign-composer-case/backend/inter
+     nal/ai  1.341s
+     ok
+     github.com/fyusufayan/insider-campaign-composer-case/backend/inter
+     … +15 lines (ctrl+o to expand)
+  ⎿  Updated backend/internal/httpapi/campaigns_test.go (+1 -1)
+      217                  {"channels not accepted at create", `{"name":"
+           n",` + okBrief + `,"channels":["sms"]}`, 422, []string{"channe
+           ls:unknown_property"}},
+      218                  {"duplicate key", `{"name":"n","name":"m",` + 
+           okBrief + `}`, 422, []string{"name:duplicate_property"}},
+      219                  {"trailing data", `{"name":"n",` + okBrief + `
+           } {}`, 422, []string{":trailing_data"}},
+      220 -                {"malformed", `{"name":`, 422, []string{":malf
+          -ormed_json"}},                                                
+      220 +                {"malformed", `{"name":`, 422, []string{"name:
+          +malformed_json"}},                                            
+      221                  {"not an object", `["name"]`, 422, []string{":
+           wrong_type"}},
+      222                  {"empty body", ``, 422, []string{":required"}}
+           ,
+      223                  {"brief too short", `{"name":"n","brief":"shor
+           t"}`, 422, []string{"brief:too_short"}},
+
+⏺ All unit tests pass under -race. Now the PostgreSQL integration tests (real
+  HTTP server → service → repository → database).
+
+⏺ Write(backend/test/integration/api_test.go)
+  ⎿  Wrote 637 lines to backend/test/integration/api_test.go
+       1 //go:build integration
+       2 
+       3 package integration
+       4 
+       5 import (
+       6   "context"
+       7   "encoding/json"
+       8   "io"
+       9   "log/slog"
+      10   "net/http"
+     … +627 lines (ctrl+o to expand)
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ Bash(sed -i '' '/backend\/test\/integration\/testsupport"$/d'
+      test/integration/api_test.go && go vet -tags=integration ./... && docker
+      info >/dev/null 2>&1 && echo d…)
+  ⎿  docker-ok
+  ⎿  Updated backend/test/integration/api_test.go (+0 -1)
+      25          "github.com/fyusufayan/insider-campaign-composer-case/b
+          ackend/internal/llm"
+      26          "github.com/fyusufayan/insider-campaign-composer-case/b
+          ackend/internal/platform/logging"
+      27          "github.com/fyusufayan/insider-campaign-composer-case/b
+          ackend/internal/segment"
+      28 -        "github.com/fyusufayan/insider-campaign-composer-case/b
+         -ackend/test/integration/testsupport"                           
+      28  )
+      29  
+      30  // ---- API integration tests: real HTTP server → campaign serv
+          ice →
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ All 5 API integration tests pass on the first run. Adding a quick readiness
+  integration test, then the full verification suite.
+⏺ Bash(cat >> test/integration/api_test.go <<'EOF'…)
+  ⎿  Updated backend/test/integration/api_test.go (+15 -0)
+      23          "github.com/fyusufayan/insider-campaign-composer-case/b
+          ackend/internal/campaign"
+      24          "github.com/fyusufayan/insider-campaign-composer-case/b
+          ackend/internal/httpapi"
+      25          "github.com/fyusufayan/insider-campaign-composer-case/b
+          ackend/internal/llm"
+      26 +        "github.com/fyusufayan/insider-campaign-composer-case/b
+         +ackend/internal/platform/db"                                   
+      27          "github.com/fyusufayan/insider-campaign-composer-case/b
+          ackend/internal/platform/logging"
+      28          "github.com/fyusufayan/insider-campaign-composer-case/b
+          ackend/internal/segment"
+      29 +        "github.com/fyusufayan/insider-campaign-composer-case/b
+         +ackend/test/integration/testsupport"                           
+      30  )
+      31  
+      32  // ---- API integration tests: real HTTP server → campaign serv
+          ice →
+     ...
+      636          }
+      637          return v
+      638  }
+      639 +                                                              
+      640 +func TestReadinessReportsMigrationState(t *testing.T) {       
+      641 +        ctx := context.Background()                           
+      642 +        migrated := testsupport.Pool(t, pg.NewMigratedDatabase
+          +(t))                                                          
+      643 +        st, err := db.Readiness(ctx, migrated)                
+      644 +        if err != nil || st.Version == 0 || st.Dirty {        
+      645 +                t.Errorf("migrated: state %+v, err %v", st, er
+          +r)                                                            
+      646 +        }                                                     
+      647 +        empty := testsupport.Pool(t, pg.NewDatabase(t))       
+      648 +        if _, err := db.Readiness(ctx, empty); err == nil {   
+      649 +                t.Error("an unmigrated database reported ready
+          +")                                                            
+      650 +        }                                                     
+      651 +}                                                             
+
+  Ran 3 shell commands (ctrl+o to expand)
+
+⏺ gofmt and vet pass; staticcheck hit the same proxy TLS error as before.
+  Running the pinned v0.8.2 from the local module cache (offline, no security
+  checks relaxed):
+
+  Ran 2 shell commands (ctrl+o to expand)
+
+⏺ Lint is clean across both build tag configurations. I'm now running the real
+  cmd/api binary against a throwaway Postgres with seeded data to check the
+  main.go wiring and capture live request and response examples.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ Needs migration first; trying the Makefile target.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ Same proxy TLS problem for the migrate CLI; building it from the module cache
+  like staticcheck.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ Migrated and seeded (5,000 users). Starting the real API binary in demo mode
+  (no key):
+
+  Ran 2 shell commands (ctrl+o to expand)
+
+⏺ The live run matches the independent psql count (184 matched, 104 SMS
+  eligible, 108 email eligible). I'm checking the server log for leaked brief
+  text, then tearing down the throwaway server and container.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ CP6 is done. The full path HTTP → campaign service → PostgreSQL → interpreter
+  → validated segment → audience preview now runs on the real cmd/api binary in
+  demo mode. All four verification commands pass, and a live run against the
+  5,000 seeded users matched an independent psql count (184 matched, 104 SMS
+  eligible, 108 email eligible). Nothing is committed, and I stopped before CP7.
+
+  1. Files
+
+  New
+  - internal/campaign/: campaign.go (aggregate and state machine),
+    repository.go, service.go, plus tests
+  - internal/campaign/campaigntest/memstore.go: in-memory store and audience
+    double, used only by Docker-free tests
+  - internal/httpapi/: decode.go (strict JSON bodies), dto.go, campaigns.go,
+    health.go, campaigns_test.go
+  - internal/platform/db/ready.go
+  - test/integration/api_test.go
+
+  Modified: cmd/api/main.go (wiring), httpapi/router.go (now takes Deps),
+  httpapi/errors.go (new codes and raw_proposal), httpapi_test.go.
+
+  No migrations were added; the existing schema was enough.
+
+  2. Endpoint contracts (base /api/v1)
+
+  Request: POST /campaigns {name, brief}
+  Success: 201 campaign + Location
+  Errors: 422, 415
+  ────────────────────────────────────────
+  Request: GET /campaigns/{id}
+  Success: 200 campaign
+  Errors: 422 bad UUID, 404
+  ────────────────────────────────────────
+  Request: POST /campaigns/{id}/interpret (empty body or {})
+  Success: 200 {campaign, audience, audience_error?}
+  Errors: 404, 409 invalid_state/version_conflict, AI errors below
+  ────────────────────────────────────────
+  Request: GET /campaigns/{id}/audience
+  Success: 200 {campaign_id, campaign_version, segment_version, channels, 
+    audience}
+  Errors: 409 in draft, 503 audience_unavailable
+  ────────────────────────────────────────
+  Request: PUT /campaigns/{id}/channels {channels, expected_version}
+  Success: 200 campaign
+  Errors: 422, 409
+  ────────────────────────────────────────
+  Request: GET /readyz
+  Success: 200 with database, migration version and llm_provider
+  Errors: 503 not_ready
+
+  - Campaign shape: id, name, brief, status, channels, segment_rule|null, 
+    segment_version, interpretation|null, content_brief|null, version, 
+    created_at, updated_at.
+  - AI error mapping:
+    - llm_unavailable: 503, retryable
+    - llm_refused: 422
+    - llm_truncated: 502
+    - llm_rejected: 502
+    - ai_output_invalid: 422, with details and raw_proposal, as §7.5 requires
+    - invalid_brief: 422
+  - Unknown errors return a fixed 500 internal server error. The cause goes only
+    to the masked log.
+
+  3. Public APIs
+
+  - Service: Create, Get, SetChannels(id, channels, expectedVersion),
+    Interpret(id) → InterpretResult, Audience(id) → AudiencePreview.
+  - Repository: Create, Get, Update(id, Mutation). Update locks the row, applies
+    a pure mutation, writes the result guarded by version, and commits.
+  - Pure transitions: WithInterpretation(observedVersion, in),
+    WithChannels(expectedVersion, chs), and
+    Check{Interpret,SetChannels,Audience}.
+
+  4. Transactions and concurrency
+
+  1. Interpret reads the campaign without a lock and remembers its version.
+  2. The model is called with no transaction open.
+  3. One short transaction (5 s lock and statement timeouts) locks the row with
+     FOR UPDATE and rechecks status and version. If anything changed while the
+     model was working, it returns 409 version_conflict and the AI output is
+     discarded.
+  4. The audience is then computed from the committed row, in the existing
+     read-only AudienceRepository transaction.
+
+  Version rules:
+  - version goes up by 1 on every write. Reads never change it, and a no-op
+    channel update doesn't either.
+  - segment_version goes up only when the stored normalized rule actually
+    changes. A respelled but identical rule does not bump it.
+
+  5. Channels
+
+  - Channels are copied from suggested_channels only when segment_version == 0
+    and the channel list is empty, which means the first interpretation only.
+  - Draft campaigns can't call PUT /channels. So once a user can choose
+    channels, segment_version is already ≥ 1, and an explicit [] is never
+    overwritten. Tests cover this.
+  - Input is de-duplicated and stored in canonical order (sms, email).
+
+  6. Tests and results
+
+  - Unit (no Docker): ID parsing, name/brief limits, the status × operation
+    table, channel defaulting, segment-version rules, stale results.
+  - Service (in-memory store, scripted LLM): every failure kind leaves state
+    unchanged, repair works, a stale result is discarded, cancellation, audience
+    timeout, and 8 concurrent writers with exactly one winner.
+  - HTTP: about 40 cases covering malformed bodies, unknown properties, wrong
+    types, invalid UUIDs, 404/409/422 mapping, request IDs on every response,
+    and no secrets or contact data in responses or logs.
+  - Integration (PostgreSQL):
+    - The demo flow with hand-computed fixture counts, which also equal the
+      segment repository's own result.
+    - Normalized rule readback, version behaviour, empty channels (5 matched, 0
+      messages), and concurrent PUTs where exactly one wins.
+    - Race test: while the scripted LLM is blocked, pg_stat_activity shows no
+      open transaction and pg_locks shows no lock on campaigns. A channel edit
+      commits during that time, and the interpretation then returns 409 without
+      persisting anything.
+    - A query tracer shows that failed interpretations never touch users,
+      channel_consents, cart_events or purchases, and the stored row stays
+      byte-identical.
+  - Commands:
+    - make test: pass
+    - go test -race ./...: pass
+    - make test-integration: pass
+    - make lint: gofmt and vet pass. The staticcheck download failed with the
+      same proxy TLS certificate error as before, which is a network problem,
+      not a finding. I built the pinned 0.8.2 from the module cache and ran it:
+      0 findings, with and without the integration tag.
+
+  7. Demo
+
+  The full curl session ran against the real binary.
+  - Create: returns version 1, channels [], segment_rule null.
+  - Interpret: returns status segmented, version 2, segment_version 1, channels
+    [sms, email], and the rule istanbul + abandoned_cart(30). Audience: 184
+    matched; SMS 104/65/15 and email 108/68/8 (eligible/no consent/no contact);
+    reach 59 both, 45 SMS only, 49 email only, 31 unreachable; 212 messages.
+  - Channels: a stale PUT returns 409. PUT [] returns version 3. The audience
+    then shows 184 matched, 0 messages, 184 unreachable.
+  - Demo decline: the "VIP" brief returns 422 invalid_brief with a field-level
+    reason.
+  - The log contained no brief text.
+
+  8. Deviations and limitations
+
+  - No brief or name edit endpoint. The documents define none, so I didn't
+    invent one. The brief race is tested with the only documented edit, PUT 
+    /channels. The version check would cover a future brief edit the same way.
+  - Interpret and channel edits are refused in pending_approval/approved. §5.2
+    allows them, but that requires revoking the approval, which doesn't exist
+    until Slice 3. This state can't be reached in CP6.
+  - API details the documents don't specify:
+    - an invalid UUID returns 422, not 404;
+    - new codes: audience_unavailable (503), request_cancelled (499),
+      unsupported_media_type (415);
+    - the interpret response includes audience_error when the audience query
+      fails after the interpretation was committed;
+    - GET /campaigns (list) isn't implemented;
+    - the detail view omits content, approval and delivery sections, which don't
+      exist yet.
+  - Store interface. I added it as a test double so the service and HTTP tests
+    run without Docker. The repository itself stays concrete and is tested
+    against PostgreSQL.
+  - Docs. docs/ARCHITECTURE.md hasn't been updated with these clarifications
+    yet.

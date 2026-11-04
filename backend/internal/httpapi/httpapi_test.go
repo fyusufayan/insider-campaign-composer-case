@@ -99,7 +99,7 @@ func TestWriteErrorDetailsNeverNull(t *testing.T) {
 func TestHealthz(t *testing.T) {
 	log, _ := newTestLogger()
 	rr := httptest.NewRecorder()
-	NewRouter(log).ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/healthz", nil))
+	NewRouter(log, Deps{}).ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/healthz", nil))
 	if rr.Code != http.StatusOK {
 		t.Fatalf("status = %d", rr.Code)
 	}
@@ -110,7 +110,7 @@ func TestHealthz(t *testing.T) {
 
 func TestUnmatchedRoutesUseEnvelope(t *testing.T) {
 	log, _ := newTestLogger()
-	router := NewRouter(log)
+	router := NewRouter(log, Deps{})
 
 	rr := httptest.NewRecorder()
 	router.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/api/v1/nope", nil))
@@ -168,7 +168,7 @@ func TestAccessLog(t *testing.T) {
 	log, buf := newTestLogger()
 	req := httptest.NewRequest(http.MethodGet, "/healthz?email=ayse@example.com", nil)
 	req.Header.Set(RequestIDHeader, "req-1")
-	NewRouter(log).ServeHTTP(httptest.NewRecorder(), req)
+	NewRouter(log, Deps{}).ServeHTTP(httptest.NewRecorder(), req)
 
 	lines := logLines(t, buf)
 	if len(lines) != 1 {

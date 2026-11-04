@@ -12,11 +12,13 @@ import (
 	"time"
 
 	"github.com/fyusufayan/insider-campaign-composer-case/backend/internal/ai"
+	"github.com/fyusufayan/insider-campaign-composer-case/backend/internal/campaign"
 	"github.com/fyusufayan/insider-campaign-composer-case/backend/internal/httpapi"
 	"github.com/fyusufayan/insider-campaign-composer-case/backend/internal/llm"
 	"github.com/fyusufayan/insider-campaign-composer-case/backend/internal/platform/config"
 	"github.com/fyusufayan/insider-campaign-composer-case/backend/internal/platform/db"
 	"github.com/fyusufayan/insider-campaign-composer-case/backend/internal/platform/logging"
+	"github.com/fyusufayan/insider-campaign-composer-case/backend/internal/segment"
 )
 
 const (
@@ -58,7 +60,6 @@ func run(log *slog.Logger) error {
 	if err != nil {
 		return err
 	}
-	_ = interpreter // used by the campaign service (CP6)
 	log.Info("configuration loaded", "http_addr", cfg.HTTPAddr, "llm_provider", cfg.LLM.Provider,
 		"segment_model", cfg.Segment.Model, "segment_prompt_version", ai.SegmentPromptVersion)
 
@@ -71,9 +72,24 @@ func run(log *slog.Logger) error {
 	}
 	defer pool.Close()
 
+	campaigns, err := campaign.NewService(campaign.NewRepository(pool), segment.NewAudienceRepository(pool), interpreter, log)
+	if err != nil {
+		return err
+	}
+	provider := string(cfg.LLM.Provider)
+	readiness := func(ctx context.Context) (httpapi.ReadinessReport, error) {
+		report := httpapi.ReadinessReport{Database: "ok", LLMProvider: provider}
+		st, err := db.Readiness(ctx, pool)
+		report.MigrationVersion, report.MigrationDirty = st.Version, st.Dirty
+		if err != nil {
+			report.Database = "unavailable"
+		}
+		return report, err
+	}
+
 	srv := &http.Server{
 		Addr:              cfg.HTTPAddr,
-		Handler:           httpapi.NewRouter(log),
+		Handler:           httpapi.NewRouter(log, httpapi.Deps{Campaigns: campaigns, Readiness: readiness}),
 		ReadHeaderTimeout: readHeaderTimeout,
 		IdleTimeout:       idleTimeout,
 		// No WriteTimeout: SSE responses are long-lived.

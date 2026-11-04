@@ -8,10 +8,22 @@ import (
 // Error codes of the API error envelope (ARCHITECTURE §11). Codes for later
 // slices are added together with the code paths that return them.
 const (
-	CodeValidationFailed = "validation_failed"
-	CodeNotFound         = "not_found"
-	CodeMethodNotAllowed = "method_not_allowed"
-	CodeInternal         = "internal"
+	CodeValidationFailed     = "validation_failed"
+	CodeNotFound             = "not_found"
+	CodeMethodNotAllowed     = "method_not_allowed"
+	CodeInternal             = "internal"
+	CodeUnsupportedMediaType = "unsupported_media_type"
+	CodeInvalidState         = "invalid_state"
+	CodeVersionConflict      = "version_conflict"
+	CodeAudienceUnavailable  = "audience_unavailable"
+	CodeRequestCancelled     = "request_cancelled"
+	// AI codes; identical to ai.Code* (asserted by a test).
+	CodeAIOutputInvalid = "ai_output_invalid"
+	CodeLLMUnavailable  = "llm_unavailable"
+	CodeLLMRejected     = "llm_rejected"
+	CodeLLMRefused      = "llm_refused"
+	CodeLLMTruncated    = "llm_truncated"
+	CodeInvalidBrief    = "invalid_brief"
 )
 
 // FieldError is one entry of an error's details: a problem at a JSON path.
@@ -29,6 +41,9 @@ type APIError struct {
 	Message   string
 	Details   []FieldError
 	Retryable bool
+	// RawProposal is the rejected model output of ai_output_invalid
+	// (ARCHITECTURE §7.5). Untrusted text: clients display it escaped.
+	RawProposal string
 }
 
 func (e *APIError) Error() string { return e.Code + ": " + e.Message }
@@ -42,6 +57,8 @@ type errorBody struct {
 	Message   string       `json:"message"`
 	Details   []FieldError `json:"details"`
 	Retryable bool         `json:"retryable"`
+	// RawProposal is set only for ai_output_invalid.
+	RawProposal string `json:"raw_proposal,omitempty"`
 }
 
 // writeError writes e as {"error": {"code", "message", "details", "retryable"}}.
@@ -52,10 +69,11 @@ func writeError(w http.ResponseWriter, e *APIError) {
 		details = []FieldError{}
 	}
 	writeJSON(w, e.Status, errorEnvelope{Error: errorBody{
-		Code:      e.Code,
-		Message:   e.Message,
-		Details:   details,
-		Retryable: e.Retryable,
+		Code:        e.Code,
+		Message:     e.Message,
+		Details:     details,
+		Retryable:   e.Retryable,
+		RawProposal: e.RawProposal,
 	}})
 }
 
