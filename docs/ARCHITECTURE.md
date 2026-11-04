@@ -703,6 +703,25 @@ Codes: `validation_failed`, `ai_output_invalid`, `llm_unavailable`, `llm_refused
 
 Mock provider: `POST /v1/sms`, `POST /v1/email` (header `Idempotency-Key`), `GET /admin/stats`, `POST /admin/reset` (tests only). Fault rates via environment.
 
+### 11.1 Slice 1a contracts as implemented (CP6)
+
+Only these campaign routes exist in Slice 1a: there is **no** `GET /campaigns` (list) and **no** endpoint to edit `name`/`brief`. The frontend opens campaigns by URL (`/campaigns/{id}`) and revises a brief by creating a new campaign. Request bodies are strict JSON objects (`Content-Type: application/json`, unknown/duplicate properties → `422 validation_failed` with per-field `details`).
+
+| Request | Success | Notes |
+|---|---|---|
+| `POST /campaigns` `{name, brief}` | `201` campaign | name 1–120, brief 10–2000 runes after NFC + trim; no control characters (brief allows `\n`, `\t`) |
+| `GET /campaigns/{id}` | `200` campaign | id must be a canonical UUID (else `422`); unknown → `404 not_found` |
+| `POST /campaigns/{id}/interpret` (body empty or `{}`) | `200 {campaign, audience, audience_error?}` | allowed in draft/segmented/content_ready (`pending_approval`/`approved` → `409 invalid_state` until Slice 3 can revoke the approval) |
+| `GET /campaigns/{id}/audience` | `200 {campaign_id, campaign_version, segment_version, channels, audience}` | draft → `409 invalid_state` |
+| `PUT /campaigns/{id}/channels` `{channels, expected_version}` | `200` campaign | segmented/content_ready only |
+
+- **Campaign DTO**: `{id, name, brief, status, channels, segment_rule, segment_version, interpretation{summary, assumptions, unsupported, model, prompt_version}, content_brief{goal, tone, length, offer}, version, created_at, updated_at}`; `segment_rule`, `interpretation`, `content_brief` are `null` before the first successful interpretation. `interpretation.model` is `"demo"` for the demo interpreter. `suggested_channels` is not persisted separately (see channels below).
+- **Interpretation saved, audience failed**: the interpretation is committed before the audience is computed. If the statistics then fail, the response is still `200` with `audience: null` and `audience_error` (same shape as the error envelope body, e.g. `audience_unavailable`, retryable). Clients retry `GET /audience`, never the interpretation.
+- **Interpretation errors** (nothing is saved): `422 invalid_brief` (demo declines; field `details`, not retryable), `422 ai_output_invalid` (`details` + `raw_proposal`), `422 llm_refused`, `503 llm_unavailable` (retryable), `502 llm_truncated` / `llm_rejected`; `409 version_conflict` if the campaign changed while the model was working (the result is discarded).
+- **Version conflicts**: every write bumps `version`. `PUT /channels` is a compare-and-set on `expected_version` → `409 version_conflict` on mismatch; nothing is merged or retried server-side. A selection equal to the stored one is a no-op (version unchanged). Audience responses carry `campaign_version` so clients can discard statistics computed for another version.
+- **Channels**: canonical order `sms, email`, de-duplicated; unknown values → `422` (`channels[i]`, `not_allowed`). On the **first** successful interpretation (`segment_version = 0` and no channels) the channels are set from the AI's `suggested_channels`; afterwards only `PUT /channels` changes them.
+- **Empty selection** (`[]`) is valid and explicit: `by_channel = {}`, `messages = 0`, `reach_users = {both: 0, sms_only: 0, email_only: 0, unreachable: matched_users}`; `matched_users` is unaffected.
+
 ---
 
 ## 12. Streaming (SSE)
@@ -745,6 +764,7 @@ Vue 3 + TypeScript (strict) + Vite + Vue Router + Pinia (one store for the activ
 - Expiry/withdraw/supersede detected on any response (`409 approval_expired` or status change) → banner "Approval expired — review again".
 - Composables: `useContentStream` (fetch-stream SSE parser, abort on unmount/regenerate), `useCampaignEvents` (EventSource, backoff, close on terminal), `useCampaign`.
 - No `v-html` for any AI or user content; variables highlighted via tokenized spans. Client-side counters are UX only; the server is authoritative.
+- Slice 1a (CP7): routes `/campaigns/new` and `/campaigns/:id` (reloadable). The store applies a campaign only if its `version` is not older than the one shown, shows audience statistics only for the matching `campaign_version`, aborts superseded requests, and never retries a `409` automatically (the rejected channel selection is offered for an explicit re-apply after reload). The shell reads `llm_provider` from `GET /readyz` to label demo mode, so the CP8 proxy must forward `/readyz` as well as `/api/`.
 
 ---
 

@@ -1,0 +1,2683 @@
+ ▐▛███▛█   Claude Code v2.1.318
+▝▜██████▀  Opus 5.5 · Claude Pro
+ ▝▝   ▝▝   ~/Desktop/devel/leet/insider-case/insider-campaign-composer-case
+
+
+❯ We are continuing Smart Campaign Composer.                                    
+  CP1–CP6 are complete, reviewed, tested and committed. Begin CP7 — Vue 3 +     
+  TypeScript Frontend for Campaign Creation, AI Interpretation and Audience     
+  Preview.                                                                      
+  Follow CLAUDE.md and the finalized architecture and roadmap.                  
+  Read the relevant frontend/UI sections of docs/ARCHITECTURE.md and CP7        
+  requirements from docs/ROADMAP.md. Also inspect the actual CP6 HTTP DTOs,     
+  handlers and error envelopes before writing frontend API types.               
+  Implement the real working frontend, not mock screens.                        
+  Objective                                                                     
+  Build a polished, responsive Vue application supporting:                      
+                                                                                
+  1. Creating a campaign from a name and natural-language brief.                
+  2. Calling the backend AI interpretation endpoint.                            
+  3. Displaying the interpreted segment and explanation.                        
+  4. Displaying live audience counts and consent/contact partitions.            
+  5. Selecting SMS/email channels.                                              
+  6. Restoring a saved campaign through its URL.                                
+                                                                                
+  Use the real CP6 API. No fake audience data.                                  
+  1. Frontend foundation                                                        
+  Use the finalized stack:                                                      
+                                                                                
+  * Vue 3, Composition API.                                                     
+  * TypeScript with strict typechecking.                                        
+  * Vite.                                                                       
+  * The UI and styling approach from the architecture.                          
+                                                                                
+  Set up:                                                                       
+                                                                                
+  * Frontend application and package scripts.                                   
+  * Vitest and Vue Testing Library or the testing setup recommended in the      
+  architecture.                                                                 
+  * Development API proxy to the Go backend.                                    
+  * Sensible application structure with typed API client, components and        
+  composables.                                                                  
+                                                                                
+  Avoid introducing large dependencies unless they solve a real requirement.    
+  Keep package versions compatible with Node 22.                                
+  2. UX and visual design                                                       
+  Create a professional SaaS campaign-composer interface appropriate for an     
+  Insider One take-home case.                                                   
+  Visual direction:                                                             
+                                                                                
+  * Clean, modern B2B product styling.                                          
+  * Strong typography and spacing.                                              
+  * Clear hierarchy between campaign brief, AI interpretation, audience results 
+  and channel selection.                                                        
+  * Consistent cards, buttons, form inputs, feedback and loading states.        
+  * Accessible contrast and keyboard interactions.                              
+  * Responsive desktop and mobile layouts.                                      
+                                                                                
+  Prioritize clarity and a convincing end-to-end workflow over decorative       
+  animations.                                                                   
+  The user must always be able to distinguish:                                  
+                                                                                
+  * What they asked for.                                                        
+  * What the AI understood.                                                     
+  * Which targeting conditions are actually active.                             
+  * How many users match.                                                       
+  * How many messages are eligible by channel.                                  
+                                                                                
+  Do not present the demo interpreter as a live Claude model.                   
+  3. Campaign creation                                                          
+  Implement the documented `POST /api/v1/campaigns` contract.                   
+  Provide:                                                                      
+                                                                                
+  * Campaign name.                                                              
+  * Natural-language brief textarea.                                            
+  * Frontend validation consistent with backend limits.                         
+  * Inline validation errors.                                                   
+  * Pending/disabled state while submitting.                                    
+  * Success navigation to a stable URL containing the campaign ID.              
+                                                                                
+  The URL must support loading the campaign on refresh or direct navigation.    
+  Avoid requiring a campaign-listing endpoint, which CP6 does not implement.    
+  4. Interpretation workflow                                                    
+  Use `POST /api/v1/campaigns/{id}/interpret`.                                  
+  Show:                                                                         
+                                                                                
+  * Clear progress state.                                                       
+  * Interpreted summary.                                                        
+  * Active segment conditions in human-readable form.                           
+  * Assumptions and unsupported information.                                    
+  * Suggested/selected channels.                                                
+  * Demo model identification and interpretation metadata where available.      
+  * Content brief goal, tone, length and offer.                                 
+                                                                                
+  Build a small typed DSL presenter for the existing supported condition types. 
+  It should understand top-level `all`/`any`, shallow groups,                   
+  attribute/event/behavior conditions and normalized city names.                
+  Never show an invented natural-language description that contradicts the      
+  actual normalized rule. Provide a readable JSON view as a secondary           
+  diagnostic option if helpful.                                                 
+  Do not attempt to implement manual DSL editing in CP7.                        
+  5. Audience dashboard                                                         
+  Display the backend's actual statistics:                                      
+                                                                                
+  * Matched users.                                                              
+  * Eligible SMS messages.                                                      
+  * Eligible email messages.                                                    
+  * Total eligible messages.                                                    
+  * Per-channel `eligible`, `no_consent`, `no_contact`.                         
+  * Reach partition: `both`, `sms_only`, `email_only`, `unreachable`.           
+  * Evaluation timestamp.                                                       
+                                                                                
+  Use understandable labels and distinguish users from messages.                
+  Ensure these identities remain visually clear:                                
+                                                                                
+  * For each selected channel: eligible + no_consent + no_contact =             
+  matched_users.                                                                
+  * Both + sms_only + email_only + unreachable = matched_users.                 
+                                                                                
+  When the selected channel list is empty, show zero messages and explain that  
+  no delivery channels are selected. Do not interpret zero selected channels as 
+  zero matching users.                                                          
+  Audience preview is live and informational: no approval or send action exists 
+  in CP7.                                                                       
+  6. Channel selection and concurrency                                          
+  Use the exact `PUT /api/v1/campaigns/{id}/channels` contract:                 
+  `{ "channels": ["sms", "email"], "expected_version": N }`                     
+  Requirements:                                                                 
+                                                                                
+  * Explicitly support selecting neither channel.                               
+  * Use the current campaign version in updates.                                
+  * Use the response's new version after successful updates.                    
+  * Refresh audience statistics after a successful channel change.              
+  * Handle `409 version_conflict` by showing a clear message and offering to    
+  reload the latest campaign.                                                   
+  * Do not overwrite user choices using subsequent AI suggestions.              
+  * Do not silently retry stale writes.                                         
+  * Prevent accidental duplicate submissions while a mutation is pending.       
+                                                                                
+  7. Robust API error handling                                                  
+  Implement a typed client for CP6 responses, including:                        
+                                                                                
+  * `422 validation_failed`                                                     
+  * `422 invalid_brief`                                                         
+  * `422 ai_output_invalid`                                                     
+  * `422 llm_refused`                                                           
+  * `409 version_conflict`                                                      
+  * `409 invalid_state`                                                         
+  * `503 llm_unavailable`                                                       
+  * `503 audience_unavailable`                                                  
+  * `502 llm_truncated` / `llm_rejected`                                        
+  * Network errors and aborts.                                                  
+                                                                                
+  Especially important:                                                         
+                                                                                
+  * If interpretation succeeds but the response contains `audience_error`,      
+  explain that the interpretation WAS SAVED and only the preview failed.        
+  * Offer a separate retry for `GET /audience`, not a duplicate interpretation. 
+  * Render all untrusted text as escaped plain text.                            
+  * Never use `v-html` or unsafe innerHTML for briefs, model output or          
+  `raw_proposal`.                                                               
+  * Put `raw_proposal` behind a collapsed, clearly labeled diagnostic detail    
+  section, not the main UI.                                                     
+  * Never show raw secrets, database URLs or internal stack traces.             
+                                                                                
+  8. State management and async correctness                                     
+  Keep state management small and idiomatic.                                    
+  Account for:                                                                  
+                                                                                
+  * Loading a campaign from a URL.                                              
+  * Creating a campaign.                                                        
+  * Interpreting a campaign.                                                    
+  * Updating channels.                                                          
+  * Refreshing audience.                                                        
+  * HTTP errors.                                                                
+  * Stale async responses.                                                      
+  * Unmounting or navigating while requests are pending.                        
+                                                                                
+  Avoid race conditions where an older audience response overwrites newer       
+  channel selections or campaign versions.                                      
+  Use AbortController or an equivalent request-epoch strategy.                  
+  No global state library is required unless justified.                         
+  9. Tests                                                                      
+  Write meaningful frontend tests using mocked HTTP responses, not mocked       
+  business logic.                                                               
+  Cover:                                                                        
+                                                                                
+  1. Create campaign → navigate to detail.                                      
+  2. Load a saved campaign by ID.                                               
+  3. Valid interpretation renders its summary, segment and real-shaped audience 
+  statistics.                                                                   
+  4. Initial suggested channels are shown.                                      
+  5. User deselects all channels → update sends `[]`, then audience refresh     
+  shows zero messages and preserved matched users.                              
+  6. `409 version_conflict` → reload latest state without silently overwriting  
+  a user edit.                                                                  
+  7. `invalid_brief` with field-level details.                                  
+  8. AI refusal and unavailable provider.                                       
+  9. Interpretation persisted but audience unavailable.                         
+  10. `raw_proposal` containing HTML or script-looking text is displayed        
+  safely.                                                                       
+  11. All groups and condition types render correctly.                          
+  12. Out-of-order async results do not overwrite newer state.                  
+  13. Keyboard and form validation basics.                                      
+                                                                                
+  Add at least one integration-level frontend test for the full create →        
+  interpret → select channels workflow.                                         
+  10. Backend compatibility and docs                                            
+  Inspect the actual API DTO fields and use their exact JSON names and types.   
+  Do not invent fields or routes.                                               
+  If the frontend exposes a genuine API-contract gap, report it before          
+  expanding the backend. Favor adapting the frontend to the documented CP6      
+  contract.                                                                     
+  Add a short frontend development section to README or the appropriate         
+  existing documentation, including how to run the Vue frontend with the Go     
+  backend locally.                                                              
+  Record the already implemented CP6 API clarifications in the appropriate      
+  architecture documentation if needed; do not change their behavior just for   
+  convenience.                                                                  
+  11. Scope constraints                                                         
+  Do not implement:                                                             
+                                                                                
+  * CP8 Docker Compose integration.                                             
+  * Content generation or live content streaming.                               
+  * Approval/confirm/send buttons.                                              
+  * Delivery dashboard or worker.                                               
+  * Mock provider.                                                              
+  * Real Anthropic SDK integration.                                             
+  * Additional campaign endpoints solely for UI convenience.                    
+  * Any paid API calls.                                                         
+                                                                                
+  Do not modify backend persistence or migration semantics without a            
+  demonstrated blocker.                                                         
+  12. Verification and completion                                               
+  Run all applicable checks:                                                    
+                                                                                
+  * Frontend unit tests.                                                        
+  * Frontend TypeScript typecheck.                                              
+  * Frontend production build.                                                  
+  * Backend `make test`.                                                        
+  * Backend `go test -race ./...`.                                              
+  * `make lint`, if available.                                                  
+                                                                                
+  If possible, manually smoke-test the actual frontend against the existing     
+  demo-mode backend and seeded PostgreSQL. Clearly distinguish a real browser   
+  smoke test from unit-test simulation.                                         
+  Report:                                                                       
+                                                                                
+  1. Files created and modified.                                                
+  2. Routes and UI components.                                                  
+  3. Exact backend API integration.                                             
+  4. Validation and async-state strategy.                                       
+  5. Test, typecheck and build results.                                         
+  6. Screens or a concrete walkthrough of the working demo.                     
+  7. Limitations and deviations.                                                
+                                                                                
+  Do not commit anything.                                                       
+  Stop after CP7 for review. Do not start CP8.                                  
+
+  Searched for 1 pattern, ran 4 shell commands (ctrl+o to expand)
+
+⏺ Reading the CP6 backend contract (DTOs, errors, service rules) before building
+  the frontend.
+
+  Searched for 1 pattern, ran 6 shell commands (ctrl+o to expand)
+
+⏺ Contract understood. Checking prior session notes for any CP7 hints, then
+  scaffolding the frontend.
+
+  Ran 2 shell commands (ctrl+o to expand)
+
+⏺ Following the agreed CP7 plan (Pinia store, composer page, listed components).
+  Picking Node‑22.20‑compatible versions.
+
+  Searched for 1 pattern, ran 3 shell commands (ctrl+o to expand)
+
+⏺ Contract fully mapped. Scaffolding the frontend now.
+
+⏺ Bash(mkdir -p /Users/bilgem/Desktop/devel/leet/insider-case/insider-campaign-c
+      omposer-case/frontend/src/{api,composables,pages,components/composer,compo
+      nents/ui,segm…)
+  ⎿    run `npm fund` for details
+
+     found 0 vulnerabilities
+     … +35 lines (ctrl+o to expand)
+  ⎿  Created frontend/package.json (+32 -0)
+       1 +{                                                              
+       2 +  "name": "campaign-composer-frontend",                        
+       3 +  "private": true,                                             
+       4 +  "version": "0.1.0",                                          
+       5 +  "type": "module",                                            
+       6 +  "engines": {                                                 
+       7 +    "node": ">=22.13.0"                                        
+       8 +  },                                                           
+       9 +  "scripts": {                                                 
+      10 +    "dev": "vite",                                             
+      11 +    "build": "vue-tsc --noEmit -p tsconfig.app.json && vite bui
+         +ld",                                                           
+      12 +    "preview": "vite preview",                                 
+      13 +    "typecheck": "vue-tsc --noEmit -p tsconfig.app.json && vue-
+         +tsc --noEmit -p tsconfig.test.json && tsc --noEmit -p tsconfig.
+         +node.json",                                                    
+      14 +    "test": "vitest run",                                      
+      15 +    "test:watch": "vitest"                                     
+      16 +  },                                                           
+      17 +  "dependencies": {                                            
+      18 +    "pinia": "^3.0.4",                                         
+      19 +    "vue": "^3.5.44",                                          
+      20 +    "vue-router": "^4.6.4"                                     
+      21 +  },                                                           
+      22 +  "devDependencies": {                                         
+      23 +    "@types/node": "^22.20.5",                                 
+      24 +    "@vitejs/plugin-vue": "^6.0.10",                           
+      25 +    "@vue/test-utils": "^2.5.1",                               
+      26 +    "jsdom": "^29.1.1",                                        
+      27 +    "typescript": "~5.9",                                      
+      28 +    "vite": "^8.3.5",                                          
+      29 +    "vitest": "^5.1.0",                                        
+      30 +    "vue-tsc": "^3.3.14"                                       
+      31 +  }                                                            
+      32 +}                                                              
+  ⎿  … 1 more file changed
+  ⎿  (files that changed while this command ran, by the command or by 
+     another process; a convenience view, not a review or audit of the 
+     command)
+
+⏺ Bash(cat > tsconfig.json <<'EOF'
+      {…)
+  ⎿  Created frontend/env.d.ts (+7 -0)
+      1 +/// <reference types="vite/client" />                           
+      2 +                                                                
+      3 +declare module '*.vue' {                                        
+      4 +  import type { DefineComponent } from 'vue'                    
+      5 +  const component: DefineComponent<object, object, unknown>     
+      6 +  export default component                                      
+      7 +}                                                               
+  ⎿  Created frontend/index.html (+14 -0)
+       1 +<!doctype html>                                                
+       2 +<html lang="en">                                               
+       3 +  <head>                                                       
+       4 +    <meta charset="UTF-8" />                                   
+       5 +    <meta name="viewport" content="width=device-width, initial-
+         +scale=1.0" />                                                  
+       6 +    <meta name="color-scheme" content="light" />               
+       7 +    <title>Campaign Composer</title>                           
+       8 +    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='htt
+         +p://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='3
+         +2' height='32' rx='8' fill='%234f46e5'/%3E%3Cpath d='M9 21l5-10
+         + 4 7 2-3 3 6' stroke='white' stroke-width='2.4' fill='none' str
+         +oke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E" />  
+       9 +  </head>                                                      
+      10 +  <body>                                                       
+      11 +    <div id="app"></div>                                       
+      12 +    <script type="module" src="/src/main.ts"></script>         
+      13 +  </body>                                                      
+      14 +</html>                                                        
+  ⎿  Created frontend/tsconfig.app.json (+5 -0)
+      1 +{                                                               
+      2 +  "extends": "./tsconfig.base.json",                            
+      3 +  "compilerOptions": { "types": ["vite/client"] },              
+      4 +  "include": ["src/**/*.ts", "src/**/*.vue", "env.d.ts"]        
+      5 +}                                                               
+  ⎿  Created frontend/tsconfig.base.json (+21 -0)
+       1 +{                                                              
+       2 +  "compilerOptions": {                                         
+       3 +    "target": "ES2022",                                        
+       4 +    "module": "ESNext",                                        
+       5 +    "moduleResolution": "Bundler",                             
+       6 +    "lib": ["ES2022", "DOM", "DOM.Iterable"],                  
+       7 +    "strict": true,                                            
+       8 +    "noUncheckedIndexedAccess": true,                          
+       9 +    "noImplicitOverride": true,                                
+      10 +    "noFallthroughCasesInSwitch": true,                        
+      11 +    "exactOptionalPropertyTypes": false,                       
+      12 +    "isolatedModules": true,                                   
+      13 +    "verbatimModuleSyntax": true,                              
+      14 +    "resolveJsonModule": true,                                 
+      15 +    "skipLibCheck": true,                                      
+      16 +    "noEmit": true,                                            
+      17 +    "jsx": "preserve",                                         
+      18 +    "useDefineForClassFields": true,                           
+      19 +    "paths": { "@/*": ["./src/*"] }                            
+      20 +  }                                                            
+      21 +}                                                              
+  ⎿  Created frontend/tsconfig.json (+8 -0)
+      1 +{                                                               
+      2 +  "files": [],                                                  
+      3 +  "references": [                                               
+      4 +    { "path": "./tsconfig.app.json" },                          
+      5 +    { "path": "./tsconfig.test.json" },                         
+      6 +    { "path": "./tsconfig.node.json" }                          
+      7 +  ]                                                             
+      8 +}                                                               
+  ⎿  … 3 more files changed
+
+⏺ Foundation in place. Writing the typed API layer next.
+
+⏺ Write(frontend/src/api/types.ts)
+  ⎿  Wrote 255 lines to frontend/src/api/types.ts
+       1 // API types mirroring the CP6 backend DTOs exactly
+       2 // (backend/internal/httpapi/dto.go, errors.go; segment/dsl.go, 
+         audience.go;
+       3 // ai/interpretation.go). JSON property names are the backend's.
+       4 
+       5 // ---- Channels and statuses ----
+       6 
+       7 export type Channel = 'sms' | 'email'
+       8 
+       9 /** Canonical channel order used by the backend (sms, email). */
+     … +246 lines (ctrl+o to expand)
+
+⏺ Write(frontend/src/api/decode.ts)
+  ⎿  Wrote 252 lines to frontend/src/api/decode.ts
+       1 // Defensive runtime decoding of API responses. TypeScript types
+          are erased at
+       2 // runtime, so every response body is checked before the UI trus
+         ts its shape.
+       3 // A body that does not match becomes an `invalid_response` ApiE
+         rror instead of
+       4 // an exception deep inside a component.
+       5 //
+       6 // The segment rule is checked structurally only (match/conditio
+         ns/groups);
+     … +246 lines (ctrl+o to expand)
+
+⏺ Write(frontend/src/api/client.ts)
+  ⎿  Wrote 215 lines to frontend/src/api/client.ts
+       1 // Typed client for the CP6 API (base /api/v1). Every call:
+       2 //   - accepts an AbortSignal (callers abort superseded or unmou
+         nted work);
+       3 //   - decodes the response body at runtime (decode.ts);
+       4 //   - throws only ApiError, whose message is safe to display: i
+         t is either the
+       5 //     backend's fixed, display-safe envelope message or a clien
+         t-authored text.
+       6 //     Raw response bodies (HTML error pages, proxy output, stac
+         k traces) are
+     … +209 lines (ctrl+o to expand)
+
+⏺ Update(frontend/src/api/client.ts)
+  ⎿  Added 15 lines, removed 14 lines
+      135  
+      136    if (!res.ok) {
+      137      if (parsed && typeof payload === 'object' && payload !== n
+           ull && 'error' in payload) {
+      138 +      let body: ReturnType<typeof decodeErrorBody> | null = nu
+          +ll                                                            
+      139        try {
+      139 -        const body = decodeErrorBody((payload as { error: unkn
+          -own }).error)                                                 
+      140 -        return Promise.reject(                                
+      141 -          new ApiError({                                      
+      142 -            kind: 'http',                                     
+      143 -            status: res.status,                               
+      144 -            code: body.code,                                  
+      145 -            // Internal errors carry no actionable detail; kee
+          -p the text generic.                                           
+      146 -            message: body.code === 'internal' ? genericHttpMes
+          -sage(res.status) : body.message,                              
+      147 -            details: body.details,                            
+      148 -            retryable: body.retryable,                        
+      149 -            rawProposal: body.raw_proposal,                   
+      150 -          }),                                                 
+      151 -        )                                                     
+      140 +        body = decodeErrorBody((payload as { error: unknown })
+          +.error)                                                       
+      141        } catch {
+      153 -        // fall through to the generic error below            
+      142 +        body = null // not a valid envelope: generic error bel
+          +ow                                                            
+      143        }
+      144 +      if (body) {                                             
+      145 +        throw new ApiError({                                  
+      146 +          kind: 'http',                                       
+      147 +          status: res.status,                                 
+      148 +          code: body.code,                                    
+      149 +          // Internal errors carry no actionable detail; keep 
+          +the text generic.                                             
+      150 +          message: body.code === 'internal' ? genericHttpMessa
+          +ge(res.status) : body.message,                                
+      151 +          details: body.details,                              
+      152 +          retryable: body.retryable,                          
+      153 +          rawProposal: body.raw_proposal,                     
+      154 +        })                                                    
+      155 +      }                                                       
+      156      }
+      157      throw new ApiError({
+      158        kind: 'http',
+
+⏺ Now the city catalog and the DSL presenter.
+
+⏺ Bash(python3 - <<'EOF'
+      import re…)
+  ⎿  81
+     // Known-city catalog mirrored from backend/internal/segment/cities.go
+      (the
+     … +19 lines (ctrl+o to expand)
+  ⎿  Created frontend/src/segment/cities.ts (+49 -0)
+       1 +// Known-city catalog mirrored from backend/internal/segment/ci
+         +ties.go (the                                                   
+       2 +// 81 provinces of Türkiye, licence-plate order). Normalized se
+         +gment rules                                                    
+       3 +// store the folded key (e.g. "istanbul"); the UI shows the Tur
+         +kish display                                                   
+       4 +// name. A key that is not in this catalog is shown verbatim, n
+         +ever guessed.                                                  
+       5 +                                                               
+       6 +const CITY_NAMES: readonly string[] = [                        
+       7 +  'Adana', 'Adıyaman', 'Afyonkarahisar', 'Ağrı', 'Amasya', 'Ank
+         +ara', 'Antalya', 'Artvin',                                     
+       8 +  'Aydın', 'Balıkesir', 'Bilecik', 'Bingöl', 'Bitlis', 'Bolu', 
+         +'Burdur', 'Bursa',                                             
+       9 +  'Çanakkale', 'Çankırı', 'Çorum', 'Denizli', 'Diyarbakır', 'Ed
+         +irne', 'Elazığ', 'Erzincan',                                   
+      10 +  'Erzurum', 'Eskişehir', 'Gaziantep', 'Giresun', 'Gümüşhane', 
+         +'Hakkari', 'Hatay', 'Isparta',                                 
+      11 +  'Mersin', 'İstanbul', 'İzmir', 'Kars', 'Kastamonu', 'Kayseri'
+         +, 'Kırklareli', 'Kırşehir',                                    
+      12 +  'Kocaeli', 'Konya', 'Kütahya', 'Malatya', 'Manisa', 'Kahraman
+         +maraş', 'Mardin', 'Muğla',                                     
+      13 +  'Muş', 'Nevşehir', 'Niğde', 'Ordu', 'Rize', 'Sakarya', 'Samsu
+         +n', 'Siirt',                                                   
+      14 +  'Sinop', 'Sivas', 'Tekirdağ', 'Tokat', 'Trabzon', 'Tunceli', 
+         +'Şanlıurfa', 'Uşak',                                           
+      15 +  'Van', 'Yozgat', 'Zonguldak', 'Aksaray', 'Bayburt', 'Karaman'
+         +, 'Kırıkkale', 'Batman',                                       
+      16 +  'Şırnak', 'Bartın', 'Ardahan', 'Iğdır', 'Yalova', 'Karabük', 
+         +'Kilis', 'Osmaniye',                                           
+      17 +  'Düzce',                                                     
+      18 +]                                                              
+      19 +                                                               
+      20 +/**                                                            
+      21 + * Turkish-aware folding identical to segment.FoldKey: NFC, Tur
+         +kish lower-case                                                
+      22 + * (I→ı, İ→i), fold ı ş ğ ü ö ç to ASCII, trim and collapse whi
+         +tespace.                                                       
+      23 + */                                                            
+      24 +export function foldCityKey(s: string): string {               
+      25 +  const lowered = s                                            
+      26 +    .normalize('NFC')                                          
+      27 +    .replace(/I/g, 'ı')                                        
+      28 +    .replace(/İ/g, 'i')                                        
+      29 +    .toLowerCase()                                             
+      30 +  return lowered                                               
+      31 +    .replace(/ı/g, 'i')                                        
+      32 +    .replace(/ş/g, 's')                                        
+      33 +    .replace(/ğ/g, 'g')                                        
+      34 +    .replace(/ü/g, 'u')                                        
+      35 +    .replace(/ö/g, 'o')                                        
+      36 +    .replace(/ç/g, 'c')                                        
+      37 +    .split(/\s+/)                                              
+      38 +    .filter(Boolean)                                           
+      39 +    .join(' ')                                                 
+      40 +}                                                              
+     … 9 more lines (ctrl+o to expand)
+
+⏺ Write(frontend/src/segment/presenter.ts)
+  ⎿  Wrote 259 lines to frontend/src/segment/presenter.ts
+       1 // Read-only presenter for normalized segment rules (DSL v1, ARC
+         HITECTURE §6.1).
+       2 //
+       3 // Every sentence is derived mechanically from the stored, valid
+         ated rule —
+       4 // never from the model's free-text summary — so the "active con
+         ditions" the
+       5 // marketer sees are exactly what the backend compiles to SQL. A
+          condition
+       6 // whose shape is not recognized is reported as unrecognized (wi
+     … +254 lines (~8 KB) (ctrl+o to expand)
+
+⏺ Write(frontend/src/api/errors.ts)
+  ⎿  Wrote 102 lines to frontend/src/api/errors.ts
+       1 // Maps ApiErrors to user-facing guidance per operation. Titles 
+         and hints are
+       2 // client-authored; the backend's envelope message (fixed, displ
+         ay-safe text)
+       3 // is shown as the description.
+       4 
+       5 import type { ApiError } from './client'
+       6 
+       7 export type Operation = 'load' | 'create' | 'interpret' | 'audie
+         nce' | 'channels'
+     … +95 lines (ctrl+o to expand)
+
+⏺ Presenter and error mapping done. Now the Pinia store with the async/epoch
+  guards.
+
+⏺ Write(frontend/src/stores/campaign.ts)
+  ⎿  Wrote 389 lines to frontend/src/stores/campaign.ts
+       1 // The active composer campaign (ARCHITECTURE §14: one Pinia sto
+         re for the
+       2 // active campaign; other server state is fetched per page).
+       3 //
+       4 // Async correctness rules:
+       5 //   1. Epoch: open()/close() abort every in-flight request and 
+         bump `epoch`;
+       6 //      a response from an older epoch (another campaign, or aft
+         er the page
+       7 //      unmounted) is dropped.
+     … +382 lines (ctrl+o to expand)
+⏺ Now styles and shared UI pieces.
+
+⏺ Write(frontend/src/styles/main.css)
+  ⎿  Wrote 422 lines to frontend/src/styles/main.css
+       1 /* Design tokens and base styles. Plain CSS with custom properti
+         es: no CSS
+       2    framework, no web fonts (system UI stack), WCAG AA contrast f
+         or text. */
+       3 
+       4 :root {
+       5   --font-sans: 'Inter', ui-sans-serif, system-ui, -apple-system,
+          'Segoe UI', Roboto, 'Helvetica Neue', Arial,
+       6     sans-serif;
+       7   --font-mono: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, C
+     … +416 lines (~8 KB) (ctrl+o to expand)
+
+⏺ Now composables (validation, recent campaigns, LLM provider) and app shell.
+
+⏺ Bash(cd /Users/bilgem/Desktop/devel/leet/insider-case/insider-campaign-compose
+      r-case/frontend/src && cat > composables/validation.ts <<'EOF'
+      // Client-side checks mi…)
+  ⎿  Created frontend/src/composables/format.ts (+39 -0)
+       1 +// Display formatting helpers (locale-stable for tests: en-US g
+         +rouping).                                                      
+       2 +                                                               
+       3 +const NUM = new Intl.NumberFormat('en-US')                     
+       4 +                                                               
+       5 +export function formatCount(n: number): string {               
+       6 +  return NUM.format(n)                                         
+       7 +}                                                              
+       8 +                                                               
+       9 +export function formatDateTime(iso: string): string {          
+      10 +  const d = new Date(iso)                                      
+      11 +  if (Number.isNaN(d.getTime())) return iso                    
+      12 +  return new Intl.DateTimeFormat('en-GB', {                    
+      13 +    day: 'numeric',                                            
+      14 +    month: 'short',                                            
+      15 +    year: 'numeric',                                           
+      16 +    hour: '2-digit',                                           
+      17 +    minute: '2-digit',                                         
+      18 +    second: '2-digit',                                         
+      19 +  }).format(d)                                                 
+      20 +}                                                              
+      21 +                                                               
+      22 +export function percent(part: number, whole: number): number { 
+      23 +  if (whole <= 0) return 0                                     
+      24 +  return (part / whole) * 100                                  
+      25 +}                                                              
+      26 +                                                               
+      27 +export const CHANNEL_LABEL = { sms: 'SMS', email: 'Email' } as 
+         +const                                                          
+      28 +                                                               
+      29 +export const STATUS_LABEL: Record<string, string> = {          
+      30 +  draft: 'Draft',                                              
+      31 +  segmented: 'Audience ready',                                 
+      32 +  content_ready: 'Content ready',                              
+      33 +  pending_approval: 'Pending approval',                        
+      34 +  approved: 'Approved',                                        
+      35 +  sending: 'Sending',                                          
+      36 +  completed: 'Completed',                                      
+      37 +  completed_with_failures: 'Completed with failures',          
+      38 +  cancelled: 'Cancelled',                                      
+      39 +}                                                              
+  ⎿  Created frontend/src/composables/useLlmProvider.ts (+30 -0)
+       1 +// The LLM provider selected at API startup (GET /readyz → llm_
+         +provider).                                                     
+       2 +// Fetched once by the app shell and provided to descendants. U
+         +nknown when                                                    
+       3 +// the probe fails; components then rely on interpretation.mode
+         +l only.                                                        
+       4 +                                                               
+       5 +import { inject, onBeforeUnmount, provide, ref, type InjectionK
+         +ey, type Ref } from 'vue'                                      
+       6 +import { api } from '@/api/client'                             
+       7 +                                                               
+       8 +export type LlmProvider = 'demo' | 'anthropic' | 'unknown'     
+       9 +                                                               
+      10 +const KEY: InjectionKey<Ref<LlmProvider>> = Symbol('llmProvider
+         +')                                                             
+      11 +                                                               
+      12 +export function provideLlmProvider(): Ref<LlmProvider> {       
+      13 +  const provider = ref<LlmProvider>('unknown')                 
+      14 +  const controller = new AbortController()                     
+      15 +  api                                                          
+      16 +    .readiness(controller.signal)                              
+      17 +    .then((r) => {                                             
+      18 +      provider.value = r.llm_provider === 'demo' || r.llm_provi
+         +der === 'anthropic' ? r.llm_provider : 'unknown'               
+      19 +    })                                                         
+      20 +    .catch(() => {                                             
+      21 +      provider.value = 'unknown'                               
+      22 +    })                                                         
+      23 +  onBeforeUnmount(() => controller.abort())                    
+      24 +  provide(KEY, provider)                                       
+      25 +  return provider                                              
+      26 +}                                                              
+      27 +                                                               
+      28 +export function useLlmProvider(): Ref<LlmProvider> {           
+      29 +  return inject(KEY, ref<LlmProvider>('unknown'))              
+      30 +}                                                              
+  ⎿  Created frontend/src/composables/useRecentCampaigns.ts (+67 -0)
+       1 +// Campaigns opened on this device, kept in localStorage. CP6 h
+         +as no listing                                                  
+       2 +// endpoint; this is a convenience index only (id + name), neve
+         +r a source of                                                  
+       3 +// campaign data — opening an entry always loads the campaign f
+         +rom the API.                                                   
+       4 +                                                               
+       5 +import { ref } from 'vue'                                      
+       6 +                                                               
+       7 +export interface RecentCampaign {                              
+       8 +  id: string                                                   
+       9 +  name: string                                                 
+      10 +  openedAt: string                                             
+      11 +}                                                              
+      12 +                                                               
+      13 +const KEY = 'composer.recentCampaigns.v1'                      
+      14 +const MAX = 8                                                  
+      15 +const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-
+         +[0-9a-f]{12}$/i                                                
+      16 +                                                               
+      17 +function read(): RecentCampaign[] {                            
+      18 +  try {                                                        
+      19 +    const raw = localStorage.getItem(KEY)                      
+      20 +    if (!raw) return []                                        
+      21 +    const v: unknown = JSON.parse(raw)                         
+      22 +    if (!Array.isArray(v)) return []                           
+      23 +    return v                                                   
+      24 +      .filter(                                                 
+      25 +        (x): x is RecentCampaign =>                            
+      26 +          typeof x === 'object' &&                             
+      27 +          x !== null &&                                        
+      28 +          typeof x.id === 'string' &&                          
+      29 +          UUID.test(x.id) &&                                   
+      30 +          typeof x.name === 'string' &&                        
+      31 +          typeof x.openedAt === 'string',                      
+      32 +      )                                                        
+      33 +      .slice(0, MAX)                                           
+      34 +  } catch {                                                    
+      35 +    return []                                                  
+      36 +  }                                                            
+      37 +}                                                              
+      38 +                                                               
+      39 +export function useRecentCampaigns() {                         
+      40 +  const items = ref<RecentCampaign[]>(read())                  
+     … 27 more lines (ctrl+o to expand)
+  ⎿  Created frontend/src/composables/validation.ts (+37 -0)
+       1 +// Client-side checks mirroring campaign.NewDraft (UX only: the
+         + server is                                                     
+       2 +// authoritative and its 422 details are always displayed). Len
+         +gths are                                                       
+       3 +// counted in Unicode code points after NFC normalization and t
+         +rimming, the                                                   
+       4 +// same way the backend counts runes.                          
+       5 +                                                               
+       6 +import { LIMITS } from '@/api/types'                           
+       7 +                                                               
+       8 +export function normalizeText(s: string): string {             
+       9 +  return s.normalize('NFC').trim()                             
+      10 +}                                                              
+      11 +                                                               
+      12 +export function runeCount(s: string): number {                 
+      13 +  let n = 0                                                    
+      14 +  for (const _ of normalizeText(s)) n++                        
+      15 +  return n                                                     
+      16 +}                                                              
+      17 +                                                               
+      18 +// unicode.IsControl: C0 controls, DEL and C1 controls.        
+      19 +const CONTROL = /[\u0000-\u001f\u007f-\u009f]/                 
+      20 +const CONTROL_EXCEPT_NEWLINE_TAB = /[\u0000-\u0008\u000b-\u001f
+         +\u007f-\u009f]/                                                
+      21 +                                                               
+      22 +export function validateName(name: string): string | null {    
+      23 +  const n = runeCount(name)                                    
+      24 +  if (n === 0) return 'Enter a campaign name.'                 
+      25 +  if (n > LIMITS.nameMax) return `Use at most ${LIMITS.nameMax}
+         + characters (currently ${n}).`                                 
+      26 +  if (CONTROL.test(normalizeText(name))) return 'The name must 
+         +not contain control characters.'                               
+      27 +  return null                                                  
+      28 +}                                                              
+      29 +                                                               
+      30 +export function validateBrief(brief: string): string | null {  
+      31 +  const n = runeCount(brief)                                   
+      32 +  if (n === 0) return 'Describe the campaign in a few sentences
+         +.'                                                             
+      33 +  if (n < LIMITS.briefMin) return `Write at least ${LIMITS.brie
+         +fMin} characters (currently ${n}).`                            
+      34 +  if (n > LIMITS.briefMax) return `Use at most ${LIMITS.briefMa
+         +x} characters (currently ${n}).`                               
+      35 +  if (CONTROL_EXCEPT_NEWLINE_TAB.test(normalizeText(brief))) re
+         +turn 'The brief must not contain control characters.'          
+      36 +  return null                                                  
+      37 +}                                                              
+
+⏺ Bash(cat > router.ts <<'EOF'
+      import { createRouter, createWebHistory, type RouteRecordRaw, type Router,
+      type RouterHistory } from 'vue-router'…)
+  ⎿  Created frontend/src/App.vue (+142 -0)
+        1 +<script setup lang="ts">                                      
+        2 +import { RouterLink, RouterView } from 'vue-router'           
+        3 +import { provideLlmProvider } from '@/composables/useLlmProvid
+          +er'                                                           
+        4 +                                                              
+        5 +const provider = provideLlmProvider()                         
+        6 +</script>                                                     
+        7 +                                                              
+        8 +<template>                                                    
+        9 +  <a class="skip-link" href="#main">Skip to content</a>       
+       10 +  <header class="topbar">                                     
+       11 +    <div class="topbar-inner">                                
+       12 +      <RouterLink :to="{ name: 'campaign-new' }" class="brand"
+          + aria-label="Campaign Composer home">                         
+       13 +        <span class="brand-mark" aria-hidden="true">          
+       14 +          <svg viewBox="0 0 32 32" width="28" height="28">    
+       15 +            <rect width="32" height="32" rx="8" fill="currentC
+          +olor" />                                                      
+       16 +            <path                                             
+       17 +              d="M9 21l5-10 4 7 2-3 3 6"                      
+       18 +              stroke="#fff"                                   
+       19 +              stroke-width="2.4"                              
+       20 +              fill="none"                                     
+       21 +              stroke-linecap="round"                          
+       22 +              stroke-linejoin="round"                         
+       23 +            />                                                
+       24 +          </svg>                                              
+       25 +        </span>                                               
+       26 +        <span class="brand-text">                             
+       27 +          <span class="brand-name">Campaign Composer</span>   
+       28 +          <span class="brand-tag">AI-assisted audience &amp; m
+          +essaging</span>                                               
+       29 +        </span>                                               
+       30 +      </RouterLink>                                           
+       31 +      <div class="topbar-right">                              
+       32 +        <span                                                 
+       33 +          v-if="provider === 'demo'"                          
+       34 +          class="badge badge-warning"                         
+       35 +          title="The backend runs the deterministic demo inter
+          +preter (keyword heuristic). No Claude model is called."       
+       36 +          data-testid="provider-badge"                        
+       37 +        >                                                     
+       38 +          <span class="dot" style="background: currentColor" a
+          +ria-hidden="true" />                                          
+       39 +          Demo AI mode — not a live model                     
+       40 +        </span>                                               
+     … 102 more lines (ctrl+o to expand)
+  ⎿  Created frontend/src/main.ts (+7 -0)
+      1 +import { createApp } from 'vue'                                 
+      2 +import { createPinia } from 'pinia'                             
+      3 +import App from './App.vue'                                     
+      4 +import { makeRouter } from './router'                           
+      5 +import './styles/main.css'                                      
+      6 +                                                                
+      7 +createApp(App).use(createPinia()).use(makeRouter()).mount('#app'
+        +)                                                               
+  ⎿  Created frontend/src/router.ts (+34 -0)
+       1 +import { createRouter, createWebHistory, type RouteRecordRaw, t
+         +ype Router, type RouterHistory } from 'vue-router'             
+       2 +                                                               
+       3 +export const routes: RouteRecordRaw[] = [                      
+       4 +  { path: '/', redirect: { name: 'campaign-new' } },           
+       5 +  {                                                            
+       6 +    path: '/campaigns/new',                                    
+       7 +    name: 'campaign-new',                                      
+       8 +    component: () => import('./pages/CampaignCreatePage.vue'), 
+       9 +    meta: { title: 'New campaign' },                           
+      10 +  },                                                           
+      11 +  {                                                            
+      12 +    // Stable, shareable URL: refresh and direct navigation loa
+         +d the campaign.                                                
+      13 +    path: '/campaigns/:id',                                    
+      14 +    name: 'campaign',                                          
+      15 +    component: () => import('./pages/CampaignComposerPage.vue')
+         +,                                                              
+      16 +    props: true,                                               
+      17 +    meta: { title: 'Campaign' },                               
+      18 +  },                                                           
+      19 +  {                                                            
+      20 +    path: '/:pathMatch(.*)*',                                  
+      21 +    name: 'not-found',                                         
+      22 +    component: () => import('./pages/NotFoundPage.vue'),       
+      23 +    meta: { title: 'Not found' },                              
+      24 +  },                                                           
+      25 +]                                                              
+      26 +                                                               
+      27 +export function makeRouter(history: RouterHistory = createWebHi
+         +story()): Router {                                             
+      28 +  const router = createRouter({ history, routes, scrollBehavior
+         +: () => ({ top: 0 }) })                                        
+      29 +  router.afterEach((to) => {                                   
+      30 +    const t = typeof to.meta.title === 'string' ? to.meta.title
+         + : ''                                                          
+      31 +    document.title = t ? `${t} · Campaign Composer` : 'Campaign
+         + Composer'                                                     
+      32 +  })                                                           
+      33 +  return router                                                
+      34 +}                                                              
+
+⏺ Bash(python3 - <<'EOF'
+      p='App.vue'; s=open(p).read()…)
+  ⎿  Updated frontend/src/App.vue (+2 -2)
+      36            data-testid="provider-badge"
+      37          >
+      38            <span class="dot" style="background: currentColor" ar
+          ia-hidden="true" />
+      39 -          Demo AI mode — not a live model                      
+      39 +          Demo AI<span class="long">&nbsp;mode — not a live mod
+         +el</span>                                                      
+      40          </span>
+      41          <span v-else-if="provider === 'anthropic'" class="badge
+           badge-primary" data-testid="provider-badge">
+      42            <span class="dot" style="background: currentColor" ar
+          ia-hidden="true" />
+     ...
+      135    .brand-tag {
+      136      display: none;
+      137    }
+      138 -  .topbar-right .badge {                                      
+      138 +  .topbar-right .long {                                       
+      139      display: none;
+      140    }
+      141  }
+
+⏺ Bash(cd /Users/bilgem/Desktop/devel/leet/insider-case/insider-campaign-compose
+      r-case/frontend/src/components && cat > composer/FieldErrors.vue <<'EOF'
+      <script setup…)
+  ⎿  Created frontend/src/components/composer/FieldErrors.vue (+71 -0)
+       1 +<script setup lang="ts">                                       
+       2 +// Field-level problems from the error envelope ({path, code, m
+         +essage, allowed?}).                                            
+       3 +// All values are rendered as escaped text.                    
+       4 +import type { FieldError } from '@/api/types'                  
+       5 +                                                               
+       6 +defineProps<{ errors: FieldError[]; title?: string }>()        
+       7 +</script>                                                      
+       8 +                                                               
+       9 +<template>                                                     
+      10 +  <div v-if="errors.length" class="field-errors" data-testid="f
+         +ield-errors">                                                  
+      11 +    <p v-if="title" class="fe-title">{{ title }}</p>           
+      12 +    <ul>                                                       
+      13 +      <li v-for="(e, i) in errors" :key="i" data-testid="field-
+         +error">                                                        
+      14 +        <code v-if="e.path" class="fe-path">{{ e.path }}</code>
+      15 +        <span class="fe-msg">{{ e.message }}</span>            
+      16 +        <span class="fe-code">({{ e.code }})</span>            
+      17 +        <span v-if="e.allowed && e.allowed.length" class="fe-al
+         +lowed">                                                        
+      18 +          Allowed: <span v-for="(a, j) in e.allowed" :key="j" c
+         +lass="fe-chip">{{ a }}</span>                                  
+      19 +        </span>                                                
+      20 +      </li>                                                    
+      21 +    </ul>                                                      
+      22 +  </div>                                                       
+      23 +</template>                                                    
+      24 +                                                               
+      25 +<style scoped>                                                 
+      26 +.field-errors {                                                
+      27 +  margin-top: var(--space-3);                                  
+      28 +}                                                              
+      29 +.fe-title {                                                    
+      30 +  font-weight: 600;                                            
+      31 +  font-size: 13px;                                             
+      32 +  margin-bottom: 4px;                                          
+      33 +}                                                              
+      34 +ul {                                                           
+      35 +  margin: 0;                                                   
+      36 +  padding-left: 18px;                                          
+      37 +  display: flex;                                               
+      38 +  flex-direction: column;                                      
+      39 +  gap: 4px;                                                    
+      40 +}                                                              
+     … 31 more lines (ctrl+o to expand)
+  ⎿  Created frontend/src/components/composer/RawProposal.vue (+19 -0)
+       1 +<script setup lang="ts">                                       
+       2 +// The rejected model output of ai_output_invalid: untrusted te
+         +xt shown only                                                  
+       3 +// in a collapsed diagnostic section, as escaped plain text (mu
+         +stache, <pre>).                                                
+       4 +defineProps<{ text: string }>()                                
+       5 +</script>                                                      
+       6 +                                                               
+       7 +<template>                                                     
+       8 +  <details class="diagnostic raw-proposal" data-testid="raw-pro
+         +posal">                                                        
+       9 +    <summary>Diagnostic: rejected AI output (untrusted, not sav
+         +ed)</summary>                                                  
+      10 +    <pre>{{ text }}</pre>                                      
+      11 +  </details>                                                   
+      12 +</template>                                                    
+      13 +                                                               
+      14 +<style scoped>                                                 
+      15 +.raw-proposal {                                                
+      16 +  margin-top: var(--space-3);                                  
+      17 +  color: var(--c-text);                                        
+      18 +}                                                              
+      19 +</style>                                                       
+  ⎿  Created frontend/src/components/ui/ErrorNotice.vue (+75 -0)
+       1 +<script setup lang="ts">                                       
+       2 +import { computed } from 'vue'                                 
+       3 +import type { ApiError } from '@/api/client'                   
+       4 +import { presentError, type Operation } from '@/api/errors'    
+       5 +import FieldErrors from '@/components/composer/FieldErrors.vue'
+       6 +import RawProposal from '@/components/composer/RawProposal.vue'
+       7 +                                                               
+       8 +const props = withDefaults(                                    
+       9 +  defineProps<{                                                
+      10 +    error: ApiError                                            
+      11 +    op: Operation                                              
+      12 +    tone?: 'danger' | 'warning'                                
+      13 +    retryLabel?: string                                        
+      14 +    busy?: boolean                                             
+      15 +  }>(),                                                        
+      16 +  { tone: 'danger', retryLabel: 'Try again', busy: false },    
+      17 +)                                                              
+      18 +                                                               
+      19 +const emit = defineEmits<{ retry: []; reload: []; revise: [] }>
+         +()                                                             
+      20 +                                                               
+      21 +const p = computed(() => presentError(props.error, props.op))  
+      22 +</script>                                                      
+      23 +                                                               
+      24 +<template>                                                     
+      25 +  <div                                                         
+      26 +    class="notice"                                             
+      27 +    :class="tone === 'danger' ? 'notice-danger' : 'notice-warni
+         +ng'"                                                           
+      28 +    role="alert"                                               
+      29 +    data-testid="error-notice"                                 
+      30 +    :data-code="error.code"                                    
+      31 +  >                                                            
+      32 +    <svg class="icon" viewBox="0 0 20 20" width="18" height="18
+         +" aria-hidden="true">                                          
+      33 +      <circle cx="10" cy="10" r="8.5" fill="none" stroke="curre
+         +ntColor" stroke-width="1.6" />                                 
+      34 +      <path d="M10 5.5v5.5M10 13.8v.4" stroke="currentColor" st
+         +roke-width="1.8" stroke-linecap="round" />                     
+      35 +    </svg>                                                     
+      36 +    <div class="content">                                      
+      37 +      <p class="notice-title">{{ p.title }}</p>                
+      38 +      <p class="msg">{{ p.message }}</p>                       
+      39 +      <p v-if="p.hint" class="hint">{{ p.hint }}</p>           
+      40 +      <FieldErrors :errors="error.details" />                  
+     … 35 more lines (ctrl+o to expand)
+  ⎿  Created frontend/src/components/ui/StatusBadge.vue (+25 -0)
+       1 +<script setup lang="ts">                                       
+       2 +import { computed } from 'vue'                                 
+       3 +import type { CampaignStatus } from '@/api/types'              
+       4 +import { STATUS_LABEL } from '@/composables/format'            
+       5 +                                                               
+       6 +const props = defineProps<{ status: CampaignStatus }>()        
+       7 +const cls = computed(() => {                                   
+       8 +  switch (props.status) {                                      
+       9 +    case 'draft':                                              
+      10 +      return 'badge-neutral'                                   
+      11 +    case 'segmented':                                          
+      12 +    case 'content_ready':                                      
+      13 +      return 'badge-primary'                                   
+      14 +    case 'approved':                                           
+      15 +    case 'completed':                                          
+      16 +      return 'badge-success'                                   
+      17 +    default:                                                   
+      18 +      return 'badge-info'                                      
+      19 +  }                                                            
+      20 +})                                                             
+      21 +</script>                                                      
+      22 +                                                               
+      23 +<template>                                                     
+      24 +  <span class="badge" :class="cls" data-testid="status-badge">{
+         +{ STATUS_LABEL[status] ?? status }}</span>                     
+      25 +</template>                                                    
+
+⏺ Write(frontend/src/components/composer/BriefInput.vue)
+  ⎿  Wrote 201 lines to frontend/src/components/composer/BriefInput.vue
+      1 <script setup lang="ts">
+      2 // Campaign creation form: name + natural-language brief. Client 
+        checks
+      3 // mirror the backend limits (UX only); server 422 details are ma
+        pped back to
+      4 // the fields by path and always shown.
+      5 import { computed, ref, watch } from 'vue'
+      6 import type { ApiError } from '@/api/client'
+      7 import { LIMITS } from '@/api/types'
+      8 import { runeCount, validateBrief, validateName } from '@/composa
+     … +194 lines (~6 KB) (ctrl+o to expand)
+
+⏺ Write(frontend/src/pages/CampaignCreatePage.vue)
+  ⎿  Wrote 245 lines to frontend/src/pages/CampaignCreatePage.vue
+       1 <script setup lang="ts">
+       2 import { onBeforeUnmount, ref } from 'vue'
+       3 import { RouterLink, useRouter } from 'vue-router'
+       4 import { ApiError, api, isApiError } from '@/api/client'
+       5 import BriefInput from '@/components/composer/BriefInput.vue'
+       6 import { formatDateTime } from '@/composables/format'
+       7 import { isCampaignId, useRecentCampaigns } from '@/composables/
+         useRecentCampaigns'
+       8 import { useCampaignStore } from '@/stores/campaign'
+       9 
+     … +236 lines (ctrl+o to expand)
+
+⏺ Create page done; now building the composer components (brief, interpretation,
+  rule view, audience, channels).
+
+⏺ Write(frontend/src/components/composer/AiSourceBadge.vue)
+  ⎿  Wrote 31 lines to frontend/src/components/composer/AiSourceBadge.vue
+      1 <script setup lang="ts">
+      2 // Identifies what produced an interpretation. The demo interpret
+        er is a
+      3 // deterministic keyword heuristic and is never presented as a li
+        ve model.
+      4 import { computed } from 'vue'
+      5 import { DEMO_MODEL } from '@/api/types'
+      6 
+      7 const props = defineProps<{ model: string; promptVersion?: string
+         }>()
+     … +24 lines (ctrl+o to expand)
+
+⏺ Write(frontend/src/components/composer/BriefCard.vue)
+  ⎿  Wrote 113 lines to frontend/src/components/composer/BriefCard.vue
+       1 <script setup lang="ts">
+       2 // "What you asked": the saved brief exactly as written, plus th
+         e interpret
+       3 // action and its progress/error states.
+       4 import { computed } from 'vue'
+       5 import type { ApiError } from '@/api/client'
+       6 import type { Campaign } from '@/api/types'
+       7 import { useLlmProvider } from '@/composables/useLlmProvider'
+       8 import ErrorNotice from '@/components/ui/ErrorNotice.vue'
+       9 
+     … +104 lines (ctrl+o to expand)
+
+⏺ Write(frontend/src/components/composer/InterpretationCard.vue)
+  ⎿  Wrote 164 lines to
+     frontend/src/components/composer/InterpretationCard.vue
+       1 <script setup lang="ts">
+       2 // "What the AI understood": the model's summary, assumptions, u
+         nsupported
+       3 // requests and content brief. These are untrusted proposals (va
+         lidated by the
+       4 // backend) and are always rendered as escaped text.
+       5 import { computed } from 'vue'
+       6 import { parseContentBrief } from '@/api/decode'
+       7 import type { InterpretationRecord } from '@/api/types'
+       8 import AiSourceBadge from './AiSourceBadge.vue'
+     … +156 lines (ctrl+o to expand)
+
+⏺ Write(frontend/src/components/composer/SegmentRuleView.vue)
+  ⎿  Wrote 206 lines to
+     frontend/src/components/composer/SegmentRuleView.vue
+       1 <script setup lang="ts">
+       2 // "Which targeting conditions are actually active": a read-only
+          rendering of
+       3 // the stored, normalized rule (the same rule the backend compil
+         es to SQL).
+       4 import { computed } from 'vue'
+       5 import type { SegmentRule } from '@/api/types'
+       6 import { presentRule, type ConditionKind } from '@/segment/prese
+         nter'
+       7 
+     … +199 lines (ctrl+o to expand)
+
+⏺ Write(frontend/src/components/composer/ChannelSelector.vue)
+  ⎿  Wrote 146 lines to
+     frontend/src/components/composer/ChannelSelector.vue
+       1 <script setup lang="ts">
+       2 // Delivery channel selection. Native checkboxes (keyboard: Tab 
+         + Space).
+       3 // Selecting neither channel is an explicit, valid choice.
+       4 import type { Channel } from '@/api/types'
+       5 import { CHANNELS } from '@/api/types'
+       6 import { CHANNEL_LABEL } from '@/composables/format'
+       7 
+       8 const props = defineProps<{
+       9   selected: Channel[]
+     … +137 lines (ctrl+o to expand)
+
+⏺ Write(frontend/src/components/composer/AudienceCard.vue)
+  ⎿  Wrote 501 lines to frontend/src/components/composer/AudienceCard.vue
+       1 <script setup lang="ts">
+       2 // "How many users match / how many messages are eligible": the 
+         backend's
+       3 // audience partition (ARCHITECTURE §6.5), shown as returned. Us
+         ers and
+       4 // messages are labelled separately and never added together.
+       5 import { computed } from 'vue'
+       6 import type { ApiError } from '@/api/client'
+       7 import type { AudienceStats, Channel, ChannelStats } from '@/api
+         /types'
+     … +494 lines (ctrl+o to expand)
+
+⏺ Bash(cd /Users/bilgem/Desktop/devel/leet/insider-case/insider-campaign-compose
+      r-case/frontend/src/components/composer && python3 - <<'EOF'
+      p='AudienceCard.vue'; s=op…)
+  ⎿  162:        retry-label="Dismiss"
+  ⎿  Updated frontend/src/components/composer/AudienceCard.vue (+1 -0)
+      159          class="block"
+      160          :error="channelsError"
+      161          op="channels"
+      162 +        retry-label="Dismiss"                                 
+      163          @reload="emit('reload')"
+      164          @retry="emit('dismiss-channels-error')"
+      165        />
+
+⏺ Write(frontend/src/pages/CampaignComposerPage.vue)
+  ⎿  Wrote 326 lines to frontend/src/pages/CampaignComposerPage.vue
+       1 <script setup lang="ts">
+       2 // Composer for one campaign, addressed by a stable URL (/campai
+         gns/:id).
+       3 // Refresh and direct navigation load the campaign from the API;
+          leaving the
+       4 // page (or switching to another id) aborts pending requests and
+          drops their
+       5 // results (store epoch).
+       6 import { computed, onBeforeUnmount, ref, watch } from 'vue'
+       7 import { RouterLink, useRouter } from 'vue-router'
+     … +319 lines (ctrl+o to expand)
+
+⏺ Bash(cd /Users/bilgem/Desktop/devel/leet/insider-case/insider-campaign-compose
+      r-case/frontend && cat > src/pages/NotFoundPage.vue <<'EOF'
+      <script setup lang="ts">…)
+  ⎿  Created frontend/src/pages/NotFoundPage.vue (+21 -0)
+       1 +<script setup lang="ts">                                       
+       2 +import { RouterLink } from 'vue-router'                        
+       3 +</script>                                                      
+       4 +                                                               
+       5 +<template>                                                     
+       6 +  <div class="card nf" data-testid="not-found">                
+       7 +    <h1>Page not found</h1>                                    
+       8 +    <p>The page you are looking for does not exist.</p>        
+       9 +    <RouterLink :to="{ name: 'campaign-new' }" class="btn btn-p
+         +rimary">Create a campaign</RouterLink>                         
+      10 +  </div>                                                       
+      11 +</template>                                                    
+      12 +                                                               
+      13 +<style scoped>                                                 
+      14 +.nf {                                                          
+      15 +  padding: var(--space-8);                                     
+      16 +  display: flex;                                               
+      17 +  flex-direction: column;                                      
+      18 +  align-items: flex-start;                                     
+      19 +  gap: var(--space-3);                                         
+      20 +}                                                              
+      21 +</style>                                                       
+
+⏺ Typecheck passes. Quick build sanity, then tests.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ Build works. Now the test harness: a stateful fake HTTP backend (fetch-level),
+  fixtures and mount helper.
+⏺ Bash(mkdir -p /Users/bilgem/Desktop/devel/leet/insider-case/insider-campaign-c
+      omposer-case/frontend/tests/helpers && cd
+      /Users/bilgem/Desktop/devel/leet/insider-case…)
+  ⎿  Created frontend/tests/helpers/fakeBackend.ts (+198 -0)
+        1 +// A small stateful fake of the CP6 HTTP API, installed as glo
+          +bal fetch.                                                    
+        2 +// Tests exercise the real client, store and components agains
+          +t HTTP-shaped                                                 
+        3 +// responses; only the network is faked. Per-test overrides ca
+          +n replace any                                                 
+        4 +// route (e.g. to delay, reorder or fail responses).          
+        5 +                                                              
+        6 +import { vi } from 'vitest'                                   
+        7 +import type { Campaign, Channel } from '@/api/types'          
+        8 +import {                                                      
+        9 +  CAMPAIGN_ID,                                                
+       10 +  EXAMPLE_CONTENT_BRIEF,                                      
+       11 +  EXAMPLE_INTERPRETATION,                                     
+       12 +  EXAMPLE_RULE,                                               
+       13 +  audienceFor,                                                
+       14 +  draftCampaign,                                              
+       15 +  errorEnvelope,                                              
+       16 +} from './fixtures'                                           
+       17 +                                                              
+       18 +export interface RecordedCall {                               
+       19 +  method: string                                              
+       20 +  path: string                                                
+       21 +  body: unknown                                               
+       22 +}                                                             
+       23 +                                                              
+       24 +export interface FakeRequest {                                
+       25 +  method: string                                              
+       26 +  path: string                                                
+       27 +  body: unknown                                               
+       28 +  signal: AbortSignal | null                                  
+       29 +}                                                             
+       30 +                                                              
+       31 +export type Handler = (req: FakeRequest) => Response | Promise
+          +<Response> | undefined                                        
+       32 +                                                              
+       33 +export function json(status: number, body: unknown): Response 
+          +{                                                             
+       34 +  return new Response(JSON.stringify(body), { status, headers:
+          + { 'Content-Type': 'application/json' } })                    
+       35 +}                                                             
+       36 +                                                              
+       37 +export interface Deferred<T> {                                
+       38 +  promise: Promise<T>                                         
+       39 +  resolve: (v: T) => void                                     
+       40 +}                                                             
+     … 158 more lines (ctrl+o to expand)
+  ⎿  Created frontend/tests/helpers/fixtures.ts (+108 -0)
+        1 +// Real-shaped API payloads (field names and shapes from the C
+          +P6 DTOs).                                                     
+        2 +import type { AudienceStats, Campaign, Channel, ChannelStats, 
+          +SegmentRule } from '@/api/types'                              
+        3 +                                                              
+        4 +export const CAMPAIGN_ID = '0b9c2f4e-6a1d-4c3b-9e8f-1a2b3c4d5e
+          +6f'                                                           
+        5 +export const OTHER_ID = '7f1e2d3c-4b5a-4968-8776-655443322110'
+        6 +                                                              
+        7 +export const EXAMPLE_BRIEF =                                  
+        8 +  'Send a short and friendly 30% discount reminder to users in
+          + Istanbul who added products to their cart in the last 30 days
+          + but did not complete a purchase.'                            
+        9 +                                                              
+       10 +export const EXAMPLE_RULE: SegmentRule = {                    
+       11 +  version: 1,                                                 
+       12 +  match: 'all',                                               
+       13 +  conditions: [                                               
+       14 +    { type: 'attribute', field: 'city', op: 'eq', value: 'ista
+          +nbul' },                                                      
+       15 +    { type: 'behavior', predicate: 'abandoned_cart', within_da
+          +ys: 30 },                                                     
+       16 +  ],                                                          
+       17 +}                                                             
+       18 +                                                              
+       19 +export const EXAMPLE_INTERPRETATION = {                       
+       20 +  summary: 'Users in Istanbul who added a product to their car
+          +t in the last 30 days and have not purchased since.',         
+       21 +  assumptions: ["'Did not complete a purchase' means no purcha
+          +se after the cart addition."],                                
+       22 +  unsupported: [] as string[],                                
+       23 +  model: 'demo',                                              
+       24 +  prompt_version: 'segment_v1',                               
+       25 +}                                                             
+       26 +                                                              
+       27 +export const EXAMPLE_CONTENT_BRIEF = {                        
+       28 +  goal: 'cart_recovery',                                      
+       29 +  tone: 'friendly',                                           
+       30 +  length: 'short',                                            
+       31 +  offer: { kind: 'percent_discount', value: 30 },             
+       32 +}                                                             
+       33 +                                                              
+       34 +export function draftCampaign(overrides: Partial<Campaign> = {
+          +}): Campaign {                                                
+       35 +  return {                                                    
+       36 +    id: CAMPAIGN_ID,                                          
+       37 +    name: 'İstanbul cart recovery',                           
+       38 +    brief: EXAMPLE_BRIEF,                                     
+       39 +    status: 'draft',                                          
+       40 +    channels: [],                                             
+     … 68 more lines (ctrl+o to expand)
+  ⎿  Created frontend/tests/helpers/mountApp.ts (+48 -0)
+       1 +import { flushPromises, mount, type VueWrapper } from '@vue/tes
+         +t-utils'                                                       
+       2 +import { createPinia, setActivePinia } from 'pinia'            
+       3 +import { createMemoryHistory, type Router } from 'vue-router'  
+       4 +import { expect, vi } from 'vitest'                            
+       5 +import App from '@/App.vue'                                    
+       6 +import { makeRouter } from '@/router'                          
+       7 +                                                               
+       8 +export interface MountedApp {                                  
+       9 +  wrapper: VueWrapper                                          
+      10 +  router: Router                                               
+      11 +}                                                              
+      12 +                                                               
+      13 +/** Mounts the whole application at `path` with an in-memory ro
+         +uter. */                                                       
+      14 +export async function mountApp(path: string): Promise<MountedAp
+         +p> {                                                           
+      15 +  const pinia = createPinia()                                  
+      16 +  setActivePinia(pinia)                                        
+      17 +  const router = makeRouter(createMemoryHistory())             
+      18 +  await router.push(path)                                      
+      19 +  await router.isReady()                                       
+      20 +  const wrapper = mount(App, { global: { plugins: [pinia, route
+         +r] }, attachTo: document.body })                               
+      21 +  await settle()                                               
+      22 +  return { wrapper, router }                                   
+      23 +}                                                              
+      24 +                                                               
+      25 +/** Lets pending promises, lazy routes and re-renders complete.
+         + */                                                            
+      26 +export async function settle(rounds = 5): Promise<void> {      
+      27 +  for (let i = 0; i < rounds; i++) {                           
+      28 +    await flushPromises()                                      
+      29 +    await new Promise((r) => setTimeout(r, 0))                 
+      30 +  }                                                            
+      31 +}                                                              
+      32 +                                                               
+      33 +/** Polls until the assertion passes (no fixed sleeps). */     
+      34 +export async function until(assertion: () => void, timeoutMs = 
+         +2000): Promise<void> {                                         
+      35 +  await vi.waitFor(                                            
+      36 +    async () => {                                              
+      37 +      await flushPromises()                                    
+      38 +      assertion()                                              
+      39 +    },                                                         
+      40 +    { timeout: timeoutMs, interval: 5 },                       
+     … 8 more lines (ctrl+o to expand)
+
+⏺ Bash(cd /Users/bilgem/Desktop/devel/leet/insider-case/insider-campaign-compose
+      r-case/frontend/tests && cat > presenter.spec.ts <<'EOF'
+      import { describe, expect, it…)
+  ⎿   RUN  v5.1.0 /Users/bilgem/Desktop/devel/leet/insider-case/insider-cam
+     paign-composer-case/frontend
+     … +6 lines (ctrl+o to expand)
+  ⎿  Created frontend/tests/client.spec.ts (+135 -0)
+        1 +import { afterEach, describe, expect, it, vi } from 'vitest'  
+        2 +import { ApiError, api } from '@/api/client'                  
+        3 +import { CAMPAIGN_ID, draftCampaign, errorEnvelope } from './h
+          +elpers/fixtures'                                              
+        4 +import { json } from './helpers/fakeBackend'                  
+        5 +                                                              
+        6 +function stubFetch(impl: (url: string, init?: RequestInit) => 
+          +Promise<Response>) {                                          
+        7 +  const fn = vi.fn(impl)                                      
+        8 +  vi.stubGlobal('fetch', fn)                                  
+        9 +  return fn                                                   
+       10 +}                                                             
+       11 +                                                              
+       12 +async function rejection(p: Promise<unknown>): Promise<ApiErro
+          +r> {                                                          
+       13 +  try {                                                       
+       14 +    await p                                                   
+       15 +  } catch (e) {                                               
+       16 +    expect(e).toBeInstanceOf(ApiError)                        
+       17 +    return e as ApiError                                      
+       18 +  }                                                           
+       19 +  throw new Error('expected a rejection')                     
+       20 +}                                                             
+       21 +                                                              
+       22 +afterEach(() => vi.unstubAllGlobals())                        
+       23 +                                                              
+       24 +describe('api client', () => {                                
+       25 +  it('sends the exact documented request shapes', async () => 
+          +{                                                             
+       26 +    const fetch = stubFetch(async () => json(200, draftCampaig
+          +n({ status: 'segmented', version: 3 })))                      
+       27 +    await api.setChannels(CAMPAIGN_ID, [], 2)                 
+       28 +    const [url, init] = fetch.mock.calls[0]!                  
+       29 +    expect(url).toBe(`/api/v1/campaigns/${CAMPAIGN_ID}/channel
+          +s`)                                                           
+       30 +    expect(init?.method).toBe('PUT')                          
+       31 +    expect((init?.headers as Record<string, string>)['Content-
+          +Type']).toBe('application/json')                              
+       32 +    expect(JSON.parse(init?.body as string)).toEqual({ channel
+          +s: [], expected_version: 2 })                                 
+       33 +                                                              
+       34 +    await api.interpret(CAMPAIGN_ID).catch(() => undefined)   
+       35 +    const [iurl, iinit] = fetch.mock.calls[1]!                
+       36 +    expect(iurl).toBe(`/api/v1/campaigns/${CAMPAIGN_ID}/interp
+          +ret`)                                                         
+       37 +    expect(iinit?.method).toBe('POST')                        
+       38 +    expect(iinit?.body).toBe('{}')                            
+       39 +  })                                                          
+       40 +                                                              
+     … 95 more lines (ctrl+o to expand)
+  ⎿  Created frontend/tests/presenter.spec.ts (+170 -0)
+        1 +import { describe, expect, it } from 'vitest'                 
+        2 +import type { SegmentRule } from '@/api/types'                
+        3 +import { cityName, foldCityKey, CITY_COUNT } from '@/segment/c
+          +ities'                                                        
+        4 +import { describeCondition, presentRule, ruleOneLiner } from '
+          +@/segment/presenter'                                          
+        5 +                                                              
+        6 +describe('city catalog', () => {                              
+        7 +  it('mirrors the 81-province backend catalog', () => {       
+        8 +    expect(CITY_COUNT).toBe(81)                               
+        9 +  })                                                          
+       10 +  it.each([                                                   
+       11 +    ['istanbul', 'İstanbul'],                                 
+       12 +    ['izmir', 'İzmir'],                                       
+       13 +    ['igdir', 'Iğdır'],                                       
+       14 +    ['isparta', 'Isparta'],                                   
+       15 +    ['sanliurfa', 'Şanlıurfa'],                               
+       16 +    ['canakkale', 'Çanakkale'],                               
+       17 +    ['ISTANBUL', 'İstanbul'],                                 
+       18 +  ])('resolves normalized key %s → %s', (key, name) => {      
+       19 +    expect(cityName(key)).toBe(name)                          
+       20 +  })                                                          
+       21 +  it('folds like segment.FoldKey', () => {                    
+       22 +    expect(foldCityKey('  İSTANBUL ')).toBe('istanbul')       
+       23 +    expect(foldCityKey('Kahraman  Maraş')).toBe('kahraman mara
+          +s')                                                           
+       24 +    expect(foldCityKey('İstanbul')).toBe('istanbul') // decomp
+          +osed İ                                                        
+       25 +  })                                                          
+       26 +  it('returns null for an unknown key (never guesses)', () => 
+          +{                                                             
+       27 +    expect(cityName('atlantis')).toBeNull()                   
+       28 +  })                                                          
+       29 +})                                                            
+       30 +                                                              
+       31 +describe('describeCondition: attribute', () => {              
+       32 +  const cases: Array<[unknown, string]> = [                   
+       33 +    [{ type: 'attribute', field: 'city', op: 'eq', value: 'ist
+          +anbul' }, 'City is İstanbul'],                                
+       34 +    [{ type: 'attribute', field: 'city', op: 'neq', value: 'an
+          +kara' }, 'City is not Ankara'],                               
+       35 +    [{ type: 'attribute', field: 'city', op: 'in', value: ['an
+          +kara', 'izmir'] }, 'City is one of Ankara, İzmir'],           
+       36 +    [{ type: 'attribute', field: 'city', op: 'not_in', value: 
+          +['ankara', 'izmir'] }, 'City is none of Ankara, İzmir'],      
+       37 +    [{ type: 'attribute', field: 'city', op: 'in', value: ['bu
+          +rsa'] }, 'City is Bursa'],                                    
+       38 +    [{ type: 'attribute', field: 'city', op: 'eq', value: 'atl
+          +antis' }, 'City is “atlantis”'],                              
+       39 +    [{ type: 'attribute', field: 'country', op: 'eq', value: '
+          +TR' }, 'Country is Türkiye (TR)'],                            
+       40 +    [{ type: 'attribute', field: 'country', op: 'in', value: [
+          +'DE', 'TR'] }, 'Country is one of Germany (DE), Türkiye (TR)']
+          +,                                                             
+     … 130 more lines (ctrl+o to expand)
+  ⎿  Created frontend/tests/safety.spec.ts (+25 -0)
+       1 +// Static guard: no raw-HTML rendering anywhere in the applicat
+         +ion source.                                                    
+       2 +import { readdirSync, readFileSync, statSync } from 'node:fs'  
+       3 +import { join } from 'node:path'                               
+       4 +import { describe, expect, it } from 'vitest'                  
+       5 +                                                               
+       6 +function files(dir: string): string[] {                        
+       7 +  return readdirSync(dir).flatMap((name) => {                  
+       8 +    const p = join(dir, name)                                  
+       9 +    return statSync(p).isDirectory() ? files(p) : [p]          
+      10 +  })                                                           
+      11 +}                                                              
+      12 +                                                               
+      13 +describe('no unsafe HTML rendering', () => {                   
+      14 +  const src = join(__dirname, '..', 'src')                     
+      15 +  const all = files(src).filter((f) => /\.(vue|ts)$/.test(f))  
+      16 +                                                               
+      17 +  it('scans the source tree', () => {                          
+      18 +    expect(all.length).toBeGreaterThan(10)                     
+      19 +  })                                                           
+      20 +                                                               
+      21 +  it.each(['v-html', 'innerHTML', 'outerHTML', 'insertAdjacentH
+         +TML', 'document.write'])('never uses %s', (needle) => {        
+      22 +    const offenders = all.filter((f) => readFileSync(f, 'utf8')
+         +.includes(needle))                                             
+      23 +    expect(offenders).toEqual([])                              
+      24 +  })                                                           
+      25 +})                                                             
+  ⎿  Created frontend/tests/validation.spec.ts (+26 -0)
+       1 +import { describe, expect, it } from 'vitest'                  
+       2 +import { runeCount, validateBrief, validateName } from '@/compo
+         +sables/validation'                                             
+       3 +                                                               
+       4 +describe('client validation mirrors backend limits', () => {   
+       5 +  it('counts code points after NFC + trim', () => {            
+       6 +    expect(runeCount('  abc  ')).toBe(3)                       
+       7 +    expect(runeCount('İstanbul')).toBe(8) // NFC composes İ    
+       8 +    expect(runeCount('😀😀')).toBe(2)                          
+       9 +  })                                                           
+      10 +  it('name: 1–120, no control characters', () => {             
+      11 +    expect(validateName('   ')).toMatch(/Enter a campaign name/
+         +)                                                              
+      12 +    expect(validateName('a')).toBeNull()                       
+      13 +    expect(validateName('x'.repeat(120))).toBeNull()           
+      14 +    expect(validateName('x'.repeat(121))).toMatch(/at most 120/
+         +)                                                              
+      15 +    expect(validateName('bad\nname')).toMatch(/control characte
+         +rs/)                                                           
+      16 +  })                                                           
+      17 +  it('brief: 10–2000, newlines and tabs allowed', () => {      
+      18 +    expect(validateBrief('')).toMatch(/Describe/)              
+      19 +    expect(validateBrief('too short')).toMatch(/at least 10/)  
+      20 +    expect(validateBrief('ten chars!')).toBeNull()             
+      21 +    expect(validateBrief('line one\n\tline two')).toBeNull()   
+      22 +    expect(validateBrief('ş'.repeat(2000))).toBeNull()         
+      23 +    expect(validateBrief('ş'.repeat(2001))).toMatch(/at most 20
+         +00/)                                                           
+      24 +    expect(validateBrief('valid brief \u0007 bell')).toMatch(/c
+         +ontrol characters/)                                            
+      25 +  })                                                           
+      26 +})                                                             
+
+⏺ Unit tests green (77). Now the app-level tests: create flow, composer, errors,
+  races, workflow.
+
+⏺ Bash(cd /Users/bilgem/Desktop/devel/leet/insider-case/insider-campaign-compose
+      r-case/frontend/tests && cat > createCampaign.spec.ts <<'EOF'
+      import { afterEach, befor…)
+  ⎿   RUN  v5.1.0 /Users/bilgem/Desktop/devel/leet/insider-case/insider-cam
+     paign-composer-case/frontend
+     … +16 lines (ctrl+o to expand)
+  ⎿  Created frontend/tests/createCampaign.spec.ts (+135 -0)
+        1 +import { afterEach, beforeEach, describe, expect, it } from 'v
+          +itest'                                                        
+        2 +import { FakeBackend, deferred, json } from './helpers/fakeBac
+          +kend'                                                         
+        3 +import { CAMPAIGN_ID, EXAMPLE_BRIEF, draftCampaign, errorEnvel
+          +ope } from './helpers/fixtures'                               
+        4 +import { mountApp, settle, text, until, type MountedApp } from
+          + './helpers/mountApp'                                         
+        5 +                                                              
+        6 +let fake: FakeBackend                                         
+        7 +let app: MountedApp | null = null                             
+        8 +                                                              
+        9 +beforeEach(() => {                                            
+       10 +  fake = new FakeBackend()                                    
+       11 +  localStorage.clear()                                        
+       12 +})                                                            
+       13 +afterEach(() => {                                             
+       14 +  app?.wrapper.unmount()                                      
+       15 +  app = null                                                  
+       16 +})                                                            
+       17 +                                                              
+       18 +describe('campaign creation', () => {                         
+       19 +  it('creates a campaign and navigates to its stable URL', asy
+          +nc () => {                                                    
+       20 +    app = await mountApp('/')                                 
+       21 +    const { wrapper, router } = app                           
+       22 +    expect(router.currentRoute.value.name).toBe('campaign-new'
+          +)                                                             
+       23 +                                                              
+       24 +    await wrapper.find('#campaign-name').setValue('  İstanbul 
+          +cart recovery ')                                              
+       25 +    await wrapper.find('#campaign-brief').setValue(EXAMPLE_BRI
+          +EF)                                                           
+       26 +    await wrapper.find('[data-testid="brief-form"]').trigger('
+          +submit')                                                      
+       27 +    await settle()                                            
+       28 +                                                              
+       29 +    const posts = fake.callsTo('POST', /^\/api\/v1\/campaigns$
+          +/)                                                            
+       30 +    expect(posts).toHaveLength(1)                             
+       31 +    expect(posts[0]!.body).toEqual({ name: '  İstanbul cart re
+          +covery ', brief: EXAMPLE_BRIEF })                             
+       32 +                                                              
+       33 +    await until(() => expect(router.currentRoute.value.fullPat
+          +h).toBe(`/campaigns/${CAMPAIGN_ID}`))                         
+       34 +    await until(() => expect(text(wrapper, 'campaign-name')).t
+          +oBe('İstanbul cart recovery'))                                
+       35 +    expect(text(wrapper, 'brief-text')).toBe(EXAMPLE_BRIEF)   
+       36 +    expect(text(wrapper, 'status-badge')).toBe('Draft')       
+       37 +    // The created campaign was adopted: no extra GET was need
+          +ed.                                                           
+       38 +    expect(fake.callsTo('GET', /\/api\/v1\/campaigns\//)).toHa
+          +veLength(0)                                                   
+       39 +    // Draft: no audience request.                            
+       40 +    expect(fake.callsTo('GET', /\/audience$/)).toHaveLength(0)
+     … 95 more lines (ctrl+o to expand)
+
+⏺ Bash(cat > tests/setup.ts <<'EOF'
+      // jsdom does not implement scrolling; the router's scrollBehavior calls
+      it.…)
+  ⎿  29:    setupFiles: ['tests/setup.ts'],
+  ⎿  Created frontend/tests/setup.ts (+2 -0)
+      1 +// jsdom does not implement scrolling; the router's scrollBehavi
+        +or calls it.                                                    
+      2 +window.scrollTo = () => {}                                      
+  ⎿  Updated frontend/vite.config.ts (+1 -0)
+      26    test: {
+      27      environment: 'jsdom',
+      28      include: ['tests/**/*.spec.ts'],
+      29 +    setupFiles: ['tests/setup.ts'],                            
+      30      restoreMocks: true,
+      31      unstubGlobals: true,
+      32    },
+
+⏺ Now the composer tests (load, interpret, channels, conflicts, errors, races).
+
+⏺ Write(frontend/tests/composer.spec.ts)
+  ⎿  Wrote 506 lines to frontend/tests/composer.spec.ts
+       1 import { afterEach, beforeEach, describe, expect, it } from 'vit
+         est'
+       2 import { FakeBackend, deferred, json } from './helpers/fakeBacke
+         nd'
+       3 import {
+       4   CAMPAIGN_ID,
+       5   EXAMPLE_BRIEF,
+       6   OTHER_ID,
+       7   audienceFor,
+       8   draftCampaign,
+     … +498 lines (ctrl+o to expand)
+
+⏺ Update(frontend/tests/composer.spec.ts)
+  ⎿  Added 3 lines, removed 3 lines
+      208      // Another tab removes email meanwhile (version 2 → 3).
+      209      fake.externalChange(CAMPAIGN_ID, { channels: ['sms'] })
+      210  
+      211 -    await checkbox('email').setValue(false) // user wants SMS 
+          -only? no: wants sms removed below                             
+      212 -    await checkbox('sms').setValue(false)                     
+      211 +    // The user, still looking at version 2, unchecks email (w
+          +ants SMS only).                                               
+      212 +    await checkbox('email').setValue(false)                   
+      213      await until(() => expect(wrapper.find('[data-testid="chann
+           els-conflict"]').exists()).toBe(true))
+      214      const puts = fake.callsTo('PUT', /\/channels$/)
+      215 -    expect(puts).toHaveLength(1) // the second toggle was bloc
+          -ked while saving / after conflict                             
+      215 +    expect(puts).toHaveLength(1)                              
+      216      expect(puts[0]!.body).toEqual({ channels: ['sms'], expecte
+           d_version: 2 })
+      217      expect(text(wrapper, 'channels-conflict')).toMatch(/Your s
+           election \(SMS\) was not saved/)
+      218      // Controls are locked until the user reloads; the stale w
+           rite is not retried.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ Only text-spacing artifacts in the test helper (adjacent block elements).
+  Making the helper join element boundaries with spaces.
+
+⏺ Bash(python3 - <<'EOF'
+      p='tests/helpers/mountApp.ts'; s=open(p).read()…)
+  ⎿   RUN  v5.1.0 /Users/bilgem/Desktop/devel/leet/insider-case/insider-cam
+     paign-composer-case/frontend
+      ❯ tests/composer.spec.ts (25 tests | 1 failed) 2546ms
+     … +20 lines (ctrl+o to expand)
+  ⎿  Updated frontend/tests/composer.spec.ts (+3 -3)
+       9    errorEnvelope,
+      10    segmentedCampaign,
+      11  } from './helpers/fixtures'
+      12 -import { mountApp, settle, text, until, type MountedApp } from 
+         -'./helpers/mountApp'                                           
+      12 +import { mountApp, settle, spacedText, text, until, type Mounte
+         +dApp } from './helpers/mountApp'                               
+      13  
+      14  let fake: FakeBackend
+      15  let app: MountedApp | null = null
+     ...
+      293        }),
+      294      )
+      295      expect(text(wrapper, 'error-notice')).toMatch(/The brief c
+           annot be turned into a supported audience/)
+      296 -    const items = wrapper.findAll('[data-testid="field-error"]
+          -').map((e) => e.text().replace(/\s+/g, ' '))                  
+      296 +    const items = wrapper.findAll('[data-testid="field-error"]
+          +').map((e) => spacedText(e.element))                          
+      297      expect(items).toEqual([
+      298        'brief loyalty tier is not a supported attribute (unsupp
+           orted_targeting)',
+      299 -      'brief WhatsApp is not a supported channel (unsupported_
+          -channel) Allowed: smsemail',                                  
+      299 +      'brief WhatsApp is not a supported channel (unsupported_
+          +channel) Allowed: sms email',                                 
+      300      ])
+      301      // Not retryable: no retry button; nothing was saved.
+      302      expect(wrapper.text()).not.toMatch(/Retry interpretation/)
+  ⎿  Updated frontend/tests/helpers/mountApp.ts (+17 -1)
+      41    )
+      42  }
+      43  
+      44 +/** Visible-ish text of an element: text nodes joined by spaces
+         +, collapsed. */                                                
+      45 +export function spacedText(el: Element): string {              
+      46 +  const parts: string[] = []                                   
+      47 +  const walk = (n: Node) => {                                  
+      48 +    if (n.nodeType === Node.TEXT_NODE) parts.push(n.textContent
+         + ?? '')                                                        
+      49 +    else n.childNodes.forEach(walk)                            
+      50 +  }                                                            
+      51 +  walk(el)                                                     
+      52 +  return parts                                                 
+      53 +    .join(' ')                                                 
+      54 +    .replace(/\s+/g, ' ')                                      
+      55 +    .replace(/\s+([.,:)])/g, '$1')                             
+      56 +    .replace(/\(\s+/g, '(')                                    
+      57 +    .trim()                                                    
+      58 +}                                                              
+      59 +                                                               
+      60  export function text(w: VueWrapper, testid: string): string {
+      61    const el = w.find(`[data-testid="${testid}"]`)
+      62    expect(el.exists(), `missing [data-testid="${testid}"]`).toBe
+          (true)
+      47 -  return el.text().replace(/\s+/g, ' ').trim()                 
+      63 +  return spacedText(el.element)                                
+      64  }
+
+⏺ The prefill reads window.history.state, which memory history doesn't populate.
+  Reading it from the router's history instead (works for both).
+
+⏺ Bash(python3 - <<'EOF'
+      p='src/pages/CampaignCreatePage.vue'; s=open(p).read()…)
+  ⎿   RUN  v5.1.0 /Users/bilgem/Desktop/devel/leet/insider-case/insider-cam
+     paign-composer-case/frontend
+      Test Files  6 passed (6)
+     … +4 lines (ctrl+o to expand)
+  ⎿  Updated frontend/src/pages/CampaignCreatePage.vue (+1 -1)
+      14  // "Revise brief in a new campaign" passes the previous text vi
+          a history
+      15  // state (never via the URL). Only string values are accepted.
+      16  function readPrefill(): { name: string; brief: string } {
+      17 -  const st: unknown = typeof window !== 'undefined' ? window.hi
+         -story.state : null                                             
+      17 +  const st: unknown = router.options.history.state             
+      18    if (st && typeof st === 'object' && 'prefill' in st) {
+      19      const p = (st as { prefill: unknown }).prefill
+      20      if (p && typeof p === 'object') {
+
+⏺ All 109 passing. Adding the end-to-end workflow test and an AudienceCard
+  component test.
+
+⏺ Bash(cd /Users/bilgem/Desktop/devel/leet/insider-case/insider-campaign-compose
+      r-case/frontend/tests && cat > workflow.spec.ts <<'EOF'
+      // Integration-level: the whole…)
+  ⎿   RUN  v5.1.0 /Users/bilgem/Desktop/devel/leet/insider-case/insider-cam
+     paign-composer-case/frontend
+      Test Files  8 passed (8)
+     … +4 lines (ctrl+o to expand)
+  ⎿  Created frontend/tests/audienceCard.spec.ts (+89 -0)
+       1 +import { mount } from '@vue/test-utils'                        
+       2 +import { describe, expect, it } from 'vitest'                  
+       3 +import AudienceCard from '@/components/composer/AudienceCard.vu
+         +e'                                                             
+       4 +import type { AudienceStats, Channel } from '@/api/types'      
+       5 +import { audienceFor } from './helpers/fixtures'               
+       6 +import { spacedText } from './helpers/mountApp'                
+       7 +                                                               
+       8 +function mountCard(stats: AudienceStats | null, extra: Record<s
+         +tring, unknown> = {}) {                                        
+       9 +  const channels = (stats ? Object.keys(stats.by_channel) : [])
+         + as Channel[]                                                  
+      10 +  return mount(AudienceCard, {                                 
+      11 +    props: {                                                   
+      12 +      stats,                                                   
+      13 +      current: true,                                           
+      14 +      loading: false,                                          
+      15 +      error: null,                                             
+      16 +      errorAfterInterpret: false,                              
+      17 +      selectedChannels: channels,                              
+      18 +      savedChannels: channels,                                 
+      19 +      canEditChannels: true,                                   
+      20 +      busy: false,                                             
+      21 +      savingChannels: false,                                   
+      22 +      channelsError: null,                                     
+      23 +      conflict: false,                                         
+      24 +      unsavedChannels: null,                                   
+      25 +      ...extra,                                                
+      26 +    },                                                         
+      27 +  })                                                           
+      28 +}                                                              
+      29 +                                                               
+      30 +describe('AudienceCard', () => {                               
+      31 +  it('distinguishes users from messages and shows both identiti
+         +es', () => {                                                   
+      32 +    const w = mountCard(audienceFor(['sms', 'email']))         
+      33 +    expect(spacedText(w.find('[data-testid="kpi-matched"]').ele
+         +ment)).toBe('Matched users 412 people matching the rule')      
+      34 +    expect(spacedText(w.find('[data-testid="kpi-total"]').eleme
+         +nt)).toBe(                                                     
+      35 +      'Total eligible messages 569 messages across selected cha
+         +nnels',                                                        
+      36 +    )                                                          
+      37 +    expect(w.find('[data-testid="sms-eligible"]').text()).toBe(
+         +'251')                                                         
+      38 +    expect(w.find('[data-testid="sms-no_consent"]').text()).toB
+         +e('140')                                                       
+      39 +    expect(w.find('[data-testid="sms-no_contact"]').text()).toB
+         +e('21')                                                        
+      40 +    expect(w.find('[data-testid="email-eligible"]').text()).toB
+         +e('318')                                                       
+     … 49 more lines (ctrl+o to expand)
+  ⎿  Created frontend/tests/workflow.spec.ts (+97 -0)
+       1 +// Integration-level: the whole app (router, store, client, com
+         +ponents)                                                       
+       2 +// against the stateful fake HTTP backend: create → interpret →
+         + channels.                                                     
+       3 +import { afterEach, beforeEach, describe, expect, it } from 'vi
+         +test'                                                          
+       4 +import { FakeBackend } from './helpers/fakeBackend'            
+       5 +import { CAMPAIGN_ID, EXAMPLE_BRIEF } from './helpers/fixtures'
+       6 +import { mountApp, settle, text, until, type MountedApp } from 
+         +'./helpers/mountApp'                                           
+       7 +                                                               
+       8 +let fake: FakeBackend                                          
+       9 +let app: MountedApp | null = null                              
+      10 +                                                               
+      11 +beforeEach(() => {                                             
+      12 +  fake = new FakeBackend()                                     
+      13 +  localStorage.clear()                                         
+      14 +})                                                             
+      15 +afterEach(() => {                                              
+      16 +  app?.wrapper.unmount()                                       
+      17 +  app = null                                                   
+      18 +})                                                             
+      19 +                                                               
+      20 +describe('full workflow', () => {                              
+      21 +  it('create → interpret → select channels → reload by URL', as
+         +ync () => {                                                    
+      22 +    app = await mountApp('/')                                  
+      23 +    const { wrapper, router } = app                            
+      24 +                                                               
+      25 +    // Demo provider is announced in the shell.                
+      26 +    await until(() => expect(text(wrapper, 'provider-badge')).t
+         +oMatch(/Demo AI/))                                             
+      27 +                                                               
+      28 +    // 1. Create                                               
+      29 +    await wrapper.find('#campaign-name').setValue('İstanbul car
+         +t recovery')                                                   
+      30 +    await wrapper.find('#campaign-brief').setValue(EXAMPLE_BRIE
+         +F)                                                             
+      31 +    await wrapper.find('[data-testid="create-submit"]').trigger
+         +('click')                                                      
+      32 +    await wrapper.find('[data-testid="brief-form"]').trigger('s
+         +ubmit')                                                        
+      33 +    await until(() => expect(router.currentRoute.value.path).to
+         +Be(`/campaigns/${CAMPAIGN_ID}`))                               
+      34 +    expect(fake.callsTo('POST', /^\/api\/v1\/campaigns$/)).toHa
+         +veLength(1)                                                    
+      35 +                                                               
+      36 +    // 2. Interpret                                            
+      37 +    await until(() => expect(wrapper.find('[data-testid="interp
+         +ret-button"]').exists()).toBe(true))                           
+      38 +    await wrapper.find('[data-testid="interpret-button"]').trig
+         +ger('click')                                                   
+      39 +    await until(() => expect(wrapper.find('[data-testid="audien
+         +ce-stats"]').exists()).toBe(true))                             
+      40 +    expect(text(wrapper, 'brief-text')).toBe(EXAMPLE_BRIEF) // 
+         +what was asked                                                 
+     … 57 more lines (ctrl+o to expand)
+
+⏺ 118 tests pass. Running the full typecheck (app + tests + vite config) and
+  build.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ Clean. Now backend checks (make test, go test -race, make lint).
+
+  Ran 2 shell commands (ctrl+o to expand)
+
+⏺ staticcheck download failed on a TLS error in the sandbox; retrying the
+  project's lint target outside the sandbox.
+
+  Ran 5 shell commands (ctrl+o to expand)
+
+⏺ Lint equivalent passes (gofmt, vet, staticcheck v0.8.2 built from the local
+  module cache since proxy.golang.org TLS fails here). Now the real browser
+  smoke test — checking for PostgreSQL.
+
+  Ran 3 shell commands (ctrl+o to expand)
+
+⏺ I'm out of usage, so I'm skipping the browser smoke test and just writing the
+  short frontend README section.
+
+⏺ Write(README.md)
+  ⎿  Wrote 25 lines to README.md
+       1 # Smart Campaign Composer
+       2 
+       3 See `docs/ARCHITECTURE.md`, `DECISIONS.md`, `docs/ROADMAP.md` an
+         d `CLAUDE.md`.
+       4 
+       5 ## Frontend development (Vue 3 + TypeScript + Vite)
+       6 
+       7 Requires Node ≥ 22.13. The dev server proxies `/api` and `/ready
+         z` to the Go API
+       8 (`http://localhost:8080` by default; override with `VITE_API_PRO
+     … +18 lines (ctrl+o to expand)
+⏺ Your usage limit was reached, so I stopped here. CP7 is mostly done. The two
+  pieces left are the real browser smoke test and the architecture-doc notes.
+  Nothing is committed.
+
+  Files:
+  - New frontend/:
+    - Setup: package.json (Vue 3.5, vue-router 4, Pinia 3, Vite 8, Vitest 5,
+      jsdom 29, vue-tsc, TypeScript 5.9), vite.config.ts (dev proxy for /api and
+      /readyz to :8080), strict TS configs, index.html.
+    - src/api/: types.ts copies the CP6 DTOs field for field, decode.ts checks
+      every response at runtime, client.ts is the typed client, errors.ts maps
+      each error code to UI guidance.
+    - src/segment/: presenter.ts turns the stored rule into readable conditions,
+      and cities.ts copies the 81-city list from the Go code with the same
+      Turkish-aware matching.
+    - src/stores/campaign.ts, src/composables/*, src/pages/*,
+      src/components/{composer,ui}/*, src/styles/main.css (plain CSS, no
+      framework).
+    - tests/: 8 spec files.
+  - New README.md with a frontend dev section. No backend files changed.
+
+  Routes: /campaigns/new (create), /campaigns/:id (composer; works on refresh
+  and direct links), and a not-found page.
+
+  Components: BriefInput, BriefCard, InterpretationCard, AiSourceBadge,
+  SegmentRuleView, AudienceCard, ChannelSelector, FieldErrors, RawProposal,
+  ErrorNotice, StatusBadge.
+
+  API use: only the CP6 endpoints, with their exact field names: create
+  campaign, get campaign, interpret (body {}), get audience, and set channels
+  ({channels, expected_version}). The shell also reads GET /readyz for
+  llm_provider. No new routes or fields.
+
+  How the async state stays consistent:
+  - Leaving or switching campaigns: pending requests are aborted, and any
+    response that still arrives is ignored.
+  - Older campaign responses: a response with a lower version than the one shown
+    is dropped.
+  - Audience numbers: shown only when campaign_version matches the campaign on
+    screen. Older results are dropped; newer ones show a "changed elsewhere"
+    notice instead of being mixed in.
+  - One change at a time: interpret and channel updates block each other, and
+    controls are disabled while one is in flight.
+  - 409 version_conflict:
+    - Your attempted selection is kept, and nothing is retried automatically.
+    - Channel controls stay locked until you click "Reload latest campaign".
+    - After reloading, you can re-apply your selection or keep the saved one.
+  - Interpretation saved but preview failed: the UI says the interpretation was
+    saved and offers a retry of GET /audience only.
+  - Untrusted text: there is no v-html anywhere, and a test enforces this.
+    raw_proposal sits in a collapsed diagnostic section and is shown as plain
+    text.
+
+  Results:
+  - npm test: 118 tests pass, covering all 13 required scenarios plus the full
+    create → interpret → channels workflow test.
+  - npm run typecheck and npm run build pass.
+  - make test and go test -race ./... pass.
+  - make lint: gofmt and vet pass. make lint itself fails because
+    proxy.golang.org can't be reached from this machine (certificate error). I
+    ran the same staticcheck v0.8.2 built from the local Go module cache, and it
+    passes.
+
+  Not done:
+  - Browser smoke test: not run. All results above come from simulated HTTP in
+    Vitest, not a real browser. The composer-pg container is running, but it
+    uses POSTGRES_USER=postgres and I didn't have the password. Use the README
+    steps with the right DATABASE_URL.
+  - Architecture doc: the CP6 API clarifications aren't written into
+    docs/ARCHITECTURE.md yet.
+
+  Deviations and API gaps:
+  - Suggested channels: the API doesn't return suggested_channels on its own.
+    The UI shows the selected channels and explains that they were filled from
+    the AI suggestion on the first interpretation.
+  - Editing a brief: there is no endpoint for it, so "Revise brief" opens a new,
+    prefilled campaign.
+  - Provider badge: it calls /readyz, so the CP8 nginx config needs to proxy
+    that path too (or the badge just hides).
+  - Pinia: I used it, as the architecture specifies. Your prompt said a state
+    library wasn't required unless justified; the justification is that the
+    architecture calls for one store for the active campaign.
+
+❯ We are resuming Smart Campaign Composer CP7 after the previous Claude Code    
+  session reached its usage limit.                                              
+  Do NOT restart CP7 or rebuild the frontend. Most of the implementation is     
+  already complete.                                                             
+  First inspect the existing uncommitted frontend changes, README.md,           
+  CLAUDE.md, and only the relevant architecture and roadmap sections.           
+  Previous session reported:                                                    
+                                                                                
+  * Vue 3 + TypeScript + Vite frontend implemented.                             
+  * Pinia campaign store with version and request-epoch guards.                 
+  * Real CP6 API integration.                                                   
+  * Campaign creation and composer routes.                                      
+  * AI interpretation, segment presenter, audience dashboard and channel        
+  selector.                                                                     
+  * 118 passing frontend tests.                                                 
+  * Passing typecheck and production build.                                     
+  * Passing backend tests and race detector.                                    
+  * Staticcheck v0.8.2 passed from the local module cache.                      
+  * No commits made.                                                            
+                                                                                
+  The remaining work is CP7 verification and documentation, not feature         
+  expansion.                                                                    
+  1. Real browser smoke test                                                    
+  Use the existing project setup and available browser tooling, if accessible.  
+  Bring up the Go API in demo mode, a PostgreSQL 16 database with migrations    
+  and seed data, and the Vue/Vite application.                                  
+  Inspect `.env.example`, README.md, Makefile and existing Docker configuration 
+  for the correct credentials and commands. Do not guess the PostgreSQL         
+  password or modify an existing container's data without explicit              
+  authorization.                                                                
+  If the existing `composer-pg` container is not usable, use a separate         
+  disposable PostgreSQL container with documented development credentials.      
+  Exercise the actual browser workflow:                                         
+                                                                                
+  1. Open the frontend.                                                         
+  2. Create a campaign with the Istanbul abandoned-cart example brief.          
+  3. Interpret it with the demo AI provider.                                    
+  4. Verify the summary and the normalized segment conditions.                  
+  5. Verify the audience dashboard displays real database counts.               
+  6. Deselect all delivery channels.                                            
+  7. Verify matching users remain unchanged while eligible messages become      
+  zero.                                                                         
+  8. Reload the campaign URL directly and verify persisted state.               
+  9. Check the browser console and network requests for errors.                 
+  10. Check responsive layouts at desktop and mobile widths.                    
+                                                                                
+  Capture screenshots if the environment supports them.                         
+  Distinguish an actual browser test from an HTTP-only or Vitest simulation.    
+  If browser tooling is unavailable, do not claim the browser smoke test        
+  passed. Run the deepest feasible real-server HTTP verification and report the 
+  browser test as outstanding.                                                  
+  2. Focused frontend quality review                                            
+  Inspect the actual implementation rather than relying only on the previous    
+  session summary.                                                              
+  Pay particular attention to:                                                  
+                                                                                
+  * Pinia state and async race handling.                                        
+  * Campaign version conflict recovery.                                         
+  * Interpretation saved but audience preview failed.                           
+  * Demo provider identification.                                               
+  * Correct display of zero selected channels.                                  
+  * Human-readable DSL rule rendering.                                          
+  * Safe rendering of untrusted strings and raw_proposal.                       
+  * URL refresh and navigation.                                                 
+  * Mobile responsiveness.                                                      
+                                                                                
+  Fix only real issues discovered through inspection or testing.                
+  Do not redesign the UI or introduce new features.                             
+  3. Documentation                                                              
+  Update docs/ARCHITECTURE.md with the small CP6 API clarifications already     
+  implemented:                                                                  
+                                                                                
+  * Exact Slice 1a endpoint contracts.                                          
+  * Interpretation success with an optional audience_error.                     
+  * Version-conflict behavior.                                                  
+  * Empty-channel semantics.                                                    
+  * The absence of a campaign-list endpoint and brief-edit endpoint in Slice    
+  1a.                                                                           
+                                                                                
+  Keep these notes concise and consistent with the existing document.           
+  Check the frontend development instructions in README.md for accuracy.        
+  4. Verification                                                               
+  Run:                                                                          
+                                                                                
+  * Frontend tests.                                                             
+  * Frontend typecheck.                                                         
+  * Frontend production build.                                                  
+  * Backend make test.                                                          
+  * Backend race tests.                                                         
+  * Backend integration tests where practical.                                  
+  * Lint.                                                                       
+                                                                                
+  The known proxy.golang.org TLS certificate problem may block downloading      
+  staticcheck. If so, distinguish that from actual staticcheck findings; use    
+  the locally cached pinned version if available.                               
+  5. Final report                                                               
+  Report:                                                                       
+                                                                                
+  1. Any fixes made and files changed.                                          
+  2. Real browser smoke-test result, or the exact reason it could not run.      
+  3. Screenshots if available.                                                  
+  4. Exact verification results.                                                
+  5. Any remaining blockers.                                                    
+  6. Whether CP7 is ready to commit.                                            
+                                                                                
+  Do not commit anything.                                                       
+  Do not begin CP8.                                                             
+  Stop after CP7 review.                                                        
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ The existing composer-pg password isn't documented anywhere, so I'll use a
+  separate disposable PostgreSQL 16 container on port 5433 with the .env.example
+  credentials.
+
+  Ran 2 shell commands (ctrl+o to expand)
+
+⏺ The migrate CLI download hits the same proxy.golang.org certificate problem.
+  Trying the pinned version from the backend module and local cache instead.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ Migration applied (go.mod unchanged). Seeding and starting the API in demo
+  mode.
+
+  Ran 2 shell commands (ctrl+o to expand)
+
+⏺ Now the Vite dev server via a launch config for the browser pane.
+
+⏺ Bash(cd /Users/bilgem/Desktop/devel/leet/insider-case/insider-campaign-compose
+      r-case && curl -s localhost:8080/readyz; echo; ls .claude 2>&1; mkdir -p
+      .claude && cat…)
+  ⎿  {
+       "status": "ready",
+       "database": "ok",
+     … +6 lines (ctrl+o to expand)
+  ⎿  Created .claude/launch.json (+11 -0)
+       1 +{                                                              
+       2 +  "version": "0.0.1",                                          
+       3 +  "configurations": [                                          
+       4 +    {                                                          
+       5 +      "name": "frontend",                                      
+       6 +      "runtimeExecutable": "npm",                              
+       7 +      "runtimeArgs": ["--prefix", "frontend", "run", "dev"],   
+       8 +      "port": 5173                                             
+       9 +    }                                                          
+      10 +  ]                                                            
+      11 +}                                                              
+  ⎿  Error: navigation to http://localhost:5173 was denied or failed
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ The Vite server didn't come up through the launch config. Checking it
+  directly.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ The preview is stuck at "starting". I'll point the launch config at the Vite
+  binary directly instead.
+
+⏺ Bash(cd /Users/bilgem/Desktop/devel/leet/insider-case/insider-campaign-compose
+      r-case && cat > .claude/launch.json <<'EOF'
+      {…)
+  ⎿  Updated .claude/launch.json (+2 -2)
+       3    "configurations": [
+       4      {
+       5        "name": "frontend",
+       6 -      "runtimeExecutable": "npm",                              
+       7 -      "runtimeArgs": ["--prefix", "frontend", "run", "dev"],   
+       6 +      "runtimeExecutable": "frontend/node_modules/.bin/vite",  
+       7 +      "runtimeArgs": ["frontend", "--host", "127.0.0.1"],      
+       8        "port": 5173
+       9      }
+      10    ]
+  Searched for 1 pattern, ran 1 shell command (ctrl+o to expand)
+
+⏺ The preview runner probably can't see the nvm-managed node. Instead I'll run
+  Vite myself in the background and open its URL in the browser pane, without a
+  machine-specific launch config.
+
+  Ran 2 shell commands (ctrl+o to expand)
+
+⏺ Vite is up and proxying to the API. Opening it in the browser pane.
+
+⏺ The browser is running, and I've spotted two cosmetic issues: an underlined
+  "New campaign" link and a doubled gap in the demo badge. I'll move on with the
+  workflow and fix those afterward.
+
+⏺ The stable URL is set up, but the tab title still reads "Campaign" instead of
+  the campaign name, since a campaign adopted right after creation never
+  triggers the title watcher. I'm interpreting the results next.
+
+⏺ Interpretation saved (v2) and labelled as the demo interpreter. Reading the
+  full page text to check the rule and the counts.
+
+⏺ Identities all hold (196 = 112+69+15 = 115+73+8 = 65+47+50+34). Now checking
+  those numbers against an independent hand-written SQL query on the seeded
+  database.
+
+  Searched for 1 pattern, ran 1 shell command (ctrl+o to expand)
+
+⏺ The independent SQL agrees exactly (196 / 112 / 15 / 115 / 8). Next: deselect
+  both channels in the browser.
+
+⏺ Zero channels: matched users still 196, messages 0, with the explanation
+  shown. Checking network traffic, then a hard reload of the URL.
+⏺ A direct reload restores version 4, no channels, 196 matched and 0 messages.
+  Now the mobile layout (375×812).
+
+⏺ Real mobile bug: the "Demo interpreter · not a live model" badge in the
+  Interpretation header overflows to 395px, so the page scrolls sideways. Here
+  is a screenshot before the fix:
+
+⏺ The screenshot confirms the clipped badge. Fixing that, the underlined
+  link-button, the badge spacing and the tab title:
+
+⏺ Bash(cd /Users/bilgem/Desktop/devel/leet/insider-case/insider-campaign-compose
+      r-case/frontend/src && python3 - <<'EOF'
+      import re…)
+  ⎿  138:  .topbar-right .long {
+  ⎿  Updated frontend/src/App.vue (+1 -1)
+      36            data-testid="provider-badge"
+      37          >
+      38            <span class="dot" style="background: currentColor" ar
+          ia-hidden="true" />
+      39 -          Demo AI<span class="long">&nbsp;mode — not a live mod
+         -el</span>                                                      
+      39 +          Demo AI<span class="long">mode — not a live model</sp
+         +an>                                                            
+      40          </span>
+      41          <span v-else-if="provider === 'anthropic'" class="badge
+           badge-primary" data-testid="provider-badge">
+      42            <span class="dot" style="background: currentColor" ar
+          ia-hidden="true" />
+  ⎿  Updated frontend/src/components/composer/AiSourceBadge.vue (+5 -0)
+      27    display: inline-flex;
+      28    flex-wrap: wrap;
+      29    gap: 6px;
+      30 +  min-width: 0;                                                
+      31 +  max-width: 100%;                                             
+      32 +}                                                              
+      33 +.ai-source .badge {                                            
+      34 +  white-space: normal;                                         
+      35  }
+      36  </style>
+  ⎿  Updated frontend/src/pages/CampaignComposerPage.vue (+12 -6)
+      64    { immediate: true },
+      65  )
+      66  
+      67 -watch(campaign, (c) => {                                       
+      68 -  if (c) {                                                     
+      69 -    recent.remember(c.id, c.name)                              
+      70 -    document.title = `${c.name} · Campaign Composer`           
+      71 -  }                                                            
+      72 -})                                                             
+      67 +// flush 'post': runs after the router's afterEach sets the gen
+         +eric title,                                                    
+      68 +// including for a campaign adopted right after creation.      
+      69 +watch(                                                         
+      70 +  campaign,                                                    
+      71 +  (c) => {                                                     
+      72 +    if (c) {                                                   
+      73 +      recent.remember(c.id, c.name)                            
+      74 +      document.title = `${c.name} · Campaign Composer`         
+      75 +    }                                                          
+      76 +  },                                                           
+      77 +  { immediate: true, flush: 'post' },                          
+      78 +)                                                              
+      79  
+      80  onBeforeUnmount(() => store.close())
+      81  
+  ⎿  Updated frontend/src/styles/main.css (+2 -0)
+      143    font-size: 14px;
+      144    cursor: pointer;
+      145    white-space: nowrap;
+      146 +  text-decoration: none;                                      
+      147    transition:
+      148      background-color 0.12s,
+      149      border-color 0.12s,
+     ...
+      191  }
+      192  .card-header {
+      193    display: flex;
+      194 +  flex-wrap: wrap;                                            
+      195    align-items: flex-start;
+      196    justify-content: space-between;
+      197    gap: var(--space-3);
+
+⏺ Now a short regression assertion for the title fix, then rerun the frontend
+  suite.
+
+⏺ Bash(cd /Users/bilgem/Desktop/devel/leet/insider-case/insider-campaign-compose
+      r-case/frontend && python3 - <<'EOF'
+      p='tests/createCampaign.spec.ts'; s=open(p).read()…)
+  ⎿   RUN  v5.1.0 /Users/bilgem/Desktop/devel/leet/insider-case/insider-cam
+     paign-composer-case/frontend
+      Test Files  8 passed (8)
+     … +4 lines (ctrl+o to expand)
+  ⎿  Updated frontend/tests/createCampaign.spec.ts (+1 -0)
+      34      await until(() => expect(text(wrapper, 'campaign-name')).to
+          Be('İstanbul cart recovery'))
+      35      expect(text(wrapper, 'brief-text')).toBe(EXAMPLE_BRIEF)
+      36      expect(text(wrapper, 'status-badge')).toBe('Draft')
+      37 +    await until(() => expect(document.title).toBe('İstanbul car
+         +t recovery · Campaign Composer'))                              
+      38      // The created campaign was adopted: no extra GET was neede
+          d.
+      39      expect(fake.callsTo('GET', /\/api\/v1\/campaigns\//)).toHav
+          eLength(0)
+      40      // Draft: no audience request.
+
+⏺ Tests still pass. Re-checking mobile overflow in the real browser after the
+  fix:
+
+⏺ Mobile has no horizontal overflow now. Next, a real-server error path in the
+  browser: a demo-declined brief (WhatsApp channel) created via the API, then
+  opened and interpreted in the UI.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ That brief was accepted: the demo reports WhatsApp under "unsupported" and
+  keeps SMS, which is correct backend behaviour. I'll look up which demo briefs
+  actually get declined.
+
+  Ran 2 shell commands (ctrl+o to expand)
+⏺ The real-server invalid_brief renders correctly: field details are shown,
+  nothing is saved, and the status stays Draft. A quick curl check of the real
+  409 and 422 envelopes:
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ Envelopes match the client's decoder. Last browser check is a real
+  cross-request conflict: I'll change channels via curl behind the open page,
+  then toggle in the UI.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ The conflict flow checks out: the stale write got its 409, and Re-apply saves
+  Email at v6. The only console errors come from the deliberate 422/409
+  responses, so I'm moving on to the docs.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ Update(docs/ARCHITECTURE.md)
+  ⎿  Added 19 lines
+      703  
+      704  Mock provider: `POST /v1/sms`, `POST /v1/email` (header `Idemp
+           otency-Key`), `GET /admin/stats`, `POST /admin/reset` (tests o
+           nly). Fault rates via environment.
+      705  
+      706 +### 11.1 Slice 1a contracts as implemented (CP6)              
+      707 +                                                              
+      708 +Only these campaign routes exist in Slice 1a: there is **no** 
+          +`GET /campaigns` (list) and **no** endpoint to edit `name`/`br
+          +ief`. The frontend opens campaigns by URL (`/campaigns/{id}`) 
+          +and revises a brief by creating a new campaign. Request bodies
+          + are strict JSON objects (`Content-Type: application/json`, un
+          +known/duplicate properties → `422 validation_failed` with per-
+          +field `details`).                                             
+      709 +                                                              
+      710 +| Request | Success | Notes |                                 
+      711 +|---|---|---|                                                 
+      712 +| `POST /campaigns` `{name, brief}` | `201` campaign | name 1–
+          +120, brief 10–2000 runes after NFC + trim; no control characte
+          +rs (brief allows `\n`, `\t`) |                                
+      713 +| `GET /campaigns/{id}` | `200` campaign | id must be a canoni
+          +cal UUID (else `422`); unknown → `404 not_found` |            
+      714 +| `POST /campaigns/{id}/interpret` (body empty or `{}`) | `200
+          + {campaign, audience, audience_error?}` | allowed in draft/seg
+          +mented/content_ready (`pending_approval`/`approved` → `409 inv
+          +alid_state` until Slice 3 can revoke the approval) |          
+      715 +| `GET /campaigns/{id}/audience` | `200 {campaign_id, campaign
+          +_version, segment_version, channels, audience}` | draft → `409
+          + invalid_state` |                                             
+      716 +| `PUT /campaigns/{id}/channels` `{channels, expected_version}
+          +` | `200` campaign | segmented/content_ready only |           
+      717 +                                                              
+      718 +- **Campaign DTO**: `{id, name, brief, status, channels, segme
+          +nt_rule, segment_version, interpretation{summary, assumptions,
+          + unsupported, model, prompt_version}, content_brief{goal, tone
+          +, length, offer}, version, created_at, updated_at}`; `segment_
+          +rule`, `interpretation`, `content_brief` are `null` before the
+          + first successful interpretation. `interpretation.model` is `"
+          +demo"` for the demo interpreter. `suggested_channels` is not p
+          +ersisted separately (see channels below).                     
+      719 +- **Interpretation saved, audience failed**: the interpretatio
+          +n is committed before the audience is computed. If the statist
+          +ics then fail, the response is still `200` with `audience: nul
+          +l` and `audience_error` (same shape as the error envelope body
+          +, e.g. `audience_unavailable`, retryable). Clients retry `GET 
+          +/audience`, never the interpretation.                         
+      720 +- **Interpretation errors** (nothing is saved): `422 invalid_b
+          +rief` (demo declines; field `details`, not retryable), `422 ai
+          +_output_invalid` (`details` + `raw_proposal`), `422 llm_refuse
+          +d`, `503 llm_unavailable` (retryable), `502 llm_truncated` / `
+          +llm_rejected`; `409 version_conflict` if the campaign changed 
+          +while the model was working (the result is discarded).        
+      721 +- **Version conflicts**: every write bumps `version`. `PUT /ch
+          +annels` is a compare-and-set on `expected_version` → `409 vers
+          +ion_conflict` on mismatch; nothing is merged or retried server
+          +-side. A selection equal to the stored one is a no-op (version
+          + unchanged). Audience responses carry `campaign_version` so cl
+          +ients can discard statistics computed for another version.    
+      722 +- **Channels**: canonical order `sms, email`, de-duplicated; u
+          +nknown values → `422` (`channels[i]`, `not_allowed`). On the *
+          +*first** successful interpretation (`segment_version = 0` and 
+          +no channels) the channels are set from the AI's `suggested_cha
+          +nnels`; afterwards only `PUT /channels` changes them.         
+      723 +- **Empty selection** (`[]`) is valid and explicit: `by_channe
+          +l = {}`, `messages = 0`, `reach_users = {both: 0, sms_only: 0,
+          + email_only: 0, unreachable: matched_users}`; `matched_users` 
+          +is unaffected.                                                
+      724 +                                                              
+      725  ---
+      726  
+      727  ## 12. Streaming (SSE)
+
+⏺ Adding a short §14 note on the frontend's /readyz dependency (relevant for
+  CP8's nginx) and tightening the README.
+
+⏺ Update(docs/ARCHITECTURE.md)
+  ⎿  Added 1 line
+      764  - Expiry/withdraw/supersede detected on any response (`409 app
+           roval_expired` or status change) → banner "Approval expired — 
+           review again".
+      765  - Composables: `useContentStream` (fetch-stream SSE parser, ab
+           ort on unmount/regenerate), `useCampaignEvents` (EventSource, 
+           backoff, close on terminal), `useCampaign`.
+      766  - No `v-html` for any AI or user content; variables highlighte
+           d via tokenized spans. Client-side counters are UX only; the s
+           erver is authoritative.
+      767 +- Slice 1a (CP7): routes `/campaigns/new` and `/campaigns/:id`
+          + (reloadable). The store applies a campaign only if its `versi
+          +on` is not older than the one shown, shows audience statistics
+          + only for the matching `campaign_version`, aborts superseded r
+          +equests, and never retries a `409` automatically (the rejected
+          + channel selection is offered for an explicit re-apply after r
+          +eload). The shell reads `llm_provider` from `GET /readyz` to l
+          +abel demo mode, so the CP8 proxy must forward `/readyz` as wel
+          +l as `/api/`.                                                 
+      768  
+      769  ---
+      770  
+
+⏺ Write(README.md)
+  ⎿  Added 17 lines, removed 12 lines
+       4  
+       5  ## Frontend development (Vue 3 + TypeScript + Vite)
+       6  
+       7 -Requires Node ≥ 22.13. The dev server proxies `/api` and `/read
+         -yz` to the Go API                                              
+       8 -(`http://localhost:8080` by default; override with `VITE_API_PR
+         -OXY_TARGET`).                                                  
+       7 +Requires Node ≥ 22.13 and a PostgreSQL 16 database. The Vite de
+         +v server proxies                                               
+       8 +`/api` and `/readyz` to the Go API (`http://localhost:8080` by 
+         +default; override                                              
+       9 +with `VITE_API_PROXY_TARGET`).                                 
+      10  
+      11  ```bash
+      11 -# 1. Backend (PostgreSQL migrated + seeded, demo LLM when no ke
+         -y is set)                                                      
+      12 -export DATABASE_URL='postgres://USER:PASS@localhost:5432/compos
+         -er?sslmode=disable'                                            
+      13 -make migrate && make seed                                      
+      14 -cd backend && go run ./cmd/api                                 
+      12 +# 1. Database (credentials as in .env.example), migrated and se
+         +eded                                                           
+      13 +export DATABASE_URL='postgres://composer:composer@localhost:543
+         +2/composer?sslmode=disable'                                    
+      14 +make migrate                                                   
+      15 +make seed            # or `make seed-today` so "last N days" ru
+         +les match today's data                                         
+      16  
+      16 -# 2. Frontend (separate terminal)                              
+      17 +# 2. API in demo mode (no ANTHROPIC_API_KEY needed; nothing is 
+         +sent to Claude)                                                
+      18 +cd backend && LLM_PROVIDER=demo go run ./cmd/api               
+      19 +                                                               
+      20 +# 3. Frontend, in a second terminal                            
+      21  cd frontend && npm install && npm run dev   # http://localhost:
+          5173
+      22  ```
+      23  
+      20 -Scripts: `npm test` (Vitest, jsdom, no network), `npm run typec
+         -heck`                                                          
+      21 -(vue-tsc strict), `npm run build`.                             
+      24 +Frontend scripts: `npm test` (Vitest + jsdom, no network), `npm
+         + run typecheck`                                                
+      25 +(strict vue-tsc for app and tests), `npm run build`.           
+      26  
+      23 -Routes: `/campaigns/new` (create), `/campaigns/:id` (composer; 
+         -reloadable,                                                    
+      24 -shareable URL). There is no campaign-listing endpoint; the crea
+         -te page keeps a                                                
+      25 -local "recently opened" list in `localStorage` (IDs and names o
+         -nly).                                                          
+      27 +Routes: `/campaigns/new` (create) and `/campaigns/:id` (compose
+         +r; the URL can be                                              
+      28 +reloaded or shared). There is no campaign-listing endpoint in S
+         +lice 1a; the                                                   
+      29 +create page keeps a "recently opened" list in `localStorage` (I
+         +Ds and names only)                                             
+      30 +and can open a campaign by ID.                                 
+
+⏺ Docs updated. Running the full verification suite.
+
+  Ran 4 shell commands (ctrl+o to expand)
+
+⏺ Now the integration tests (testcontainers, -race), running in the background.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ The integration tests are running in the background; I'll pick up the results
+  when they finish.
+
+⏺ Background command "Run integration tests with race detector" completed (exit
+code 0)
+
+  Read 1 file (ctrl+o to expand)
+
+⏺ Integration tests pass. Shutting down the smoke-test processes and the
+  disposable container I created (composer-pg is left untouched).
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ Background command "Run Go API in demo mode (background)" completed (exit code
+0)
+
+⏺ Background command "Run Vite dev server in background" failed with exit code
+143
+  ⎿  Error: Not shown: commit does not hold right now (app actions available: 
+     none), so the app could not draw that button and would drop your question 
+     with it. Call wrap_up again with only available app actions, or say it as a
+     reply ({"label": "…"}), only for something you can do yourself when it is 
+     clicked.
+
+⏺ CP7 is ready to commit. The real browser test passed, all tests and checks
+  pass, and the review turned up only four small cosmetic or layout issues, now
+  fixed. Nothing is committed.
+
+  1. Fixes and files changed
+
+  These are real issues I found in the browser:
+  - Mobile horizontal scroll at 375px: the "Demo interpreter · not a live model"
+    badge didn't fit in the Interpretation header (page was 395px wide). Card
+    headers now wrap and that badge can break onto two lines. Re-checked: page
+    width is now exactly 375px. Files: frontend/src/styles/main.css,
+    frontend/src/components/composer/AiSourceBadge.vue.
+  - Underlined "New campaign" button in the top bar: link-styled buttons now
+    have no underline (main.css).
+  - Double gap in the "Demo AI mode" top-bar badge: removed a stray non-breaking
+    space (frontend/src/App.vue).
+  - Tab title stayed "Campaign" right after creating a campaign: it now shows
+    the campaign name (frontend/src/pages/CampaignComposerPage.vue). I added an
+    assertion for this to frontend/tests/createCampaign.spec.ts.
+
+  I reviewed the store (stale-response handling, conflict recovery, the
+  interpretation-saved-but-preview-failed case), the rule presenter and the
+  escaping of untrusted text. I found no logic defects. The browser runs below
+  confirmed the store behaviour against the real server.
+
+  Docs:
+  - docs/ARCHITECTURE.md: new §11.1 with the Slice 1a contracts as built. It
+    covers the exact endpoints and DTOs, interpretation success with an optional
+    audience_error, the error codes, version-conflict behaviour, channel and
+    empty-selection rules, and that there is no list or brief-edit endpoint. I
+    also added a short CP7 note to §14.
+  - README.md: corrected the run steps (.env.example credentials, make 
+    seed-today, LLM_PROVIDER=demo).
+
+  2. Real browser smoke test: passed
+
+  This ran in the in-app browser against the real Go API in demo mode and a real
+  database, not a simulation. The existing composer-pg container's password
+  isn't documented, so I didn't touch it. Instead I started a disposable
+  PostgreSQL 16 container on port 5433 with the .env.example credentials,
+  migrated and seeded it, and removed it afterwards.
+
+  - Create: the example brief created a campaign and moved to /campaigns/{id} as
+    a draft.
+  - Interpret: the summary was shown, labelled "Demo interpreter · not a live
+    model". The conditions read "City is İstanbul" and "Abandoned cart in the
+    last 30 days".
+  - Counts: 196 matched users; SMS 112 eligible / 69 no consent / 15 no contact;
+    email 115 / 73 / 8; reach 65 both / 47 SMS only / 50 email only / 34
+    unreachable; 227 messages. A separate SQL query I wrote by hand gave the
+    same 196 / 112 / 15 / 115 / 8.
+  - No channels selected: still 196 matched users, 0 messages, with the "No
+    delivery channels selected" explanation.
+  - Direct reload of the URL: version 4 with no channels was restored exactly.
+  - Real version conflict: I changed the channels with curl while the page was
+    open, then toggled Email in the UI. The server answered 409, the controls
+    locked, and the UI said the selection was not saved. "Reload latest" showed
+    the saved SMS; "Re-apply" then saved Email at version 6 with the matching
+    numbers.
+  - Real rejected brief: "Send 10% off to VIP customers in Istanbul" showed the
+    invalid_brief details, saved nothing and stayed a draft.
+  - Console and network: no JavaScript errors. The only console errors are the
+    browser's own log lines for the 422 and 409 I triggered on purpose.
+  - Layouts: desktop 800px (single column) and mobile 375px with no overflow
+    after the fix. I didn't check a wide two-column viewport.
+
+  3. Screenshots
+
+  I took them in the browser pane during the run: the create form, the draft
+  composer, the interpretation, the no-channels audience view, mobile before and
+  after the fix, and the invalid_brief error. They aren't saved as files in the
+  repo.
+
+  4. Verification results
+
+  ┌────────────────────────────────────────────────┬────────────────────────┐
+  │                     Check                      │         Result         │
+  ├────────────────────────────────────────────────┼────────────────────────┤
+  │ Frontend npm test                              │ 118 tests passed, 8    │
+  │                                                │ files                  │
+  ├────────────────────────────────────────────────┼────────────────────────┤
+  │ npm run typecheck (app, tests, Vite config)    │ passes                 │
+  ├────────────────────────────────────────────────┼────────────────────────┤
+  │ npm run build                                  │ passes                 │
+  ├────────────────────────────────────────────────┼────────────────────────┤
+  │ make test                                      │ passes                 │
+  ├────────────────────────────────────────────────┼────────────────────────┤
+  │ go test -race ./...                            │ 10 packages ok         │
+  ├────────────────────────────────────────────────┼────────────────────────┤
+  │ make test-integration (testcontainers, race    │ ok                     │
+  │ detector)                                      │                        │
+  ├────────────────────────────────────────────────┼────────────────────────┤
+  │ gofmt / go vet (both tag sets)                 │ clean                  │
+  ├────────────────────────────────────────────────┼────────────────────────┤
+  │ staticcheck                                    │ 0 findings             │
+  └────────────────────────────────────────────────┴────────────────────────┘
+
+  make lint itself still can't download staticcheck: proxy.golang.org fails with
+  "x509: certificate signed by unknown authority" on this machine. The pinned
+  staticcheck v0.8.2, built from the local Go module cache, reports nothing, so
+  this is a network problem, not a code finding. make migrate hits the same
+  certificate error; I ran the pinned migrate version from the module cache
+  instead.
+
+  5. Remaining blockers
+
+  None for CP7. For CP8: the frontend reads /readyz to show the demo badge, so
+  the nginx proxy must forward /readyz as well as /api/ (noted in §14).
+
+  6. Ready to commit?
+
+  Yes. The uncommitted changes are frontend/, README.md and
+  docs/ARCHITECTURE.md. I haven't started CP8.
