@@ -24,9 +24,9 @@ test-backend: check-unit-isolation ## Go vet + unit tests
 	cd $(BACKEND) && go test ./...
 
 .PHONY: test-frontend
-test-frontend: ## Frontend unit tests (skipped until the frontend exists)
-	@if [ -f $(FRONTEND)/package.json ]; then cd $(FRONTEND) && npm test; \
-	else echo "frontend: not present yet, skipping"; fi
+test-frontend: ## Frontend unit tests + strict typecheck
+	cd $(FRONTEND) && npm test
+	cd $(FRONTEND) && npm run typecheck
 
 # Unit test packages must never depend on testcontainers (and therefore Docker).
 # Integration tests live under backend/test/integration behind the "integration" build tag.
@@ -41,6 +41,35 @@ test-integration: ## Integration tests (requires Docker)
 	@docker info >/dev/null 2>&1 || { echo "error: Docker is required for integration tests" >&2; exit 1; }
 	cd $(BACKEND) && go vet -tags=integration ./...
 	cd $(BACKEND) && go test -tags=integration -race -count=1 -timeout 10m ./test/integration/...
+
+# ---- Docker Compose stack (orchestration lives in docker-compose.yml) ----
+
+.PHONY: up
+up: ## Build and start the full stack (http://localhost:8000); Ctrl+C stops it
+	docker compose up --build
+
+.PHONY: up-detached
+up-detached: ## Build and start in the background, wait until healthy
+	docker compose up --build -d --wait
+
+.PHONY: down
+down: ## Stop and remove containers; keeps the database volume
+	docker compose down
+
+.PHONY: logs
+logs: ## Follow logs of all services
+	docker compose logs -f
+
+.PHONY: smoke
+smoke: ## HTTP smoke test against the running stack (needs curl, python3)
+	scripts/smoke.sh
+
+# Destroys the local database volume (all campaigns and the seed). The next
+# `make up` starts from an empty volume: migrate + seed run from scratch.
+.PHONY: reset-volumes
+reset-volumes: ## DESTRUCTIVE: remove containers and the database volume (CONFIRM=yes)
+	@[ "$${CONFIRM:-}" = yes ] || { echo "error: this deletes all local campaigns and data; re-run with CONFIRM=yes" >&2; exit 1; }
+	docker compose down -v
 
 # ---- Database (DATABASE_URL from the environment; see .env.example) ----
 

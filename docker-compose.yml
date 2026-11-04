@@ -1,0 +1,132 @@
+# Smart Campaign Composer — local stack (Slice 1a).
+#
+#   docker compose up --build        → http://localhost:8000
+#
+# Start order (each step must succeed before the next one starts):
+#   postgres (healthy) → migrate (exit 0) → seed (exit 0) → api (ready) → frontend
+# A failed migration or seed stops the chain: api and frontend are not started.
+#
+# worker and mockprovider join in the delivery slices (ARCHITECTURE §2).
+#
+# Every value below can be overridden from the shell or a local, uncommitted
+# .env file (see .env.example). No secret has a committed value: the database
+# password is a local-only development default, and ANTHROPIC_API_KEY is empty
+# unless you export it (empty + LLM_PROVIDER=auto → demo provider).
+
+name: campaign-composer
+
+# One backend image (ADR-001) built once, by the api service; migrate and seed
+# run other entrypoints of the same image and never pull it.
+x-backend: &backend
+  image: campaign-composer/backend:local
+  pull_policy: never
+  environment: &backend-env
+    DATABASE_URL: postgres://${POSTGRES_USER:-composer}:${POSTGRES_PASSWORD:-composer}@postgres:5432/${POSTGRES_DB:-composer}?sslmode=disable
+  read_only: true
+  security_opt:
+    - no-new-privileges:true
+  cap_drop: [ALL]
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-composer}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-composer}
+      POSTGRES_DB: ${POSTGRES_DB:-composer}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    # Not published to the host; use `docker compose exec postgres psql -U composer`.
+    healthcheck:
+      # TCP on 127.0.0.1: the image's temporary init server listens on the unix
+      # socket only, so this turns healthy only once initialization is complete.
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\""]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+      start_period: 10s
+    restart: unless-stopped
+
+  # One-shot: applies the embedded migrations; a no-op when up to date.
+  migrate:
+    <<: *backend
+    command: ["/app/migrate"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  # One-shot: loads the deterministic 5,000-user dataset only when the users
+  # table is empty (fresh volume); otherwise it does nothing. Never -reset here.
+  seed:
+    <<: *backend
+    command: ["/app/seed"]
+    environment:
+      <<: *backend-env
+      SEED_USERS: ${SEED_USERS:-5000}
+      SEED_RANDOM_SEED: ${SEED_RANDOM_SEED:-42}
+      SEED_REFERENCE_TIME: ${SEED_REFERENCE_TIME:-2026-11-01T00:00:00Z}
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    restart: "no"
+
+  api:
+    <<: *backend
+    build:
+      context: ./backend
+    command: ["/app/api"]
+    environment:
+      <<: *backend-env
+      HTTP_ADDR: ":8080"
+      # auto → anthropic iff ANTHROPIC_API_KEY is non-empty, otherwise demo.
+      LLM_PROVIDER: ${LLM_PROVIDER:-auto}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      CLAUDE_SEGMENT_MODEL: ${CLAUDE_SEGMENT_MODEL:-claude-opus-5-5}
+      CLAUDE_SEGMENT_EFFORT: ${CLAUDE_SEGMENT_EFFORT:-low}
+      CLAUDE_SEGMENT_TIMEOUT: ${CLAUDE_SEGMENT_TIMEOUT:-45s}
+      CLAUDE_SEGMENT_MAX_TOKENS: ${CLAUDE_SEGMENT_MAX_TOKENS:-4000}
+    depends_on:
+      seed:
+        condition: service_completed_successfully
+    # Internal only; the browser reaches it through the frontend proxy.
+    expose: ["8080"]
+    healthcheck:
+      # /readyz: database reachable and schema at a clean migrated version.
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/readyz"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+      start_period: 5s
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./frontend
+    image: campaign-composer/frontend:local
+    environment:
+      API_UPSTREAM: api:8080
+    depends_on:
+      api:
+        condition: service_healthy
+    ports:
+      # Loopback only: the demo stack uses development credentials.
+      - "127.0.0.1:${COMPOSER_HTTP_PORT:-8000}:8080"
+    read_only: true
+    # Writable paths for the read-only container (uid 101 = nginx): pid/temp
+    # files and the config rendered from the template at start.
+    tmpfs:
+      - /tmp:uid=101,gid=101,mode=0700
+      - /etc/nginx/conf.d:uid=101,gid=101,mode=0755
+    security_opt:
+      - no-new-privileges:true
+    cap_drop: [ALL]
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+volumes:
+  pgdata:

@@ -11,7 +11,7 @@ Details of every mechanism live in `docs/ARCHITECTURE.md` (section numbers refer
 
 **Alternatives.** (a) Single process doing both. (b) Microservices (campaign, segmentation, AI, delivery). (c) Modular monolith with several entrypoints.
 
-**Decision.** One Go module and one Docker image with entrypoints `api`, `worker`, `mockprovider`, `seed`. Code is organized by feature package (`segment`, `content`, `ai`, `llm`, `approval`, `delivery`, …); `httpapi` holds only transport concerns.
+**Decision.** One Go module and one Docker image with entrypoints `api`, `worker`, `mockprovider`, `seed` and the one-shot `migrate` (applies the embedded migrations; added in CP8 so Compose needs no second image). Code is organized by feature package (`segment`, `content`, `ai`, `llm`, `approval`, `delivery`, …); `httpapi` holds only transport concerns.
 
 **Reasoning.** Separate processes isolate failures (an LLM stall cannot starve dispatch; a worker crash does not take down the UI) without distributed-system costs. Feature packages give clear boundaries and testability.
 

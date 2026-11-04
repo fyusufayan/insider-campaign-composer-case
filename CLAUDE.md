@@ -19,7 +19,7 @@ Do not add infrastructure (Redis, brokers, caches) or new major dependencies wit
 ## Repository layout
 
 ```
-backend/cmd/{api,worker,mockprovider,seed}
+backend/cmd/{api,worker,mockprovider,seed,migrate}
 backend/migrations/
 backend/internal/{platform,httpapi,campaign,segment,content,ai,llm,approval,delivery,provider,mockprovider}
 backend/test/integration/

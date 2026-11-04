@@ -47,10 +47,11 @@ No real messages are sent. Seed data: ~5,000 deterministic fake users.
                      │ mockprovider          │ fault injection, own strict 100/s limiter,
                      │ (cmd/mockprovider)    │ idempotency ledger, arrival-time recorder
                      └──────────────────────┘
- One-shot containers: migrate, seed (cmd/seed).
+ One-shot containers: migrate (cmd/migrate), seed (cmd/seed).
 ```
 
 - **Modular monolith**: one Go module, one image, several entrypoints. `api` and `worker` are separate processes (different failure and load profiles) sharing domain packages and the database.
+- **Local deployment (Compose, CP8)**: one backend image (`/app/api`, `/app/migrate`, `/app/seed`) and an nginx image with the built SPA. Start order is enforced with health/completion conditions: `postgres` healthy → `migrate` exits 0 (embedded migrations; no-op when current; a dirty schema is an error, never forced) → `seed` exits 0 (loads the deterministic dataset only when `users` is empty; never `-reset`) → `api` healthy (`/readyz`) → `frontend`. A failed step stops the chain, so the API never serves a partially initialized database. Data lives in the named volume `pgdata`; `docker compose down` keeps it, `down -v` discards it. nginx serves the SPA (history fallback for `/campaigns/{id}`) and proxies `/api/` and exactly `/readyz` same-origin (no CORS); the API name is re-resolved through Docker DNS, and only nginx-generated upstream failures are replaced (plain-text `502`), API responses pass through unchanged.
 - **Exactly one worker replica.** The rate limiter is in-process; this is a documented constraint, not an accident.
 - **Time sources**: all persisted timestamps, leases and `next_attempt_at` use database time (no cross-container clock skew). **Approval expiry is the exception to plain `now()`**: PostgreSQL `now()`/`transaction_timestamp()` is the *transaction start* time, which can predate a lock wait, so every expiry comparison and every expiry-defining timestamp (`prepared_at`, `approved_at`, `expires_at`) uses `clock_timestamp()` evaluated **after** the campaign row lock is acquired (§5.1). The rate limiter uses the worker's monotonic clock. The mock provider uses its own monotonic clock for arrival measurement.
 
@@ -781,7 +782,8 @@ Vue 3 + TypeScript (strict) + Vite + Vue Router + Pinia (one store for the activ
 
 | Variable | Default |
 |---|---|
-| `DATABASE_URL` | compose value |
+| `DATABASE_URL` | compose value (built from `POSTGRES_USER`/`POSTGRES_PASSWORD`/`POSTGRES_DB`, local-only default `composer`) |
+| `COMPOSER_HTTP_PORT` (Compose only) | `8000` (frontend host port, bound to `127.0.0.1` only) |
 | `HTTP_ADDR`, `WORKER_METRICS_ADDR` | `:8080`, `:9091` |
 | `LLM_PROVIDER`, `ANTHROPIC_API_KEY`, `CLAUDE_*` | §7.3 |
 | `PROVIDER_BASE_URL`, `PROVIDER_REQUEST_TIMEOUT` | `http://mockprovider:8090`, `5s` |
