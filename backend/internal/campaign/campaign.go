@@ -142,11 +142,12 @@ func (e *ConflictError) Is(target error) bool { return target == ErrVersionConfl
 // Operation names an operation checked against the state machine.
 type Operation string
 
-// Operations of Slice 1a.
+// Operations.
 const (
-	OpInterpret   Operation = "interpret"
-	OpSetChannels Operation = "set_channels"
-	OpAudience    Operation = "audience"
+	OpInterpret       Operation = "interpret"
+	OpSetChannels     Operation = "set_channels"
+	OpAudience        Operation = "audience"
+	OpGenerateContent Operation = "generate_content"
 )
 
 // StateError reports an operation that the campaign status does not allow.

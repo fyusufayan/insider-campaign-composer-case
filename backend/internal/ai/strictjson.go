@@ -27,9 +27,12 @@ const (
 
 // scanJSON checks that data is exactly one well-formed JSON value of bounded
 // size and depth, valid UTF-8, without duplicate object keys at any level.
-func scanJSON(data []byte) *segment.FieldError {
-	if len(data) > maxEnvelopeBytes {
-		return &segment.FieldError{Code: segment.CodeTooLarge, Message: "output exceeds " + strconv.Itoa(maxEnvelopeBytes) + " bytes"}
+func scanJSON(data []byte) *segment.FieldError { return scanJSONLimit(data, maxEnvelopeBytes) }
+
+// scanJSONLimit is scanJSON with an explicit size bound.
+func scanJSONLimit(data []byte, maxBytes int) *segment.FieldError {
+	if len(data) > maxBytes {
+		return &segment.FieldError{Code: segment.CodeTooLarge, Message: "output exceeds " + strconv.Itoa(maxBytes) + " bytes"}
 	}
 	if !utf8.Valid(data) {
 		return &segment.FieldError{Code: segment.CodeMalformedJSON, Message: "output is not valid UTF-8"}

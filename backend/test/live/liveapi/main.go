@@ -89,6 +89,15 @@ func run(log *slog.Logger) error {
 	if err != nil {
 		return err
 	}
+	// Wired like cmd/api; no HTTP route reaches it yet (CP12), so the CP10
+	// interpretation-only budget is unaffected.
+	generator, err := ai.NewGenerator(client, ai.GeneratorConfig{
+		Model: cfg.Content.Model, Effort: llm.Effort(cfg.Content.Effort),
+		Timeout: cfg.Content.Timeout, MaxTokens: cfg.Content.MaxTokens,
+	})
+	if err != nil {
+		return err
+	}
 	log.Info("configuration loaded", "http_addr", cfg.HTTPAddr, "llm_provider", cfg.LLM.Provider,
 		"llm_max_retries", cfg.LLM.MaxRetries, "segment_model", cfg.Segment.Model,
 		"segment_effort", cfg.Segment.Effort, "segment_timeout", cfg.Segment.Timeout.String(),
@@ -101,7 +110,7 @@ func run(log *slog.Logger) error {
 		return err
 	}
 	defer pool.Close()
-	campaigns, err := campaign.NewService(campaign.NewRepository(pool), segment.NewAudienceRepository(pool), interpreter, log)
+	campaigns, err := campaign.NewService(campaign.NewRepository(pool), segment.NewAudienceRepository(pool), interpreter, generator, log)
 	if err != nil {
 		return err
 	}

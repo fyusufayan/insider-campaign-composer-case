@@ -72,6 +72,15 @@ const (
 	defaultSegmentMaxTokens = 4000
 )
 
+// Defaults of the content generation task (CLAUDE_CONTENT_*, ARCHITECTURE
+// §7.3, ADR-015: not yet evaluated, so the strongest model).
+const (
+	defaultContentModel     = "claude-opus-5-5"
+	defaultContentEffort    = "medium"
+	defaultContentTimeout   = 90 * time.Second
+	defaultContentMaxTokens = 8000
+)
+
 // Effort values accepted for CLAUDE_*_EFFORT.
 var allowedEfforts = []string{"low", "medium", "high", "max"}
 
@@ -94,6 +103,8 @@ type Config struct {
 	LLM         LLM
 	// Segment configures brief interpretation (CLAUDE_SEGMENT_*).
 	Segment AITask
+	// Content configures content generation (CLAUDE_CONTENT_*).
+	Content AITask
 }
 
 // Load reads configuration through getenv (os.Getenv in production) and
@@ -137,6 +148,13 @@ func Load(getenv func(string) string) (Config, error) {
 	})
 	errs = append(errs, segErrs...)
 	cfg.Segment = seg
+
+	cnt, cntErrs := loadAITask(get, "CLAUDE_CONTENT", AITask{
+		Model: defaultContentModel, Effort: defaultContentEffort,
+		Timeout: defaultContentTimeout, MaxTokens: defaultContentMaxTokens,
+	})
+	errs = append(errs, cntErrs...)
+	cfg.Content = cnt
 
 	if len(errs) > 0 {
 		return Config{}, fmt.Errorf("invalid configuration: %w", errors.Join(errs...))

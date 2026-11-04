@@ -1,0 +1,2286 @@
+ ▐▛███▛█   Claude Code v2.1.318
+▝▜██████▀  Opus 5.5 · Claude Pro
+ ▝▝   ▝▝   ~/Desktop/devel/leet/insider-case/insider-campaign-composer-case
+
+
+❯ We are continuing Smart Campaign Composer.                                    
+  CP1–CP10 are complete, reviewed and committed. CP11 (the pure content domain, 
+  parser, validation, rendering and version rules) has been reviewed and        
+  approved. Confirm CP11 is committed before implementing CP12.                 
+  Begin CP12 — AI Content Generation and Immutable PostgreSQL Persistence.      
+  Do not implement the whole of Slice 2. This checkpoint is the backend         
+  generation-and-persistence slice; streaming and the Vue content editor come   
+  later.                                                                        
+  1. Read the established design                                                
+  Before coding, inspect:                                                       
+                                                                                
+  * `CLAUDE.md`                                                                 
+  * `docs/ROADMAP.md`                                                           
+  * `docs/ARCHITECTURE.md`, especially §5, §7, §8 and §11                       
+  * Relevant ADRs, particularly ADR-013 through ADR-018                         
+  * Existing `campaign_contents` migration and constraints                      
+  * `internal/content` from CP11                                                
+  * `internal/campaign`, its repository and state machine                       
+  * `internal/ai`, including the existing interpreter and repair policy         
+  * `internal/llm`, including Demo, Scripted and Anthropic implementations      
+  * Existing API contracts and integration-test fixtures                        
+                                                                                
+  The documents and existing schema are authoritative. Reconcile this scope     
+  with the roadmap before making changes.                                       
+  2. Objective                                                                  
+  Implement a backend workflow that:                                            
+                                                                                
+  1. Loads an existing segmented campaign.                                      
+  2. Reads its stored, validated interpretation and content brief.              
+  3. Generates personalized SMS/email templates for the selected channels.      
+  4. Strictly validates the output through `content.Parse`.                     
+  5. Performs at most one bounded repair when output is invalid.                
+  6. Atomically inserts an immutable content version and updates the campaign's 
+  current content pointer.                                                      
+  7. Transitions the campaign into `content_ready`.                             
+  8. Safely handles concurrent campaign edits and model errors.                 
+                                                                                
+  The workflow must work in demo mode with NO API key and NO paid calls.        
+  3. Generation contract                                                        
+  Introduce a focused content generator using the existing `llm.Client`         
+  abstraction.                                                                  
+  Requirements:                                                                 
+                                                                                
+  * Support both Demo and Anthropic clients through the existing interface.     
+  * Generate only content for the campaign's selected channels.                 
+  * Use the validated, persisted content brief and the normalized campaign      
+  rule.                                                                         
+  * Never pass customer names, phone numbers, email addresses, individual       
+  records or delivery rows to the LLM.                                          
+  * Supply the approved variable catalog from `content.Variables()`.            
+  * Explain the supported placeholder and fallback grammar.                     
+  * Include field limits and worst-case personalization rules.                  
+  * Explain that the message must not claim an offer or discount that the brief 
+  did not authorize.                                                            
+  ──── (109 lines hidden) ───────────────────────────────────────────────────── 
+  SMS/email worst-case lengths.                                                 
+  8. Invalid JSON, wrong types, duplicate keys and unknown fields.              
+  9. Refusal and max-token truncation.                                          
+  10. One repair succeeds.                                                      
+  11. Repair fails without persistence.                                         
+  12. Unsupported offers or content claims do not silently enter approved       
+  drafts.                                                                       
+  13. Model errors leave campaign state unchanged.                              
+  14. Concurrent campaign edits while generation is blocked.                    
+  15. Generation in invalid campaign statuses.                                  
+  16. AI regeneration creates a new version.                                    
+  17. No-op edit/version semantics remain intact.                               
+  18. No customer personal data enters prompts or logs.                         
+                                                                                
+  Reuse existing tests and helpers where possible.                              
+  12. PostgreSQL integration tests                                              
+  Add real PostgreSQL integration tests using the project's Testcontainers      
+  conventions.                                                                  
+  Verify:                                                                       
+                                                                                
+  * The actual schema accepts the inserted content rows.                        
+  * Generated content is immutable and read back correctly.                     
+  * `campaigns.current_content_id` points to the correct version.               
+  * Campaign status and version change atomically.                              
+  * Concurrent generations cannot create inconsistent current versions.         
+  * No transaction or campaign row lock is held while the LLM is blocked.       
+  * Failed validation or a stale AI result inserts no row.                      
+  * Database rollback protects both content row and campaign pointer.           
+  * Existing segmented campaigns and audience previews remain correct.          
+                                                                                
+  13. No paid calls                                                             
+  Absolutely no live Anthropic API calls in CP12.                               
+  The local `.env` may select Anthropic and contain a real API key.             
+  Explicitly force demo mode and blank the key for every Compose smoke test:    
+  `LLM_PROVIDER=demo ANTHROPIC_API_KEY= ...`                                    
+  Do not run a normal smoke script against the paid provider.                   
+  14. Verification                                                              
+  Run:                                                                          
+                                                                                
+  * `make test`                                                                 
+  * `go test -race ./...`                                                       
+  * `make test-integration`                                                     
+  * `make lint`                                                                 
+  * Docker image build if backend wiring changes                                
+  * Demo-mode smoke test if applicable                                          
+                                                                                
+  Respect the known TLS certificate workaround without disabling verification.  
+  Update relevant architecture/ADR documentation only for concrete implemented  
+  decisions.                                                                    
+  15. Completion report                                                         
+  Report:                                                                       
+                                                                                
+  1. New and modified files.                                                    
+  2. Content generator API and actual prompt/schema contract.                   
+  3. Strict decoding and repair behavior.                                       
+  4. Demo generation behavior.                                                  
+  5. Immutable version insertion and transaction design.                        
+  6. State-machine transitions and concurrency safety.                          
+  7. Unit and PostgreSQL integration tests.                                     
+  8. Actual verification results.                                               
+  9. Deviations, limitations and what is deferred.                              
+                                                                                
+  Do not commit anything.                                                       
+  Do not start streaming or the frontend content editor.                        
+  Stop after CP12 for review.                                                   
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ CP11 is committed (HEAD 1eb1e1e, tree clean). Now the design docs.
+
+  Searched for 1 pattern, read 1 file, ran 3 shell commands (ctrl+o to expand)
+
+⏺ Now the code. Content package first.
+
+  Read 3 files, ran 3 shell commands (ctrl+o to expand)
+
+⏺ Still in the read-the-design phase: CP11 is confirmed committed, and I'm now
+  mapping the ai/llm packages, wiring and tests before writing the generator,
+  repository and service.
+
+  Searched for 2 patterns, listed 1 directory, ran 3 shell commands (ctrl+o to expand)
+
+⏺ Finished reading; now I'll check the race test pattern from interpretation and
+  then start writing the generator.
+
+  Ran 3 shell commands (ctrl+o to expand)
+
+⏺ Design is clear. Starting implementation: strict-JSON size param, then the
+  content prompt/schema/generator in ai.
+
+⏺ Bash(python3 - <<'EOF'
+      import re…)
+  ⎿  internal/ai/demo_segment_test.go:28:    in, err :=
+     demoInterpreter(t).Inte
+     rpret(context.Background(), exampleBrf)
+     internal/ai/demo_segment_test.go:30:            t.Fatalf("Interpret:
+     %v", err)
+     … +10 lines (ctrl+o to expand)
+  ⎿  Updated backend/internal/ai/strictjson.go (+6 -3)
+      27  
+      28  // scanJSON checks that data is exactly one well-formed JSON va
+          lue of bounded
+      29  // size and depth, valid UTF-8, without duplicate object keys a
+          t any level.
+      30 -func scanJSON(data []byte) *segment.FieldError {               
+      31 -        if len(data) > maxEnvelopeBytes {                      
+      32 -                return &segment.FieldError{Code: segment.CodeTo
+         -oLarge, Message: "output exceeds " + strconv.Itoa(maxEnvelopeBy
+         -tes) + " bytes"}                                               
+      30 +func scanJSON(data []byte) *segment.FieldError { return scanJSO
+         +NLimit(data, maxEnvelopeBytes) }                               
+      31 +                                                               
+      32 +// scanJSONLimit is scanJSON with an explicit size bound.      
+      33 +func scanJSONLimit(data []byte, maxBytes int) *segment.FieldErr
+         +or {                                                           
+      34 +        if len(data) > maxBytes {                              
+      35 +                return &segment.FieldError{Code: segment.CodeTo
+         +oLarge, Message: "output exceeds " + strconv.Itoa(maxBytes) + "
+         + bytes"}                                                       
+      36          }
+      37          if !utf8.Valid(data) {
+      38                  return &segment.FieldError{Code: segment.CodeMa
+          lformedJSON, Message: "output is not valid UTF-8"}
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ Bash(sed -i '' '/internal\/segment"$/d' internal/ai/interpreter.go && gofmt -l
+      internal/ai; go vet ./internal/ai && go test ./internal/ai 2>&1 | tail
+      -5)
+  ⎿  ok
+     github.com/fyusufayan/insider-campaign-composer-case/backend/inter
+     nal/ai  0.453s
+  ⎿  Updated backend/internal/ai/interpreter.go (+0 -1)
+      11          "golang.org/x/text/unicode/norm"
+      12  
+      13          "github.com/fyusufayan/insider-campaign-composer-case/b
+          ackend/internal/llm"
+      14 -        "github.com/fyusufayan/insider-campaign-composer-case/b
+         -ackend/internal/segment"                                       
+      14  )
+      15  
+      16  // Brief limits; identical to the campaigns.brief CHECK constra
+          int (§4).
+
+⏺ Refactor is behavior-preserving (ai tests green). Now the content prompt,
+  schema, offer checks and generator.
+
+⏺ Bash(cat >> internal/ai/interpretation.go <<'EOF'…)
+  ⎿  Updated backend/internal/ai/interpretation.go (+20 -0)
+      341          }
+      342          return o
+      343  }
+      344 +                                                              
+      345 +// maxContentBriefBytes bounds a stored content brief (goal ≤6
+          +4 and tone ≤32                                                
+      346 +// runes plus a fixed structure).                             
+      347 +const maxContentBriefBytes = 4 << 10                          
+      348 +                                                              
+      349 +// ParseContentBrief strictly decodes and validates a content 
+          +brief, e.g.                                                   
+      350 +// campaigns.content_brief read back from the database (never 
+          +trusted                                                       
+      351 +// blindly). It applies exactly the rules of the interpretatio
+          +n envelope's                                                  
+      352 +// content_brief; field paths have no prefix.                 
+      353 +func ParseContentBrief(data []byte) (ContentBrief, segment.Err
+          +ors) {                                                        
+      354 +        if fe := scanJSONLimit(data, maxContentBriefBytes); fe
+          + != nil {                                                     
+      355 +                return ContentBrief{}, segment.Errors{*fe}    
+      356 +        }                                                     
+      357 +        var errs segment.Errors                               
+      358 +        cb, ok := contentBrief(&errs, "", data)               
+      359 +        if !ok || len(errs) > 0 {                             
+      360 +                return ContentBrief{}, errs                   
+      361 +        }                                                     
+      362 +        return cb, nil                                        
+      363 +}                                                             
+
+⏺ Write(backend/internal/ai/prompt_content_v1.go)
+  ⎿  Wrote 176 lines to backend/internal/ai/prompt_content_v1.go
+       1 package ai
+       2 
+       3 import (
+       4   "encoding/json"
+       5   "errors"
+       6   "strconv"
+       7   "strings"
+       8 
+       9   "github.com/fyusufayan/insider-campaign-composer-case/backend/
+         internal/content"
+     … +167 lines (ctrl+o to expand)
+
+⏺ Write(backend/internal/ai/content_schema.go)
+  ⎿  Wrote 38 lines to backend/internal/ai/content_schema.go
+       1 package ai
+       2 
+       3 import (
+       4   "encoding/json"
+       5 
+       6   "github.com/fyusufayan/insider-campaign-composer-case/backend/
+         internal/content"
+       7   "github.com/fyusufayan/insider-campaign-composer-case/backend/
+         internal/segment"
+       8 )
+     … +30 lines (ctrl+o to expand)
+
+⏺ Write(backend/internal/ai/content_policy.go)
+  ⎿  Wrote 156 lines to backend/internal/ai/content_policy.go
+       1 package ai
+       2 
+       3 import (
+       4   "regexp"
+       5   "strconv"
+       6   "strings"
+       7 
+       8   "golang.org/x/text/unicode/norm"
+       9 
+      10   "github.com/fyusufayan/insider-campaign-composer-case/backend/
+     … +147 lines (~6 KB) (ctrl+o to expand)
+
+⏺ Write(backend/internal/ai/generator.go)
+  ⎿  Wrote 241 lines to backend/internal/ai/generator.go
+       1 package ai
+       2 
+       3 import (
+       4   "context"
+       5   "errors"
+       6   "fmt"
+       7   "strings"
+       8   "time"
+       9 
+      10   "github.com/fyusufayan/insider-campaign-composer-case/backend/
+     … +232 lines (~9 KB) (ctrl+o to expand)
+
+⏺ Write(backend/internal/ai/demo_content.go)
+  ⎿  Wrote 185 lines to backend/internal/ai/demo_content.go
+       1 package ai
+       2 
+       3 import (
+       4   "encoding/json"
+       5   "errors"
+       6   "strconv"
+       7   "strings"
+       8 
+       9   "github.com/fyusufayan/insider-campaign-composer-case/backend/
+         internal/content"
+     … +176 lines (ctrl+o to expand)
+
+⏺ Generator, prompt, schema, offer policy and demo responder are written;
+  registering the demo task and compiling next.
+
+⏺ Bash(python3 - <<'EOF'
+      p='internal/ai/demo_segment.go'…)
+  ⎿  ok
+     github.com/fyusufayan/insider-campaign-composer-case/backend/inter
+     nal/ai  0.457s
+  ⎿  Updated backend/internal/ai/demo_segment.go (+4 -1)
+      34  // llm.New / llm.NewDemo. Demo output goes through the same Int
+          erpreter
+      35  // pipeline (strict decode, validation, repair) as real model o
+          utput.
+      36  func DemoResponders() map[string]llm.DemoResponder {
+      37 -        return map[string]llm.DemoResponder{TaskSegmentInterpre
+         -tation: demoSegmentResponder}                                  
+      37 +        return map[string]llm.DemoResponder{                   
+      38 +                TaskSegmentInterpretation: demoSegmentResponder
+         +,                                                              
+      39 +                TaskContentGeneration:     demoContentResponder
+         +,                                                              
+      40 +        }                                                      
+      41  }
+      42  
+      43  // DemoNotice is the first assumption of every demo interpretat
+          ion, so demo
+
+⏺ Now the campaign side: state-machine check, pure transition, transactional
+  repository method and service.
+
+⏺ Bash(python3 - <<'EOF'
+      p='internal/campaign/campaign.go'…)
+  ⎿  Updated backend/internal/campaign/campaign.go (+5 -4)
+      142  // Operation names an operation checked against the state mach
+           ine.
+      143  type Operation string
+      144  
+      145 -// Operations of Slice 1a.                                    
+      145 +// Operations.                                                
+      146  const (
+      147 -        OpInterpret   Operation = "interpret"                 
+      148 -        OpSetChannels Operation = "set_channels"              
+      149 -        OpAudience    Operation = "audience"                  
+      147 +        OpInterpret       Operation = "interpret"             
+      148 +        OpSetChannels     Operation = "set_channels"          
+      149 +        OpAudience        Operation = "audience"              
+      150 +        OpGenerateContent Operation = "generate_content"      
+      151  )
+      152  
+      153  // StateError reports an operation that the campaign status do
+           es not allow.
+  ⎿  Created backend/internal/campaign/content.go (+118 -0)
+        1 +package campaign                                              
+        2 +                                                              
+        3 +import (                                                      
+        4 +        "errors"                                              
+        5 +        "fmt"                                                 
+        6 +        "slices"                                              
+        7 +                                                              
+        8 +        "github.com/fyusufayan/insider-campaign-composer-case/
+          +backend/internal/content"                                     
+        9 +        "github.com/fyusufayan/insider-campaign-composer-case/
+          +backend/internal/segment"                                     
+       10 +)                                                             
+       11 +                                                              
+       12 +// ErrContentNotFound: the campaign has no content version wit
+          +h the id.                                                     
+       13 +var ErrContentNotFound = errors.New("campaign: content version
+          + not found")                                                  
+       14 +                                                              
+       15 +// CheckGenerateContent reports whether AI content may be gene
+          +rated now.                                                    
+       16 +//                                                            
+       17 +// §5.2 allows a new content version in segmented … approved. 
+          +In                                                            
+       18 +// pending_approval and approved it must revoke the live appro
+          +val and delete                                                
+       19 +// its held rows in the same transaction (invariant 6); that t
+          +ransition                                                     
+       20 +// belongs to the approval package (Slice 3), so until then th
+          +ose states are                                                
+       21 +// refused rather than leaving an approval bound to outdated c
+          +ontent. A                                                     
+       22 +// campaign that is sending or terminal can never change. Gene
+          +ration also                                                   
+       23 +// needs the stored interpretation (rule and content brief) an
+          +d at least one                                                
+       24 +// selected channel: content is produced for exactly the selec
+          +ted channels,                                                 
+       25 +// and an empty selection is a caller error (422 validation_fa
+          +iled), not a                                                  
+       26 +// reason to generate useless content.                        
+       27 +func (c Campaign) CheckGenerateContent() error {              
+       28 +        switch c.Status {                                     
+       29 +        case StatusSegmented, StatusContentReady:             
+       30 +        case StatusDraft:                                     
+       31 +                return &StateError{Op: OpGenerateContent, Stat
+          +us: c.Status, Reason: "interpret the brief first"}            
+       32 +        case StatusPendingApproval, StatusApproved:           
+       33 +                return &StateError{Op: OpGenerateContent, Stat
+          +us: c.Status, Reason: reasonApprovalPending}                  
+       34 +        default:                                              
+       35 +                return &StateError{Op: OpGenerateContent, Stat
+          +us: c.Status, Reason: "the campaign can no longer be edited"} 
+       36 +        }                                                     
+       37 +        if c.ActiveApprovalID != nil { // impossible for a con
+          +sistent row in these statuses                                 
+       38 +                return &StateError{Op: OpGenerateContent, Stat
+          +us: c.Status, Reason: reasonApprovalPending}                  
+       39 +        }                                                     
+       40 +        if c.Segment.IsZero() || c.ContentBrief == nil { // im
+          +possible for a consistent row                                 
+     … 78 more lines (ctrl+o to expand)
+
+⏺ Bash(python3 - <<'EOF'
+      p='internal/campaign/repository.go'…)  ⎿  Updated backend/internal/campaign/repository.go (+45 -29)
+       84  // §5.1), apply mutate, write the result and commit. An error 
+           from mutate
+       85  // rolls back and is returned unchanged.
+       86  func (r *Repository) Update(ctx context.Context, id ID, mutate
+            Mutation) (Campaign, error) {
+       87 +        var out Campaign                                      
+       88 +        err := r.withLockedCampaign(ctx, id, func(tx pgx.Tx, c
+          +ur Campaign) error {                                          
+       89 +                next, changed, err := mutate(cur.clone())     
+       90 +                if err != nil {                               
+       91 +                        return err                            
+       92 +                }                                             
+       93 +                if !changed {                                 
+       94 +                        out = cur                             
+       95 +                        return nil                            
+       96 +                }                                             
+       97 +                if next.ID != cur.ID {                        
+       98 +                        return fmt.Errorf("campaign %s: mutati
+          +on changed the id", id)                                       
+       99 +                }                                             
+      100 +                args, err := updateArgs(cur.Version, next)    
+      101 +                if err != nil {                               
+      102 +                        return fmt.Errorf("campaign %s: %w", i
+          +d, err)                                                       
+      103 +                }                                             
+      104 +                saved, err := scanCampaign(tx.QueryRow(ctx, sq
+          +lUpdateCampaign, args...))                                    
+      105 +                if errors.Is(err, pgx.ErrNoRows) { // unreacha
+          +ble while the lock is held                                    
+      106 +                        return &ConflictError{Expected: cur.Ve
+          +rsion, Current: -1}                                           
+      107 +                }                                             
+      108 +                if err != nil {                               
+      109 +                        return fmt.Errorf("campaign %s: update
+          +: %w", id, err)                                               
+      110 +                }                                             
+      111 +                out = saved                                   
+      112 +                return nil                                    
+      113 +        })                                                    
+      114 +        if err != nil {                                       
+      115 +                return Campaign{}, err                        
+      116 +        }                                                     
+      117 +        return out, nil                                       
+      118 +}                                                             
+      119 +                                                              
+      120 +// withLockedCampaign runs fn in one short transaction that fi
+          +rst locks the                                                 
+      121 +// campaign row (§5.1) and commits iff fn succeeds. The rollba
+          +ck of a failed                                                
+      122 +// or abandoned transaction runs even when ctx is already canc
+          +elled.                                                        
+      123 +func (r *Repository) withLockedCampaign(ctx context.Context, i
+          +d ID, fn func(tx pgx.Tx, cur Campaign) error) error {         
+     … 57 more lines (ctrl+o to expand)
+
+⏺ Write(backend/internal/campaign/content_repository.go)
+  ⎿  Wrote 227 lines to backend/internal/campaign/content_repository.go
+       1 package campaign
+       2 
+       3 import (
+       4   "context"
+       5   "errors"
+       6   "fmt"
+       7   "slices"
+       8   "time"
+       9 
+      10   "github.com/jackc/pgx/v5"
+     … +217 lines (ctrl+o to expand)
+
+⏺ Bash(python3 - <<'EOF'
+      p='internal/campaign/content_repository.go'…)
+  ⎿  Updated backend/internal/campaign/content_repository.go (+8 -2)
+      209  // ParseStoredContent validates a stored version with content.
+           Parse for the
+      210  // channels it has text for (a version is well-formed on its o
+           wn; whether it
+      211  // covers the campaign's current selection is checked where th
+           at matters,
+      212 -// e.g. at prepare). Stored text is already canonical, so the 
+          -result's Draft                                                
+      213 -// equals d.                                                  
+      212 +// e.g. at prepare). Stored text must already be canonical (NF
+          +C, trimmed):                                                  
+      213 +// the application only stores content.Content.Draft().       
+      214  func ParseStoredContent(d content.Draft) (content.Content, err
+           or) {
+      215          var chs []segment.Channel
+      216          if d.SMSBody != nil {
+     ...
+      223          if err := res.Err(); err != nil {
+      224                  return content.Content{}, err
+      225          }
+      226 +        if cd := c.Draft(); !strPtrEqual(cd.SMSBody, d.SMSBody
+          +) || !strPtrEqual(cd.EmailSubject, d.EmailSubject) ||         
+      227 +                !strPtrEqual(cd.EmailBody, d.EmailBody) {     
+      228 +                return content.Content{}, errors.New("stored c
+          +ontent is not in canonical form")                             
+      229 +        }                                                     
+      230          return c, nil
+      231  }
+      232 +                                                              
+      233 +func strPtrEqual(a, b *string) bool { return ptrEqual(a, b) } 
+  ⎿  Created backend/internal/campaign/content_service.go (+129 -0)
+        1 +package campaign                                              
+        2 +                                                              
+        3 +import (                                                      
+        4 +        "context"                                             
+        5 +        "errors"                                              
+        6 +        "fmt"                                                 
+        7 +        "time"                                                
+        8 +                                                              
+        9 +        "github.com/fyusufayan/insider-campaign-composer-case/
+          +backend/internal/ai"                                          
+       10 +        "github.com/fyusufayan/insider-campaign-composer-case/
+          +backend/internal/content"                                     
+       11 +        "github.com/fyusufayan/insider-campaign-composer-case/
+          +backend/internal/segment"                                     
+       12 +)                                                             
+       13 +                                                              
+       14 +// ContentResult is the outcome of a successful content genera
+          +tion.                                                         
+       15 +type ContentResult struct {                                   
+       16 +        // Campaign is the committed campaign (status content_
+          +ready, pointing at                                            
+       17 +        // Version).                                          
+       18 +        Campaign Campaign                                     
+       19 +        // Version is the inserted immutable content version. 
+       20 +        Version content.Version                               
+       21 +        // Validation is the content validation result for the
+          + campaign's                                                   
+       22 +        // channels (statistics, warnings, rendered example). 
+       23 +        Validation content.Result                             
+       24 +        // Notes are display notes of the generator (e.g. demo
+          + output).                                                     
+       25 +        Notes []string                                        
+       26 +}                                                             
+       27 +                                                              
+       28 +// GenerateContent generates SMS/email templates for the campa
+          +ign's selected                                                
+       29 +// channels and stores them as a new immutable content version
+          +.                                                             
+       30 +//                                                            
+       31 +//  1. Read the campaign (no lock); check the state machine   
+       32 +//     (CheckGenerateContent) and remember version and channel
+          +s.                                                            
+       33 +//  2. Re-validate the stored content brief (never trusted bli
+          +ndly).                                                        
+       34 +//  3. Call the generator with no transaction open (invariant 
+          +13). Its input                                                
+       35 +//     is the content brief, the normalized rule and the chann
+          +els only — no                                                 
+       36 +//     customer data. It returns only strictly decoded, valida
+          +ted content                                                   
+       37 +//     (content.Parse + offer policy, at most one repair turn)
+          + or an error;                                                 
+       38 +//     nothing is persisted then.                             
+       39 +//  4. One short transaction locks the campaign row, re-checks
+          + status,                                                      
+       40 +//     version and channels (WithAIContent), inserts the versi
+          +on and moves                                                  
+     … 89 more lines (ctrl+o to expand)
+  ⎿  Updated backend/internal/campaign/service.go (+12 -3)
+      10          "github.com/jackc/pgx/v5/pgconn"
+      11  
+      12          "github.com/fyusufayan/insider-campaign-composer-case/b
+          ackend/internal/ai"
+      13 +        "github.com/fyusufayan/insider-campaign-composer-case/b
+         +ackend/internal/content"                                       
+      14          "github.com/fyusufayan/insider-campaign-composer-case/b
+          ackend/internal/segment"
+      15  )
+      16  
+     ...
+      21          Create(ctx context.Context, d Draft) (Campaign, error)
+      22          Get(ctx context.Context, id ID) (Campaign, error)
+      23          Update(ctx context.Context, id ID, mutate Mutation) (Ca
+          mpaign, error)
+      24 +        // SaveContent atomically inserts a content version dec
+         +ided by mutate                                                 
+      25 +        // under the campaign row lock and points the campaign 
+         +at it.                                                         
+      26 +        SaveContent(ctx context.Context, id ID, mutate ContentM
+         +utation) (Campaign, content.Version, error)                    
+      27 +        // GetContent reads one (re-validated) content version 
+         +of a campaign.                                                 
+      28 +        GetContent(ctx context.Context, id ID, contentID int64)
+         + (content.Version, error)                                      
+      29  }
+      30  
+      31  // AudienceCounter computes audience statistics. *segment.Audie
+          nceRepository
+     ...
+      35          Stats(ctx context.Context, rule segment.Validated, chan
+          nels []segment.Channel) (segment.AudienceStats, error)
+      36  }
+      37  
+      32 -// Service implements the campaign use cases of Slice 1a.      
+      38 +// Service implements the campaign authoring use cases.        
+      39  type Service struct {
+      40          store       Store
+      41          audience    AudienceCounter
+      42          interpreter *ai.Interpreter
+      43 +        generator   *ai.Generator                              
+      44          log         *slog.Logger
+      45  }
+      46  
+      47  // NewService wires the service.
+      41 -func NewService(store Store, audience AudienceCounter, interpre
+         -ter *ai.Interpreter, log *slog.Logger) (*Service, error) {     
+      48 +func NewService(store Store, audience AudienceCounter, interpre
+         +ter *ai.Interpreter, generator *ai.Generator, log *slog.Logger)
+         + (*Service, error) {                                           
+      49          switch {
+      50          case store == nil:
+      51                  return nil, errors.New("campaign: nil store")
+     ...
+      53                  return nil, errors.New("campaign: nil audience 
+          counter")
+      54          case interpreter == nil:
+      55                  return nil, errors.New("campaign: nil interpret
+          er")
+     … 10 more lines (ctrl+o to expand)
+
+⏺ Bash(python3 - <<'EOF'
+      p='internal/campaign/campaigntest/memstore.go'…)
+  ⎿  # github.com/fyusufayan/insider-campaign-composer-case/backend/cmd/api
+     cmd/api/main.go:78:120: not enough arguments in call to campaign.NewSe
+     rvice
+     … +14 lines (ctrl+o to expand)
+  ⎿  Updated backend/internal/campaign/campaigntest/memstore.go (+80 -1)
+       7  import (
+       8          "context"
+       9          "crypto/rand"
+      10 +        "errors"                                               
+      11          "sync"
+      12          "time"
+      13  
+      14          "github.com/fyusufayan/insider-campaign-composer-case/b
+          ackend/internal/campaign"
+      15 +        "github.com/fyusufayan/insider-campaign-composer-case/b
+         +ackend/internal/content"                                       
+      16          "github.com/fyusufayan/insider-campaign-composer-case/b
+          ackend/internal/segment"
+      17  )
+      18  
+     ...
+       23  type MemoryStore struct {
+       24          mu        sync.Mutex
+       25          campaigns map[campaign.ID]campaign.Campaign
+       26 +        contents  map[campaign.ID][]content.Version           
+       27 +        nextID    int64                                       
+       28          // Updates counts committed writes (creates excluded).
+       29          updates int
+       30  }
+       31  
+       32  // NewMemoryStore returns an empty store.
+       33  func NewMemoryStore() *MemoryStore {
+       30 -        return &MemoryStore{campaigns: map[campaign.ID]campaig
+          -n.Campaign{}}                                                 
+       34 +        return &MemoryStore{campaigns: map[campaign.ID]campaig
+          +n.Campaign{}, contents: map[campaign.ID][]content.Version{}}  
+       35 +}                                                             
+       36 +                                                              
+       37 +// SaveContent implements campaign.Store with the repository's
+          + semantics:                                                   
+       38 +// serialized like the row lock; the version is appended and t
+          +he pointer,                                                   
+       39 +// status and version written together, or nothing is written.
+       40 +func (m *MemoryStore) SaveContent(ctx context.Context, id camp
+          +aign.ID, mutate campaign.ContentMutation) (campaign.Campaign, 
+          +content.Version, error) {                                     
+       41 +        m.mu.Lock()                                           
+       42 +        defer m.mu.Unlock()                                   
+       43 +        if err := ctx.Err(); err != nil {                     
+       44 +                return campaign.Campaign{}, content.Version{},
+          + err                                                          
+       45 +        }                                                     
+       46 +        cur, ok := m.campaigns[id]                            
+       47 +        if !ok {                                              
+       48 +                return campaign.Campaign{}, content.Version{},
+          + campaign.ErrNotFound                                         
+       49 +        }                                                     
+     … 69 more lines (ctrl+o to expand)
+  ⎿  Updated backend/internal/campaign/content_repository.go (+6 -6)
+      173  // scanContent decodes one campaign_contents row and re-valida
+           tes it.
+      174  func scanContent(row pgx.Row) (content.Version, error) {
+      175          var (
+      176 -                v                     content.Version         
+      177 -                number                int32                   
+      178 -                d                     content.Draft           
+      179 -                origin                string                  
+      180 -                model, prompt         *string                 
+      181 -                createdAt             time.Time               
+      176 +                v             content.Version                 
+      177 +                number        int32                           
+      178 +                d             content.Draft                   
+      179 +                origin        string                          
+      180 +                model, prompt *string                         
+      181 +                createdAt     time.Time                       
+      182          )
+      183          if err := row.Scan(&v.ID, &number, &d.SMSBody, &d.Emai
+           lSubject, &d.EmailBody, &origin, &model, &prompt, &createdAt);
+            err != nil {
+      184                  return content.Version{}, err
+
+⏺ Now config (CLAUDE_CONTENT_*) and wiring in cmd/api, the live harness and
+  existing tests.
+
+⏺ Bash(python3 - <<'EOF'
+      p='internal/platform/config/config.go'…)
+  ⎿                  HTTPClient: &http.Client{Transport: tr}, Logger: log,
+             })
+             if err != nil {
+     … +38 lines (ctrl+o to expand)
+  ⎿  Updated backend/cmd/api/main.go (+13 -2)
+      61          if err != nil {
+      62                  return err
+      63          }
+      64 +        generator, err := ai.NewGenerator(llmClient, ai.Generat
+         +orConfig{                                                      
+      65 +                Model:     cfg.Content.Model,                  
+      66 +                Effort:    llm.Effort(cfg.Content.Effort),     
+      67 +                Timeout:   cfg.Content.Timeout,                
+      68 +                MaxTokens: cfg.Content.MaxTokens,              
+      69 +        })                                                     
+      70 +        if err != nil {                                        
+      71 +                return err                                     
+      72 +        }                                                      
+      73          log.Info("configuration loaded", "http_addr", cfg.HTTPA
+          ddr, "llm_provider", cfg.LLM.Provider,
+      74                  "llm_max_retries", cfg.LLM.MaxRetries, "segment
+          _model", cfg.Segment.Model, "segment_effort", cfg.Segment.Effor
+          t,
+      75                  "segment_timeout", cfg.Segment.Timeout.String()
+          , "segment_max_tokens", cfg.Segment.MaxTokens,
+      67 -                "segment_prompt_version", ai.SegmentPromptVersi
+         -on)                                                            
+      76 +                "segment_prompt_version", ai.SegmentPromptVersi
+         +on, "content_model", cfg.Content.Model,                        
+      77 +                "content_effort", cfg.Content.Effort, "content_
+         +timeout", cfg.Content.Timeout.String(),                        
+      78 +                "content_max_tokens", cfg.Content.MaxTokens, "c
+         +ontent_prompt_version", ai.ContentPromptVersion)               
+      79  
+      80          ctx, stop := signal.NotifyContext(context.Background(),
+           syscall.SIGINT, syscall.SIGTERM)
+      81          defer stop()
+     ...
+      86          }
+      87          defer pool.Close()
+      88  
+      78 -        campaigns, err := campaign.NewService(campaign.NewRepos
+         -itory(pool), segment.NewAudienceRepository(pool), interpreter, 
+         -log)                                                           
+      89 +        campaigns, err := campaign.NewService(campaign.NewRepos
+         +itory(pool), segment.NewAudienceRepository(pool), interpreter, 
+         +generator, log)                                                
+      90          if err != nil {
+      91                  return err
+      92          }
+  ⎿  Updated backend/internal/platform/config/config.go (+18 -0)
+      72          defaultSegmentMaxTokens = 4000
+      73  )
+      74  
+      75 +// Defaults of the content generation task (CLAUDE_CONTENT_*, A
+         +RCHITECTURE                                                    
+      76 +// §7.3, ADR-015: not yet evaluated, so the strongest model).  
+      77 +const (                                                        
+      78 +        defaultContentModel     = "claude-opus-5-5"            
+      79 +        defaultContentEffort    = "medium"                     
+      80 +        defaultContentTimeout   = 90 * time.Second             
+      81 +        defaultContentMaxTokens = 8000                         
+      82 +)                                                              
+      83 +                                                               
+      84  // Effort values accepted for CLAUDE_*_EFFORT.
+      85  var allowedEfforts = []string{"low", "medium", "high", "max"}
+      86  
+     ...
+      103          LLM         LLM
+      104          // Segment configures brief interpretation (CLAUDE_SEG
+           MENT_*).
+      105          Segment AITask
+      106 +        // Content configures content generation (CLAUDE_CONTE
+          +NT_*).                                                        
+      107 +        Content AITask                                        
+      108  }
+      109  
+      110  // Load reads configuration through getenv (os.Getenv in produ
+           ction) and
+     ...
+      149          errs = append(errs, segErrs...)
+      150          cfg.Segment = seg
+      151  
+      152 +        cnt, cntErrs := loadAITask(get, "CLAUDE_CONTENT", AITa
+          +sk{                                                           
+      153 +                Model: defaultContentModel, Effort: defaultCon
+          +tentEffort,                                                   
+      154 +                Timeout: defaultContentTimeout, MaxTokens: def
+          +aultContentMaxTokens,                                         
+      155 +        })                                                    
+      156 +        errs = append(errs, cntErrs...)                       
+      157 +        cfg.Content = cnt                                     
+      158 +                                                              
+      159          if len(errs) > 0 {
+      160                  return Config{}, fmt.Errorf("invalid configura
+           tion: %w", errors.Join(errs...))
+      161          }
+  ⎿  Updated backend/internal/platform/config/config_test.go (+34 -0)
+      212          }
+      213  }
+      214  
+      215 +func TestContentTaskConfig(t *testing.T) {                    
+      216 +        cfg, err := Load(env(validEnv()))                     
+      217 +        if err != nil {                                       
+      218 +                t.Fatal(err)                                  
+      219 +        }                                                     
+      220 +        want := AITask{Model: "claude-opus-5-5", Effort: "medi
+          +um", Timeout: 90 * time.Second, MaxTokens: 8000}              
+      221 +        if cfg.Content != want {                              
+      222 +                t.Errorf("defaults = %+v, want %+v", cfg.Conte
+          +nt, want)                                                     
+      223 +        }                                                     
+      224 +        cfg, err = Load(env(with(validEnv(),                  
+      225 +                "CLAUDE_CONTENT_MODEL", "claude-sonnet-5-5", "
+          +CLAUDE_CONTENT_EFFORT", "high",                               
+      226 +                "CLAUDE_CONTENT_TIMEOUT", "2m", "CLAUDE_CONTEN
+          +T_MAX_TOKENS", "12000")))                                     
+      227 +        if err != nil {                                       
+      228 +                t.Fatal(err)                                  
+      229 +        }                                                     
+      230 +        want = AITask{Model: "claude-sonnet-5-5", Effort: "hig
+          +h", Timeout: 2 * time.Minute, MaxTokens: 12000}               
+      231 +        if cfg.Content != want {                              
+      232 +                t.Errorf("overrides = %+v, want %+v", cfg.Cont
+          +ent, want)                                                    
+      233 +        }                                                     
+      234 +        if cfg.Segment.Model != "claude-haiku-5-5" {          
+      235 +                t.Errorf("content overrides leaked into the se
+          +gment task: %+v", cfg.Segment)                                
+      236 +        }                                                     
+      237 +        for _, kv := range [][2]string{                       
+      238 +                {"CLAUDE_CONTENT_MODEL", "two words"},        
+      239 +                {"CLAUDE_CONTENT_EFFORT", "extreme"},         
+      240 +                {"CLAUDE_CONTENT_TIMEOUT", "-1s"},            
+      241 +                {"CLAUDE_CONTENT_MAX_TOKENS", "0"},           
+      242 +        } {                                                   
+      243 +                if _, err := Load(env(with(validEnv(), kv[0], 
+          +kv[1]))); err == nil || !strings.Contains(err.Error(), kv[0]) 
+          +{                                                             
+      244 +                        t.Errorf("%s=%q: err = %v", kv[0], kv[
+          +1], err)                                                      
+      245 +                }                                             
+      246 +        }                                                     
+      247 +}                                                             
+      248 +                                                              
+      249  func TestLLMMaxRetries(t *testing.T) {
+      250          cfg, err := Load(env(validEnv()))
+      251          if err != nil {
+
+⏺ Bash(python3 - <<'EOF'
+      p='test/live/liveapi/main.go'…)
+  ⎿          invalidReply =
+     `{"segment":{"match":"all","conditions":[{"type":"attri
+     bute","field":"email_opt_in","op":"eq","value":"yes"}]},` +
+
+     `"interpretation":"x","assumptions":[],"unsupported":[],"suggested_cha
+     … +74 lines (ctrl+o to expand)
+  ⎿  Updated backend/test/live/liveapi/main.go (+10 -1)
+       89          if err != nil {
+       90                  return err
+       91          }
+       92 +        // Wired like cmd/api; no HTTP route reaches it yet (C
+          +P12), so the CP10                                             
+       93 +        // interpretation-only budget is unaffected.          
+       94 +        generator, err := ai.NewGenerator(client, ai.Generator
+          +Config{                                                       
+       95 +                Model: cfg.Content.Model, Effort: llm.Effort(c
+          +fg.Content.Effort),                                           
+       96 +                Timeout: cfg.Content.Timeout, MaxTokens: cfg.C
+          +ontent.MaxTokens,                                             
+       97 +        })                                                    
+       98 +        if err != nil {                                       
+       99 +                return err                                    
+      100 +        }                                                     
+      101          log.Info("configuration loaded", "http_addr", cfg.HTTP
+           Addr, "llm_provider", cfg.LLM.Provider,
+      102                  "llm_max_retries", cfg.LLM.MaxRetries, "segmen
+           t_model", cfg.Segment.Model,
+      103                  "segment_effort", cfg.Segment.Effort, "segment
+           _timeout", cfg.Segment.Timeout.String(),
+     ...
+      110                  return err
+      111          }
+      112          defer pool.Close()
+      104 -        campaigns, err := campaign.NewService(campaign.NewRepo
+          -sitory(pool), segment.NewAudienceRepository(pool), interpreter
+          -, log)                                                        
+      113 +        campaigns, err := campaign.NewService(campaign.NewRepo
+          +sitory(pool), segment.NewAudienceRepository(pool), interpreter
+          +, generator, log)                                             
+      114          if err != nil {
+      115                  return err
+      116          }
+
+⏺ Bash(python3 - <<'EOF'
+      import re…)
+  ⎿  ?
+     github.com/fyusufayan/insider-campaign-composer-case/backend/cmd/a
+     pi      [no test files]
+     ok
+     github.com/fyusufayan/insider-campaign-composer-case/backend/cmd/m
+     … +19 lines (ctrl+o to expand)
+  ⎿  Updated backend/internal/campaign/service_test.go (+5 -1)
+      47          if err != nil {
+      48                  t.Fatal(err)
+      49          }
+      50 -        f.svc, err = campaign.NewService(f.store, f.audience, i
+         -t, logging.New(f.logs, slog.LevelDebug))                       
+      50 +        gen, err := ai.NewGenerator(f.llm, ai.GeneratorConfig{M
+         +odel: "cfg-content-model", Effort: llm.EffortMedium, Timeout: 5
+         + * time.Second, MaxTokens: 2000})                              
+      51 +        if err != nil {                                        
+      52 +                t.Fatal(err)                                   
+      53 +        }                                                      
+      54 +        f.svc, err = campaign.NewService(f.store, f.audience, i
+         +t, gen, logging.New(f.logs, slog.LevelDebug))                  
+      55          if err != nil {
+      56                  t.Fatal(err)
+      57          }
+  ⎿  Updated backend/internal/httpapi/campaigns_test.go (+5 -1)
+      52          if err != nil {
+      53                  t.Fatal(err)
+      54          }
+      55 -        svc, err := campaign.NewService(f.store, f.audience, it
+         -, log)                                                         
+      55 +        gen, err := ai.NewGenerator(client, ai.GeneratorConfig{
+         +Model: "cfg-content-model", Effort: llm.EffortMedium, Timeout: 
+         +5 * time.Second, MaxTokens: 2000})                             
+      56 +        if err != nil {                                        
+      57 +                t.Fatal(err)                                   
+      58 +        }                                                      
+      59 +        svc, err := campaign.NewService(f.store, f.audience, it
+         +, gen, log)                                                    
+      60          if err != nil {
+      61                  t.Fatal(err)
+      62          }
+  ⎿  Updated backend/test/integration/api_test.go (+6 -1)
+       97          if err != nil {
+       98                  t.Fatal(err)
+       99          }
+      100 +        gen, err := ai.NewGenerator(client, ai.GeneratorConfig
+          +{Model: "integration-content-model", Effort: llm.EffortMedium,
+      101 +                Timeout: 30 * time.Second, MaxTokens: 2000})  
+      102 +        if err != nil {                                       
+      103 +                t.Fatal(err)                                  
+      104 +        }                                                     
+      105          log := logging.New(io.Discard, slog.LevelInfo)
+      101 -        svc, err := campaign.NewService(campaign.NewRepository
+          -(e.pool), segment.NewAudienceRepository(e.pool), it, log)     
+      106 +        svc, err := campaign.NewService(campaign.NewRepository
+          +(e.pool), segment.NewAudienceRepository(e.pool), it, gen, log)
+      107          if err != nil {
+      108                  t.Fatal(err)
+      109          }
+
+⏺ Existing suites still pass. Writing the unit tests now, starting with the
+  generator.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ Write(backend/internal/ai/generator_test.go)
+  ⎿  Wrote 631 lines to backend/internal/ai/generator_test.go
+       1 package ai
+       2 
+       3 import (
+       4   "context"
+       5   "encoding/json"
+       6   "errors"
+       7   "slices"
+       8   "strings"
+       9   "testing"
+      10   "time"
+     … +621 lines (ctrl+o to expand)
+
+⏺ Bash(sed -i '' 's/js("Hi {{first_name|there}}, 30% off!")), "sms_body", "", 3
+      + first + 11}/js("Hi {{first_name|there}}, 30% off!")), "sms_body", "", 3
+      + first + 10}…)
+  ⎿  --- FAIL: TestParseGeneratedContentStrictDecoding (0.00s)
+         --- FAIL: TestParseGeneratedContentStrictDecoding/truncated (0.00s
+     )
+     … +8 lines (ctrl+o to expand)
+  ⎿  Updated backend/internal/ai/generator_test.go (+1 -1)
+      298                  code  string // "" = valid
+      299                  worst int    // expected worst case of the che
+           cked field when valid
+      300          }{
+      301 -                {"fallback placeholder", sms, out("sms_body", 
+          -js("Hi {{first_name|there}}, 30% off!")), "sms_body", "", 3 + 
+          -first + 11},                                                  
+      301 +                {"fallback placeholder", sms, out("sms_body", 
+          +js("Hi {{first_name|there}}, 30% off!")), "sms_body", "", 3 + 
+          +first + 10},                                                  
+      302                  {"all variables", sms, out("sms_body", js("{{f
+           irst_name}} {{last_name}} from {{city|your city}}: 30% off")),
+            "sms_body", "", -1},
+      303                  {"unknown variable", sms, out("sms_body", js("
+           Hi {{email}}, 30% off")), "sms_body", content.CodeUnknownVaria
+           ble, 0},
+      304                  {"spaced placeholder", sms, out("sms_body", js
+           ("Hi {{ first_name }}, 30% off")), "sms_body", content.CodeMal
+           formedPlaceholder, 0},
+
+⏺ Bash(sed -i '' 's|{"truncated", sms, `{"sms_body":"Hi`, "",
+      segment.CodeMalformedJSON}|{"truncated", sms, `{"sms_body":"Hi`,
+      "sms_body", segment.CodeMalformedJSON}|;…)
+  ⎿  ok
+     github.com/fyusufayan/insider-campaign-composer-case/backend/inter
+     nal/ai  0.377s
+  ⎿  Updated backend/internal/ai/generator_test.go (+2 -2)
+      257                  code string
+      258          }{
+      259                  {"not json", sms, `Here is your SMS`, "", segm
+           ent.CodeMalformedJSON},
+      260 -                {"truncated", sms, `{"sms_body":"Hi`, "", segm
+          -ent.CodeMalformedJSON},                                       
+      260 +                {"truncated", sms, `{"sms_body":"Hi`, "sms_bod
+          +y", segment.CodeMalformedJSON},                               
+      261                  {"trailing data", sms, okFor(sms) + ` {}`, "",
+            segment.CodeTrailingData},
+      262                  {"array root", sms, `["x"]`, "", segment.CodeW
+           rongType},
+      263                  {"duplicate key", sms, `{"sms_body":"Hi there"
+           ,"sms_body":"Hello there"}`, "sms_body", segment.CodeDuplicate
+           Property},
+     ...
+      549  func TestContentPromptContract(t *testing.T) {
+      550          p := ContentSystemPrompt()
+      551          for _, want := range []string{
+      552 -                "{{first_name}}", "{{name|fallback}}", "first_
+          -name", "last_name", "city",                                   
+      552 +                "{{name}}", "{{first_name|there}}", "{{name|fa
+          +llback}}", "first_name", "last_name", "city",                 
+      553                  "at most 160", "at most 80", "at most 5000", "
+           aim for at most 150", "aim for at most 70",
+      554                  "Worst case", "\"none\"", "percent_discount", 
+           "free_shipping", "untrusted data", "Plain text only",
+      555                  "unsubscribe",
+
+⏺ Generator tests pass. Now demo content tests.
+
+⏺ Write(backend/internal/ai/demo_content_test.go)
+  ⎿  Wrote 147 lines to backend/internal/ai/demo_content_test.go
+       1 package ai
+       2 
+       3 import (
+       4   "context"
+       5   "slices"
+       6   "strings"
+       7   "testing"
+       8 
+       9   "github.com/fyusufayan/insider-campaign-composer-case/backend/
+         internal/content"
+     … +138 lines (ctrl+o to expand)
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ Bash(python3 - <<'EOF'
+      p='internal/ai/demo_content.go'…)
+  ⎿  # github.com/fyusufayan/insider-campaign-composer-case/backend/interna
+     l/ai [github.com/fyusufayan/insider-campaign-composer-case/backend/int
+     ernal/ai.test]
+     … +5 lines (ctrl+o to expand)
+  ⎿  Updated backend/internal/ai/demo_content.go (+8 -1)
+      145          for _, ch := range chs {
+      146                  switch ch {
+      147                  case segment.ChannelSMS:
+      148 -                        out[content.FieldSMSBody] = greeting +
+          - ", " + core + offerSentence + " " + cta                      
+      148 +                        // Worst case ≤ 150 runes (the prompt'
+          +s SMS target) for every                                       
+      149 +                        // combination; asserted by the tests.
+      150 +                        smsCore := map[demoGoal]string{       
+      151 +                                goalCart:    "your cart is wai
+          +ting for you.",                                               
+      152 +                                goalWinBack: "we have missed y
+          +ou!",                                                         
+      153 +                                goalGeneric: "new favourites a
+          +re waiting for you.",                                         
+      154 +                        }[goal]                               
+      155 +                        out[content.FieldSMSBody] = greeting +
+          + ", " + smsCore + offerSentence + " " + cta                   
+      156                  case segment.ChannelEmail:
+      157                          subject := map[demoGoal]string{
+      158                                  goalCart:    "{{first_name|Hel
+           lo}}, your cart is waiting",
+  ⎿  Updated backend/internal/ai/demo_content_test.go (+6 -4)
+      43                                                  for _, w := ran
+          ge gen.Validation.Warnings {
+      44                                                          t.Error
+          f("%+v %v: warning %+v", in.Brief, chs, w)
+      45                                                  }
+      46 -                                                if r := gen.Val
+         -idation.SMS; r != nil && r.CharsWorstCase > content.MaxSMSRunes
+         - {                                                             
+      47 -                                                        t.Error
+         -f("sms worst case %d", r.CharsWorstCase)                       
+      46 +                                                if r := gen.Val
+         +idation.SMS; r != nil && r.CharsWorstCase > targetSMSRunes {   
+      47 +                                                        t.Error
+         +f("sms worst case %d exceeds the %d target", r.CharsWorstCase, 
+         +targetSMSRunes)                                                
+      48                                                  }
+      49 -                                                body, _ := gen.
+         -Content.EmailBody()                                            
+      50 -                                                if (length == L
+         -engthLong) != strings.Contains(body.String(), "{{city|") {     
+      49 +                                                if r := gen.Val
+         +idation.Subject; r != nil && r.CharsWorstCase > targetEmailSubj
+         +ectRunes {                                                     
+      50 +                                                        t.Error
+         +f("subject worst case %d exceeds the %d target", r.CharsWorstCa
+         +se, targetEmailSubjectRunes)                                   
+      51 +                                                }              
+      52 +                                                if body, ok := 
+         +gen.Content.EmailBody(); ok && (length == LengthLong) != string
+         +s.Contains(body.String(), "{{city|") {                         
+      53                                                          t.Error
+          f("%s email body length handling: %q", length, body.String())
+      54                                                  }
+      55                                          }
+
+⏺ Bash(sed -i '' '/internal\/content"$/d' internal/ai/demo_content_test.go && go
+      test ./internal/ai 2>&1 | tail -20)
+  ⎿  ok
+     github.com/fyusufayan/insider-campaign-composer-case/backend/inter
+     nal/ai  0.407s
+  ⎿  Updated backend/internal/ai/demo_content_test.go (+0 -1)
+       6          "strings"
+       7          "testing"
+       8  
+       9 -        "github.com/fyusufayan/insider-campaign-composer-case/b
+         -ackend/internal/content"                                       
+       9          "github.com/fyusufayan/insider-campaign-composer-case/b
+          ackend/internal/llm"
+      10          "github.com/fyusufayan/insider-campaign-composer-case/b
+          ackend/internal/segment"
+      11  )
+
+⏺ Now campaign-level unit tests (state machine, service lifecycle, conflicts,
+  logs).
+
+⏺ Write(backend/internal/campaign/content_service_test.go)
+  ⎿  Wrote 463 lines to backend/internal/campaign/content_service_test.go
+       1 package campaign_test
+       2 
+       3 import (
+       4   "context"
+       5   "encoding/json"
+       6   "errors"
+       7   "reflect"
+       8   "slices"
+       9   "strings"
+      10   "sync"
+     … +453 lines (ctrl+o to expand)
+
+⏺ Bash(python3 - <<'EOF'
+      p='internal/campaign/content_service_test.go'…)
+  ⎿  ok
+     github.com/fyusufayan/insider-campaign-composer-case/backend/inter
+     nal/campaign    0.406s
+     ?
+     github.com/fyusufayan/insider-campaign-composer-case/backend/inter
+     nal/campaign/campaigntest       [no test files]
+  ⎿  Updated backend/internal/campaign/content_service_test.go (+2 -2)
+      152  func TestGenerateContentInvalidStatuses(t *testing.T) {
+      153          f := newFixture(t)
+      154          base := f.interpreted(t)
+      155 -        for _, st := range []campaign.Status{                 
+      155 +        for i, st := range []campaign.Status{                 
+      156                  campaign.StatusDraft, campaign.StatusPendingAp
+           proval, campaign.StatusApproved, campaign.StatusSending,
+      157                  campaign.StatusCompleted, campaign.StatusCompl
+           etedWithFailures, campaign.StatusCancelled,
+      158          } {
+      159                  t.Run(string(st), func(t *testing.T) {
+      160                          c := base
+      161 -                        c.ID = campaign.ID{byte(len(st)), 0xAB
+          -, st[0]}                                                      
+      161 +                        c.ID = campaign.ID{0xAB, byte(i + 1)} 
+      162                          c.Status = st
+      163                          f.store.Put(c)
+      164                          calls := f.llm.Calls()
+
+⏺ Unit tests green. Adding a small fuzz target for the decoder, then the
+  PostgreSQL integration tests.
+
+⏺ Bash(cat >> internal/ai/generator_test.go <<'EOF'…)
+  ⎿  fuzz: elapsed: 21s, execs: 783962 (0/sec), new interesting: 224 (total
+     : 228)
+     fuzz: elapsed: 21s, execs: 783962 (0/sec), new interesting: 224 (total
+     … +4 lines (ctrl+o to expand)
+  ⎿  Updated backend/internal/ai/generator_test.go (+29 -0)
+      629                  }
+      630          }
+      631  }
+      632 +                                                              
+      633 +// Any model output either fails with field errors or yields c
+          +ontent that                                                   
+      634 +// re-validates for exactly the selected channels and passes t
+          +he offer policy.                                              
+      635 +func FuzzParseGeneratedContent(f *testing.F) {                
+      636 +        f.Add(okFor(both), 0, 30)                             
+      637 +        f.Add(okFor(sms), 1, 30)                              
+      638 +        f.Add(`{"sms_body":"Hi {{first_name|x}} 30%","sms_body
+          +":"y"}`, 0, 30)                                               
+      639 +        f.Add(`{"email_subject":"A","email_body":"B {{city}}"}
+          +`, 2, 0)                                                      
+      640 +        f.Fuzz(func(t *testing.T, data string, sel, pct int) {
+      641 +                chs := [][]segment.Channel{both, sms, email}[(
+          +(sel%3)+3)%3]                                                 
+      642 +                o := Offer{Kind: OfferNone}                   
+      643 +                if pct > 0 && pct <= 100 {                    
+      644 +                        o = Offer{Kind: OfferPercentDiscount, 
+          +Value: pct}                                                   
+      645 +                }                                             
+      646 +                c, _, errs := ParseGeneratedContent([]byte(dat
+          +a), chs, o)                                                   
+      647 +                if len(errs) > 0 {                            
+      648 +                        if !c.IsZero() {                      
+      649 +                                t.Fatal("content with errors")
+      650 +                        }                                     
+      651 +                        return                                
+      652 +                }                                             
+      653 +                if !slices.Equal(c.Channels(), chs) {         
+      654 +                        t.Fatalf("channels = %v, want %v", c.C
+          +hannels(), chs)                                               
+      655 +                }                                             
+      656 +                if r := content.Validate(c.Draft(), chs); !r.O
+          +K() {                                                         
+      657 +                        t.Fatalf("accepted content does not re
+          +-validate: %v", r.Errors)                                     
+      658 +                }                                             
+      659 +        })                                                    
+      660 +}                                                             
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ Bash(grep -n "fxInsertUser =" -A4 test/integration/segment_fixture_test.go;
+      python3 - <<'EOF'
+      p='test/integration/api_test.go'…)  ⎿  123:    fxInsertUser = `
+     124-INSERT INTO users (id, first_name, last_name, email, phone, city,
+     city_normalized, country, gender,
+     … +5 lines (ctrl+o to expand)
+  ⎿  Updated backend/test/integration/api_test.go (+2 -0)
+      77          pool   *pgxpool.Pool
+      78          srv    *httptest.Server
+      79          llm    *llm.Scripted
+      80 +        svc    *campaign.Service                               
+      81          dbURL  string
+      82          tracer *sqlRecorder
+      83  }
+     ...
+      108          if err != nil {
+      109                  t.Fatal(err)
+      110          }
+      111 +        e.svc = svc                                           
+      112          e.srv = httptest.NewServer(httpapi.NewRouter(log, http
+           api.Deps{Campaigns: svc}))
+      113          t.Cleanup(e.srv.Close)
+      114          return e
+
+⏺ Write(backend/test/integration/content_test.go)
+  ⎿  Wrote 573 lines to backend/test/integration/content_test.go
+       1 //go:build integration
+       2 
+       3 package integration
+       4 
+       5 import (
+       6   "context"
+       7   "encoding/json"
+       8   "errors"
+       9   "net/http"
+      10   "regexp"
+     … +563 lines (ctrl+o to expand)
+
+⏺ Bash(python3 - <<'EOF'
+      p='test/integration/content_test.go'…)
+  ⎿  internal/campaign/content_service_test.go
+     docker-ok
+  ⎿  Updated backend/test/integration/content_test.go (+2 -5)
+      18  
+      19          "github.com/fyusufayan/insider-campaign-composer-case/b
+          ackend/internal/ai"
+      20          "github.com/fyusufayan/insider-campaign-composer-case/b
+          ackend/internal/campaign"
+      21 -        "github.com/fyusufayan/insider-campaign-composer-case/b
+         -ackend/internal/content"                                       
+      21          "github.com/fyusufayan/insider-campaign-composer-case/b
+          ackend/internal/llm"
+      22  )
+      23  
+     ...
+      564          if n := e.totalContentRows(); n != 0 {
+      565                  t.Errorf("%d content rows", n)
+      566          }
+      568 -        // A content version cannot belong to another campaign
+          -'s pointer path.                                              
+      569 -        if _, err := e.svc.CurrentContent(context.Background()
+          -, mustID(t, c.ID)); err != nil {                              
+      570 -                t.Errorf("current content without versions: %v
+          -", err)                                                       
+      567 +        if _, cv, err := e.svc.CurrentContent(context.Backgrou
+          +nd(), mustID(t, c.ID)); err != nil || cv != nil {             
+      568 +                t.Errorf("current content without versions: %+
+          +v, %v", cv, err)                                              
+      569          }
+      572 -        _ = content.MaxSMSRunes                               
+      570  }
+
+⏺ Bash(gofmt -w internal/campaign/content_service_test.go && go test
+      -tags=integration -race -count=1 -timeout 10m -run 'TestContent'
+      ./test/integration/... 2>&1 | tai…)
+  ⎿  ok
+     github.com/fyusufayan/insider-campaign-composer-case/backend/test/
+     integration     4.046s
+     ?
+     github.com/fyusufayan/insider-campaign-composer-case/backend/test/
+     integration/testsupport [no test files]
+  ⎿  Updated backend/internal/campaign/content_service_test.go (+4 -4)
+      447  func TestParseStoredContentRejectsNonCanonicalOrInvalid(t *tes
+           ting.T) {
+      448          str := func(s string) *string { return &s }
+      449          for _, d := range []content.Draft{
+      450 -                {SMSBody: str(" Hi {{first_name}} ")},       /
+          -/ not trimmed                                                 
+      450 +                {SMSBody: str(" Hi {{first_name}} ")},  // not
+          + trimmed                                                      
+      451                  {SMSBody: str("Café {{first_name}}")}, // not 
+           NFC
+      452 -                {SMSBody: str("Hi {{email}}")},              /
+          -/ invalid placeholder                                         
+      453 -                {EmailSubject: str("Subject only")},         /
+          -/ unpaired email                                              
+      454 -                {},                                          /
+          -/ no content                                                  
+      452 +                {SMSBody: str("Hi {{email}}")},         // inv
+          +alid placeholder                                              
+      453 +                {EmailSubject: str("Subject only")},    // unp
+          +aired email                                                   
+      454 +                {},                                     // no 
+          +content                                                       
+      455          } {
+      456                  if _, err := campaign.ParseStoredContent(d); e
+           rr == nil {
+      457                          t.Errorf("accepted %+v", d)
+
+⏺ All new PostgreSQL integration tests pass; confirming they actually ran, then
+  the full verification suite.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+  Listed 1 directory, ran 3 shell commands (ctrl+o to expand)
+
+⏺ Lint (gofmt, vet ×3, staticcheck) is clean. Running the full integration
+  suite.
+
+  Ran 2 shell commands (ctrl+o to expand)
+
+⏺ Bash(python3 - <<'EOF'
+      p='docker-compose.yml'…)
+  ⎿  docker-compose.yml:4
+     .env.example:4
+     #!/usr/bin/env bash
+     … +39 lines (ctrl+o to expand)
+  ⎿  Updated .env.example (+8 -0)
+      35  CLAUDE_SEGMENT_TIMEOUT=45s
+      36  CLAUDE_SEGMENT_MAX_TOKENS=4000
+      37  
+      38 +# Content generation model (ADR-015: not yet evaluated, default
+         + claude-opus-5-5).                                             
+      39 +# No HTTP route reaches content generation yet (streaming endpo
+         +int is Slice 2's                                               
+      40 +# next checkpoint), so these settings cause no API spend today.
+      41 +CLAUDE_CONTENT_MODEL=claude-opus-5-5                           
+      42 +CLAUDE_CONTENT_EFFORT=medium                                   
+      43 +CLAUDE_CONTENT_TIMEOUT=90s                                     
+      44 +CLAUDE_CONTENT_MAX_TOKENS=8000                                 
+      45 +                                                               
+      46  # Deterministic seed (cmd/seed). The same three values always p
+          roduce the same
+      47  # dataset; SEED_REFERENCE_TIME must be RFC 3339 in UTC. `make s
+          eed-today` uses
+      48  # today's UTC midnight instead of the fixed default.
+  ⎿  Updated docker-compose.yml (+4 -0)
+      87        CLAUDE_SEGMENT_EFFORT: ${CLAUDE_SEGMENT_EFFORT:-low}
+      88        CLAUDE_SEGMENT_TIMEOUT: ${CLAUDE_SEGMENT_TIMEOUT:-45s}
+      89        CLAUDE_SEGMENT_MAX_TOKENS: ${CLAUDE_SEGMENT_MAX_TOKENS:-4
+          000}
+      90 +      CLAUDE_CONTENT_MODEL: ${CLAUDE_CONTENT_MODEL:-claude-opus
+         +-5-5}                                                          
+      91 +      CLAUDE_CONTENT_EFFORT: ${CLAUDE_CONTENT_EFFORT:-medium}  
+      92 +      CLAUDE_CONTENT_TIMEOUT: ${CLAUDE_CONTENT_TIMEOUT:-90s}   
+      93 +      CLAUDE_CONTENT_MAX_TOKENS: ${CLAUDE_CONTENT_MAX_TOKENS:-8
+         +000}                                                           
+      94      depends_on:
+      95        seed:
+      96          condition: service_completed_successfully
+
+⏺ Building the images and running the Compose smoke test in forced demo mode
+  (blank key).
+
+  Ran 2 shell commands (ctrl+o to expand)
+
+⏺ Smoke passes in demo mode. Now documenting the concrete CP12 decisions in
+  ARCHITECTURE.
+
+  Searched for 1 pattern (ctrl+o to expand)
+
+⏺ Bash(python3 - <<'EOF'
+      p='docs/ARCHITECTURE.md'…)
+  ⎿  519:### 7.8 Content generation as implemented (CP12)
+  ⎿  Updated docs/ARCHITECTURE.md (+18 -2)
+      457  - Structured output (stable API, no beta header): `OutputConfi
+           g: anthropic.OutputConfigParam{Effort: …, Format: anthropic.JS
+           ONOutputFormatParam{Schema: <map[string]any>}}`, serialized as
+            `"output_config":{"effort":"low","format":{"type":"json_schem
+           a","schema":{…}}}` (verified by a transport-level test that co
+           mpares the captured body with `InterpretationSchemaJSON`). Thi
+           nking is sent explicitly as `{"type":"adaptive"}` so every mod
+           el gets the same reasoning configuration (on `claude-opus-5-5`
+            this equals omitting it); a model without adaptive thinking f
+           ails with a 400 instead of silently running without it. `CLAUD
+           E_*_EFFORT` maps 1:1 (`low|medium|high|max`); an empty or unkn
+           own effort is rejected locally rather than letting the model d
+           efault apply. The interpretation schema stays within the struc
+           tured-output subset and limits (all objects closed, non-recurs
+           ive `$defs`, 3 optional properties of 24, 3 unions of 16). The
+            JSON arrives as a text block and is decoded by our strict dec
+           oder. Schemas are generated deterministically from the registr
+           ies (stable key order) so the API's compiled-grammar cache (24
+            h) is reused.
+      458  - Retries: the SDK retries connection errors, 408, 409, 429, ≥
+           500 (honouring `x-should-retry`) up to `CLAUDE_MAX_RETRIES` (d
+           efault 2, range 0–5) with 0.5 s·2ⁿ backoff (≤ 8 s, jittered) o
+           r the server's `retry-after(-ms)`. The **only** time budget is
+            the interpreter's `context.WithTimeout(CLAUDE_SEGMENT_TIMEOUT
+           )`, which spans all SDK attempts and is never exceeded (a long
+            `retry-after` simply ends in a timeout). **No** per-attempt `
+           option.WithRequestTimeout` is set: the SDK retries an attempt 
+           that hit it, which would abandon and re-bill a slow but health
+           y generation. Worst case per interpretation: 3 logical request
+           s (answer, repair, one truncation retry) × (1 + retries) HTTP 
+           attempts, all inside the one deadline.
+      459  - Errors: `errors.As(err, &apiErr *anthropic.Error)` → `llm.Er
+           ror{StatusCode, RequestID}`; 408/409/429/5xx → `llm.ErrUnavail
+           able` (retryable), other 4xx (400 incl. schema rejection, 401,
+            403, 404 unknown model, 413) → `llm.ErrRejected`; transport e
+           rrors → `ErrUnavailable` (status 0); the caller's cancellation
+           /deadline → the context error. The message is rebuilt from met
+           adata (status, API error type, request id) because `*anthropic
+           .Error.Error()` embeds the raw response body; transport failur
+           es get the fixed message "anthropic transport failure" (their 
+           text may carry URLs, proxy credentials or quoted bytes). 2xx r
+           esponses with a non-text content block (anything but text/thin
+           king) or `end_turn` without text are `ErrUnavailable`, never o
+           utput. Stop reasons other than end_turn/max_tokens/refusal/sto
+           p_sequence pass through verbatim and are rejected by the inter
+           preter. `ai` maps these to `ErrLLMUnavailable`, `ErrLLMRejecte
+           d`, `ErrLLMRefused`, `ErrLLMTruncated`, `ErrOutputInvalid`. Th
+           e adapter logs one metadata line per call (task, models, effor
+           t, stop reason, tokens, latency, provider request id) — never 
+           prompts, briefs, outputs or the key.
+      460 -- `Stream` on the Anthropic client returns `ErrRejected` witho
+          -ut contacting the provider until content generation (Slice 2) 
+          -implements it.                                                
+      460 +- `Stream` on the Anthropic client returns `ErrRejected` witho
+          +ut contacting the provider until the streaming checkpoint of S
+          +lice 2 implements it. CP12's content generation uses `Complete
+          +` (§7.8).                                                     
+      461  - Model constraints honoured (Opus 5.5, Haiku 5.5, Sonnet 5.5)
+           : thinking always on (controlled by effort only), no forced `t
+           ool_choice`, no assistant prefill.
+      462  - Server-side refusal fallback (beta Messages API) is **not** 
+           used in core; refusals are surfaced to the marketer.
+      463  
+     ...
+      509  | Client disconnect | context cancelled → SDK stream closed |
+      510  
+      511  ### 7.6 Streaming content
+      512 -The model streams one flat JSON object (`sms`, `email_subject`
+          -, `email_body`). `ai/jsonstream` incrementally extracts string
+          - field values (escape- and UTF-8-safe across chunk boundaries)
+          - and emits `FieldDelta{field, text}`. On completion the full t
+          -ext goes through strict decode + `content.Validate`; only the 
+          -validated result becomes a content version and replaces the st
+          -reamed preview.                                               
+      512 +The model streams one flat JSON object with the content field 
+          +names (`sms_body`, `email_subject`, `email_body`; only the sel
+          +ected channels' fields, §7.8). `ai/jsonstream` incrementally e
+          +xtracts string field values (escape- and UTF-8-safe across chu
+          +nk boundaries) and emits `FieldDelta{field, text}`. On complet
+          +ion the full text goes through strict decode + `content.Valida
+          +te`; only the validated result becomes a content version and r
+          +eplaces the streamed preview.                                 
+      513  
+      514  ### 7.7 AI-proposed vs backend-controlled
+      515  | AI proposes (untrusted, displayed, editable) | Backend decid
+           es (deterministic) |
+      516  |---|---|
+      517  | rule draft, interpretation, assumptions, unsupported, sugges
+           ted channels, content brief, copy | allowed fields/ops/ranges,
+            SQL, consent, contact, audience partition, snapshot, limits, 
+           variables, footer, approval, rate limits, retries, idempotency
+            |
+      518  
+      519 +### 7.8 Content generation as implemented (CP12)              
+      520 +                                                              
+      521 +CP12 is the non-streaming backend half of Slice 2: `ai.Generat
+          +or`, the content-version repository and `campaign.Service.Gene
+          +rateContent`. There is **no HTTP route yet**: the architecture
+          +'s only generation route is the SSE `POST /content/generations
+          +` (§11, §12), which arrives with streaming; the campaign DTO i
+          +s unchanged (current content is added to it with the content e
+          +ditor).                                                       
+      522 +                                                              
+      523 +- **Input** (`ai.GenerationInput`): the re-validated stored co
+          +ntent brief (`ai.ParseContentBrief`, strict), the normalized s
+          +egment rule (context only) and the selected channels. The raw 
+          +marketer brief, customer records, contacts and delivery rows a
+          +re not part of the type and never reach the prompt.           
+      524 +- **Prompt `content_v1`** (`ai.ContentPromptVersion`, persiste
+          +d as `campaign_contents.prompt_version`): system prompt built 
+          +from `content.Variables()` (names, declared maxima), the place
+          +holder/fallback grammar, the hard limits (160/80/5,000) with t
+          +he soft targets (150/70), the worst-case rule with a worked ex
+          +ample, plain-text rules, "no invented facts", "the backend add
+          +s the unsubscribe footer", and the offer rules. The user messa
+          +ge carries one JSON request document (`channels`, `fields`, `c
+          +ontent_brief`, `audience_rule`) inside `<content_request>` tag
+          +s — `encoding/json` escapes `<`, `>` and `&`, so no value can 
+          +close the tag — plus a deterministic restatement of the requir
+          +ed fields and the authorized offer. Output language is English
+          + (the content brief has no language field).                   
+      525 +- **Schema** (`ai.ContentSchema`): a closed flat object whose 
+          +properties are exactly the selected channels' fields (`sms_bod
+          +y`; `email_subject` + `email_body`), all required strings. Thr
+          +ee deterministic schemas exist.                               
+      526 +- **Decoding** (`ai.ParseGeneratedContent`): ≤ 64 KiB, one JSO
+          +N value, valid UTF-8, no duplicate or unknown properties (a fi
+          +eld of an unselected channel is unknown), every field a string
+          + (null/other types rejected); then `content.Parse` for the sel
+          +ected channels (the single content validator) and the **offer 
+          +policy**; all problems of both are reported together.         
+      527 +- **Offer policy** (brief-dependent, so it lives in `ai`, not 
+          +`content`): `none` forbids percentages, discount/coupon/vouche
+          +r/promo/gift terms and free shipping; `percent_discount N` all
+          +ows only `N%` (also `%N`, `N percent`, `yüzde N`) and forbids 
+          +free shipping; `free_shipping` forbids percentages and discoun
+          +t terms. Monetary amounts (`₺50`, `500 TL`, `$5`) are always r
+          +ejected (`unauthorized_claim`). Matching is case-insensitive o
+          +ver English and common Turkish phrasings — conservative (it ca
+          +n reject "100% cotton" when no discount is authorized) and not
+          + language understanding. An authorized offer that a message do
+          +es not mention yields the warning `offer_not_mentioned`.      
+      528 +- **Model-call policy** is shared with the interpreter (`ai/ca
+          +ll.go`): only `end_turn` is output; `refusal` → `ErrLLMRefused
+          +` (no repair); `max_tokens` → one retry with a doubled budget,
+          + then `ErrLLMTruncated`; other stop reasons → `ErrLLMTruncated
+          +`; one deadline (`CLAUDE_CONTENT_TIMEOUT`) spans all calls. In
+          +valid output gets **one** repair turn (append-only history, st
+          +ructured field errors, same schema); a second failure → `ErrOu
+          +tputInvalid` with details and the bounded raw proposal. At mos
+          +t 3 logical calls.                                            
+      529 +- **Configuration**: `CLAUDE_CONTENT_MODEL` (default `claude-o
+          +pus-5-5`), `_EFFORT` (`medium`), `_TIMEOUT` (`90s`), `_MAX_TOK
+          +ENS` (`8000`), validated like the segment task; logged at star
+          +tup with `content_prompt_version`.                            
+      530 +- **Demo** (`TaskContentGeneration` responder): fixed English 
+          +templates chosen by goal keyword (cart recovery / win back / g
+          +eneric), tone (friendly / urgent / formal) and length (email p
+          +aragraphs); the offer is rendered only from its validated kind
+          + and integer value; no brief text is ever copied into the outp
+          +ut. Every combination is within the soft targets and passes th
+          +e same pipeline in one call. Demo versions are stored with `mo
+          +del = demo`, and `Generation.Notes` carries `ai.DemoContentNot
+          +ice`.                                                         
+      531 +- **State machine**: `CheckGenerateContent` allows `segmented`
+          + and `content_ready`; `draft` → `409 invalid_state` ("interpre
+          +t the brief first"); `pending_approval`/`approved` → `409 inva
+          +lid_state` until Slice 3 can revoke the approval in the same t
+          +ransaction (as for interpret and channels, §11.1); sending and
+          + terminal states → `409`. An empty channel selection is `422 v
+          +alidation_failed` (`channels`, `required`) and no model call i
+          +s made. Success → `content_ready`.                            
+      532 +- **Lifecycle**: read the campaign without a lock and record `
+          +version` and `channels` → call the generator with no transacti
+          +on open → `Repository.SaveContent`: one short transaction (`lo
+          +ck_timeout`/`statement_timeout` 5 s) that locks the campaign r
+          +ow first, reads and re-validates the current version and check
+          +s that it is the newest (`max(version)`), applies the pure `Ca
+          +mpaign.WithAIContent` (version and channel CAS, state check, c
+          +ontent covers exactly the selected channels, `content.NextVers
+          +ion`), inserts the immutable `campaign_contents` row and write
+          +s `status`, `current_content_id` and `version` in one `UPDATE`
+          +, then commits. A campaign changed while the model worked → `*
+          +ConflictError`, nothing inserted. The rollback runs even if th
+          +e caller's context is cancelled, so a failure after the insert
+          + leaves no orphaned version.                                  
+      533 +- **Persistence**: the repository lives in `campaign` because 
+          +the version row and the pointer must share the campaign-locked
+          + transaction; `content` stays pure. Only `INSERT` and `SELECT`
+          + statements exist for `campaign_contents`. Reads (`GetContent`
+          +, `Service.CurrentContent`) re-validate the row through `conte
+          +nt.Parse` for the channels it has text for, require canonical 
+          +(NFC, trimmed) text and a valid provenance. No migration was n
+          +eeded: the CP1 schema (`UNIQUE (campaign_id, version)`, FK `cu
+          +rrent_content_id`) fits.                                      
+      534 +                                                              
+      535  ---
+      536  
+      537  ## 8. Content validation
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ CP12 is done and nothing is committed. CP11 was already committed before I
+  started (HEAD 1eb1e1e, clean tree). All checks pass, and no paid Anthropic
+  calls were made.
+
+  1. Files
+
+  New
+  - internal/ai: call.go, generator.go, prompt_content_v1.go, content_schema.go,
+    content_policy.go, demo_content.go
+  - internal/campaign: content.go, content_repository.go, content_service.go
+  - Tests: ai/generator_test.go (includes a fuzz test), ai/demo_content_test.go,
+    campaign/content_service_test.go, test/integration/content_test.go
+
+  Modified
+  - ai/interpreter.go: the shared model-call logic moved to call.go, behavior
+    unchanged.
+  - ai/strictjson.go: the size limit is now a parameter.
+  - ai/interpretation.go: adds ParseContentBrief.
+  - ai/demo_segment.go: registers the demo content responder.
+  - campaign/repository.go: adds a shared helper for "lock the campaign row,
+    then run the transaction".
+  - campaign/campaign.go, campaign/service.go: Store gains SaveContent and
+    GetContent; NewService now takes the generator.
+  - campaigntest/memstore.go, config/config.go (adds CLAUDE_CONTENT_*).
+  - Wiring: cmd/api, test/live/liveapi.
+  - Updated test fixtures, docker-compose.yml, .env.example, and
+    docs/ARCHITECTURE.md (§7.1, §7.6, new §7.8).
+
+  2. Generator API and contract
+
+  - API: ai.NewGenerator(client, GeneratorConfig) and Generate(ctx, 
+    GenerationInput{Brief, Rule, Channels}) → Generation{Content, Validation, 
+    Channels, Notes, Meta}.
+  - What the model sees: GenerationInput has no field for customer data. The
+    model gets only the re-validated stored content brief, the normalized rule
+    and the selected channels. The raw marketer brief is not sent.
+  - Prompt content_v1:
+    - The variable list comes from content.Variables(), with each variable's
+      maximum length.
+    - It explains the {{name}} / {{name|fallback}} grammar.
+    - It states the hard limits (160/80/5,000) and soft targets (150/70), and
+      the worst-case length rule with a worked example.
+    - It requires plain text, no invented facts, and no unsubscribe text (the
+      backend adds the footer).
+    - It states the offer rules.
+    - The request is a JSON document inside <content_request> tags. Because JSON
+      encoding escapes <, nothing in it can close the tag.
+  - Schema: a closed, flat object with exactly the selected channels' fields,
+    all required strings. There are three fixed variants (SMS, email, both).
+
+  3. Strict decoding and repair
+
+  - Decoding (ParseGeneratedContent):
+    - Output is capped at 64 KiB; malformed JSON, invalid UTF-8 and trailing
+      data are rejected.
+    - Duplicate or unknown properties are rejected; a field for an unselected
+      channel counts as unknown.
+    - null or wrong-typed fields are rejected.
+  - Validation:
+    - Content then goes through CP11's content.Parse; there is no second
+      validator.
+    - Then the offer policy runs. It rejects any incentive the brief didn't
+      authorize, and any money amount.
+  - Stop reasons: a refusal fails without repair. A max_tokens cutoff gets one
+    retry with double the budget.
+  - Repair: there is exactly one repair turn, sent the structured errors. A
+    second failure returns ai_output_invalid with the details and the raw
+    output. At most 3 calls are made, all within one timeout.
+
+  4. Demo generation
+
+  - It uses fixed English templates, chosen by goal keyword, tone and length.
+  - The offer is built only from its validated kind and number. No brief text is
+    ever copied into the output.
+  - Every combination (900 tested) is within the soft targets, passes on the
+    first call and has no warnings.
+  - Demo versions are stored with model = demo, and the result carries
+    DemoContentNotice.
+  - The demo segmentation interpreter is unchanged.
+
+  5. Persistence and transactions
+
+  1. The service reads the campaign without a lock and notes its version and
+     channels.
+  2. It calls the LLM with no transaction open.
+  3. SaveContent then runs one short transaction (5 s lock and statement
+     timeouts):
+     - lock the campaign row;
+     - read and re-validate the current version, and check it is the newest;
+     - run the pure WithAIContent: version and channel check, state check,
+       content must cover exactly the selected channels, numbering via
+       content.NextVersion;
+     - INSERT the new version row;
+     - one UPDATE sets status, current_content_id and version together;
+     - commit.
+
+  The code only ever inserts or selects content rows, never updates or deletes
+  them. Reads go back through content.Parse and also require normalized text and
+  valid provenance. No migration was needed.
+
+  6. State machine and concurrency
+
+  - Allowed: segmented and content_ready; the result is always content_ready.
+  - Refused with 409: draft, and pending_approval/approved (until Slice 3 can
+    revoke the approval in the same transaction). sending and the final states
+    are also refused.
+  - No channels selected: 422 with channels/required, and the model is not
+    called.
+  - Concurrent edits: if the campaign changed while the model was working, the
+    result is discarded as a version conflict and nothing is inserted.
+
+  7–8. Tests and verification
+
+  - Unit tests use the scripted and demo clients and cover your list of 18
+    items.
+  - Integration tests (9, real PostgreSQL):
+    - rows accepted by the real schema, immutable, read back correctly, pointer
+      and version kept consistent;
+    - no open transaction or lock while the LLM is blocked;
+    - 8 concurrent generations give contiguous versions;
+    - failures insert nothing;
+    - a test-only trigger fails the update after the insert, and both the row
+      and the pointer roll back;
+    - a tampered row is rejected on read;
+    - audience previews are unchanged;
+    - no fixture names, emails or phone numbers reach the prompt.
+
+  ┌────────────────────────────────┬────────────────────────────────────────┐
+  │             Check              │                 Result                 │
+  ├────────────────────────────────┼────────────────────────────────────────┤
+  │ make test (Go + 118 Vitest +   │ pass                                   │
+  │ typecheck)                     │                                        │
+  ├────────────────────────────────┼────────────────────────────────────────┤
+  │ go test -race ./...            │ pass                                   │
+  ├────────────────────────────────┼────────────────────────────────────────┤
+  │ make test-integration (race)   │ pass                                   │
+  ├────────────────────────────────┼────────────────────────────────────────┤
+  │ make lint (gofmt, vet ×3,      │ pass, with the usual env -u            │
+  │ staticcheck)                   │ SSL_CERT_FILE fix                      │
+  ├────────────────────────────────┼────────────────────────────────────────┤
+  │ Fuzz test, 20 s, ~780k runs    │ pass                                   │
+  ├────────────────────────────────┼────────────────────────────────────────┤
+  │ Docker build +                 │                                        │
+  │ scripts/smoke.sh with          │ pass; the API logged llm_provider=demo │
+  │ LLM_PROVIDER=demo              │  and content_model=claude-opus-5-5     │
+  │ ANTHROPIC_API_KEY=             │                                        │
+  └────────────────────────────────┴────────────────────────────────────────┘
+
+  9. Deviations, limitations, deferred
+
+  - No HTTP route. The only generation route in the architecture is the SSE
+    endpoint, which belongs to the streaming checkpoint. So the smoke test
+    doesn't exercise generation; the demo integration test does.
+  - Field names are sms_body, email_subject, email_body rather than §7.6's sms,
+    so repair error paths match content.Parse. §7.6 is updated.
+  - The offer policy is keyword-based and conservative: it would reject "100%
+    cotton" when no discount is authorized, and it can't catch every paraphrase.
+    Generated copy is always in English.
+  - The content repository lives in campaign, because the version row and the
+    pointer must share the locked transaction; content stays pure.
+  - Not done in CP12: streaming, the field extractor, HTTP endpoints, current
+    content in the campaign response, manual edit saving (PUT /content),
+    approval revocation, and the encoding/segment-count warnings.
+  - Your Compose stack was already running. It is now rebuilt and running in
+    demo mode.
+
+❯ CP12 code review is complete. The generator architecture, immutable content   
+  repository, transaction boundaries and campaign service are accepted.         
+  There is one concrete offer-policy bug to fix before committing CP12.         
+  Problem: Extra incentives allowed with a percentage-discount brief            
+  In internal/ai/content_policy.go, the OfferPercentDiscount branch currently   
+  checks:                                                                       
+                                                                                
+  - Percentage values match the authorized discount.                            
+  - Free shipping is not claimed.                                               
+                                                                                
+  However, it does not check the other incentive terms already identified by    
+  the policy.                                                                   
+  For example, a brief authorizing only a 20% discount may accept generated     
+  content that also promises a free gift, cashback, an additional coupon or a   
+  buy-one-get-one offer.                                                        
+  This violates the rule that AI-generated content must not invent unauthorized 
+  commercial incentives.                                                        
+  Required fix                                                                  
+  Make the smallest targeted correction to the existing deterministic offer     
+  policy.                                                                       
+                                                                                
+  1. In the OfferPercentDiscount branch, reject claims about additional         
+  independent incentives, including:                                            
+     - Free gifts.                                                              
+     - Cashback.                                                                
+     - Buy-one-get-one offers.                                                  
+     - Separate coupons/vouchers or promotional codes that were not authorized. 
+     - Other clearly separate promotions already present in the existing        
+  catalog.                                                                      
+  2. Do not reject normal phrasing of the authorized percentage discount, such  
+  as:                                                                           
+     - "20% discount"                                                           
+     - "20% off"                                                                
+     - "20% indirim"                                                            
+     - "Save 20%"                                                               
+  3. Preserve the existing rules:                                               
+     - A percentage different from the authorized one is rejected.              
+     - Free shipping is rejected unless specifically authorized.                
+     - Monetary amounts or prices are rejected.                                 
+     - No-offer and free-shipping-only policies remain intact.                  
+  4. Keep field-level unauthorized_offer errors and safe, deterministic         
+  messages.                                                                     
+  5. Do not add an LLM-based policy checker or broaden this into a semantic     
+  moderation system.                                                            
+                                                                                
+  Tests                                                                         
+  Add focused tests for:                                                        
+                                                                                
+  - Authorized 20% discount text in English and Turkish.                        
+  - Authorized 20% discount plus free gift (reject).                            
+  - Authorized 20% discount plus cashback (reject).                             
+  - Authorized 20% discount plus separate coupon or voucher (reject).           
+  - Authorized 20% discount plus buy-one-get-one offer (reject).                
+  - Authorized 20% discount plus free shipping (reject).                        
+  - Wrong percentage (reject).                                                  
+  - Authorized percentage with no extra incentives (accept).                    
+  - Existing free-shipping and no-offer policy regression cases.                
+                                                                                
+  Also review the existing concurrent-generation integration test and report    
+  explicitly whether it distinguishes:                                          
+                                                                                
+  - Multiple operations starting from fresh sequential campaign versions,       
+  versus                                                                        
+  - Multiple operations sharing one stale observed campaign version.            
+                                                                                
+  If the stale-version race is not already covered, add one focused test        
+  proving only one concurrent generation can persist from the same observed     
+  version.                                                                      
+  Do not redesign content generation or persistence.                            
+  Verification                                                                  
+  Run:                                                                          
+                                                                                
+  - Targeted offer-policy and generator tests.                                  
+  - make test.                                                                  
+  - go test -race ./....                                                        
+  - make test-integration.                                                      
+  - make lint.                                                                  
+                                                                                
+  No live Anthropic API requests. Force demo mode and blank the key for any     
+  Compose test.                                                                 
+  Update documentation only if the implemented policy description changes.      
+  Do not commit anything.                                                       
+  Do not start CP13.                                                            
+  Report the exact changes and results, then stop.                              
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ Bash(python3 - <<'EOF'
+      p='internal/ai/content_policy.go'…)
+  ⎿  Updated backend/internal/ai/content_policy.go (+17 -8)
+      43          // moneyRe matches a currency amount ("₺50", "$5", "50 
+          TL", "20 euros").
+      44          moneyRe = regexp.MustCompile(`[₺$€£]\s*\d|\d\s*(?:[₺$€£
+          ]|(?:tl|try|usd|eur|lira|dollars?|euros?)\b)`)
+      45  
+      46 -        // incentiveTerms are incentives other than percentages
+         - and free                                                      
+      47 -        // shipping (matched on folded text).                  
+      48 -        incentiveTerms = []string{                             
+      49 -                "discount", "indirim", "coupon", "kupon", "vouc
+         -her", "promo code", "promotion code", "promosyon",             
+      46 +        // discountTerms describe a percentage discount itself 
+         +("20% off",                                                    
+      47 +        // "20% discount", "%20 indirim"); they are allowed wit
+         +h an authorized                                                
+      48 +        // percent_discount (matched on folded text).          
+      49 +        discountTerms = []string{"discount", "indirim", "percen
+         +t off", "per cent off", "% off"}                               
+      50 +        // separateIncentiveTerms are incentives independent of
+         + a percentage                                                  
+      51 +        // discount and of free shipping; no offer kind authori
+         +zes them.                                                      
+      52 +        separateIncentiveTerms = []string{                     
+      53 +                "coupon", "kupon", "voucher", "promo code", "pr
+         +omotion code", "promosyon",                                    
+      54                  "cashback", "cash back", "buy one get one", "bo
+          go", "half price", "half-price", "yarı fiyat",
+      51 -                "free gift", "hediye", "percent off", "per cent
+         - off", "% off",                                                
+      55 +                "free gift", "hediye",                         
+      56          }
+      57          freeShippingTerms = []string{
+      58                  "free shipping", "free delivery", "shipping is 
+          free", "delivery is free", "shipping for free",
+     ...
+      104                  s := foldOffer(f.text)
+      105                  pcts := percents(s)
+      106                  free := containsAny(s, freeShippingTerms)
+      103 -                incentive := containsAny(s, incentiveTerms)   
+      107 +                discount := containsAny(s, discountTerms)     
+      108 +                separate := containsAny(s, separateIncentiveTe
+          +rms)                                                          
+      109  
+      110                  switch o.Kind {
+      111                  case OfferPercentDiscount:
+     ...
+      120                                  errs = append(errs, segment.Fi
+           eldError{Path: f.path, Code: CodeUnauthorizedOffer,
+      121                                          Message: "mentions fre
+           e shipping, which the content brief does not authorize"})
+      122                          }
+      123 +                        if separate {                         
+      124 +                                errs = append(errs, segment.Fi
+          +eldError{Path: f.path, Code: CodeUnauthorizedOffer,           
+      125 +                                        Message: "mentions an 
+          +incentive other than the authorized " + strconv.Itoa(o.Value) 
+          ++ "% discount"})                                              
+      126 +                        }                                     
+      127                          mentioned[f.path] = len(pcts) > 0
+      128                  case OfferFreeShipping:
+      120 -                        if len(pcts) > 0 || incentive {       
+     … 11 more lines (ctrl+o to expand)
+
+⏺ Now the focused tests, as a dedicated table for a 20% brief plus regressions.
+
+⏺ Bash(cat >> internal/ai/generator_test.go <<'EOF'…)
+  ⎿  ok
+     github.com/fyusufayan/insider-campaign-composer-case/backend/inter
+     nal/ai  0.583s
+  ⎿  Updated backend/internal/ai/generator_test.go (+84 -0)
+      658                  }
+      659          })
+      660  }
+      661 +                                                              
+      662 +// A percent_discount brief authorizes exactly that discount, 
+          +in any normal                                                 
+      663 +// phrasing, and no separate incentive.                       
+      664 +func TestOfferPolicyPercentDiscountOnly(t *testing.T) {       
+      665 +        pct20 := Offer{Kind: OfferPercentDiscount, Value: 20} 
+      666 +        tests := []struct {                                   
+      667 +                name  string                                  
+      668 +                offer Offer                                   
+      669 +                text  string                                  
+      670 +                ok    bool                                    
+      671 +        }{                                                    
+      672 +                {"20% discount", pct20, "Hi {{first_name|there
+          +}}, enjoy a 20% discount today.", true},                      
+      673 +                {"20% off", pct20, "Hi {{first_name|there}}, 2
+          +0% off your cart.", true},                                    
+      674 +                {"save 20%", pct20, "Save 20% on your cart tod
+          +ay.", true},                                                  
+      675 +                {"20 percent off", pct20, "Take 20 percent off
+          + your cart.", true},                                          
+      676 +                {"turkish 20% indirim", pct20, "Merhaba {{firs
+          +t_name|there}}, sepetinde 20% indirim seni bekliyor.", true}, 
+      677 +                {"turkish %20 İNDİRİM", pct20, "Sepetinde %20 
+          +İNDİRİM fırsatı.", true},                                     
+      678 +                {"turkish yüzde 20", pct20, "Sepetinde yüzde 2
+          +0 indirim.", true},                                           
+      679 +                {"no extra incentive", pct20, "Your cart is wa
+          +iting with 20% off. Complete your order today.", true},       
+      680 +                                                              
+      681 +                {"plus free gift", pct20, "20% off plus a free
+          + gift with your order.", false},                              
+      682 +                {"plus hediye", pct20, "%20 indirim ve hediye 
+          +seni bekliyor.", false},                                      
+      683 +                {"plus cashback", pct20, "20% off and cashback
+          + on every order.", false},                                    
+      684 +                {"plus cash back", pct20, "20% off and 5% cash
+          + back.", false},                                              
+      685 +                {"plus coupon", pct20, "20% off, and use your 
+          +coupon for more.", false},                                    
+      686 +                {"plus voucher", pct20, "20% off plus a bonus 
+          +voucher.", false},                                            
+      687 +                {"plus promo code", pct20, "20% off with promo
+          + code SAVE.", false},                                         
+      688 +                {"plus kupon", pct20, "%20 indirim ve ek kupon
+          +.", false},                                                   
+      689 +                {"plus bogo", pct20, "20% off or buy one get o
+          +ne free.", false},                                            
+      690 +                {"plus BOGO", pct20, "20% off and BOGO deals."
+          +, false},                                                     
+      691 +                {"plus half price", pct20, "20% off and half p
+          +rice shipping.", false},                                      
+      692 +                {"plus free shipping", pct20, "20% off and fre
+          +e shipping.", false},                                         
+      693 +                {"plus ücretsiz kargo", pct20, "%20 indirim ve
+          + ücretsiz kargo.", false},                                    
+      694 +                {"wrong percentage", pct20, "Enjoy 25% off tod
+          +ay.", false},                                                 
+      695 +                {"wrong percentage turkish", pct20, "%25 indir
+          +im.", false},                                                 
+      696 +                {"money amount", pct20, "20% off, now ₺80.", f
+          +alse},                                                        
+      697 +                                                              
+     … 47 more lines (ctrl+o to expand)
+
+⏺ Targeted tests pass. Re-reading the concurrent-generation integration test to
+  answer the coverage question precisely.
+
+  Ran 1 shell command (ctrl+o to expand)
+⏺ The barrier round already covers the stale shared-version race, so I'm
+  tightening the test to prove that each loser is a conflict against the one
+  version they all saw.
+
+⏺ Bash(python3 - <<'EOF'
+      p='test/integration/content_test.go'…)
+  ⎿  --- PASS: TestContentGenerationConcurrent (0.20s)
+     ok
+     github.com/fyusufayan/insider-campaign-composer-case/backend/test/
+     integration     3.073s
+  ⎿  Updated backend/test/integration/content_test.go (+16 -2)
+      367                  return llm.Response{Text: replyContentBoth, St
+           opReason: llm.StopEndTurn, Model: "scripted-model"}, nil
+      368          }
+      369  
+      370 +        // conflictsFrom counts conflicts per observed (expect
+          +ed) version.                                                  
+      371 +        conflictsFrom := map[int]int{}                        
+      372          run := func(n int, barrier bool) (ok int) {
+      373                  var ready sync.WaitGroup
+      374                  ready.Add(n)
+     ...
+      402                          case err == nil:
+      403                                  ok++
+      404                          case errors.Is(err, campaign.ErrVersio
+           nConflict):
+      405 +                                var ce *campaign.ConflictError
+      406 +                                if errors.As(err, &ce) && barr
+          +ier {                                                         
+      407 +                                        conflictsFrom[ce.Expec
+          +ted]++                                                        
+      408 +                                }                             
+      409                          default:
+      410                                  t.Errorf("err = %v", err)
+      411                          }
+     ...
+      413                  return ok
+      414          }
+      415  
+      410 -        // All observe the same version: exactly one wins.    
+      416 +        // Stale shared version: every generation reads the ca
+          +mpaign before any                                             
+      417 +        // model call returns (the barrier is inside the model
+          + call), so all 8                                              
+      418 +        // observed the same version. Exactly one persists; th
+          +e other 7 are                                                 
+      419 +        // conflicts against that one observed version.       
+      420          if ok := run(8, true); ok != 1 {
+      421                  t.Errorf("barrier round: %d stored", ok)
+      422          }
+      414 -        // Free-running: any interleaving.                    
+      423 +        if len(conflictsFrom) != 1 || conflictsFrom[in.Campaig
+          +n.Version] != 7 {                                             
+      424 +                t.Errorf("barrier round conflicts by observed 
+          +version = %v, want {%d: 7}", conflictsFrom, in.Campaign.Versio
+          +n)                                                            
+      425 +        }                                                     
+      426 +        // Free-running: any interleaving (some start from fre
+          +sh versions after                                             
+      427 +        // earlier ones commit, some share a version); only co
+          +nsistency is                                                  
+      428 +        // asserted.                                          
+      429          ok := 1 + run(8, false)
+      430  
+      431          rows := e.contentRows(c.ID)
+
+⏺ Now the full verification suite.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ Everything passes. The policy description in §7.8 changed, so I'll update that
+  one sentence.
+
+⏺ Bash(python3 - <<'EOF'
+      p='docs/ARCHITECTURE.md'…)
+  ⎿   M .env.example
+      M backend/cmd/api/main.go
+      M backend/internal/ai/demo_segment.go
+     … +28 lines (ctrl+o to expand)
+  ⎿  Updated docs/ARCHITECTURE.md (+1 -1)
+      524  - **Prompt `content_v1`** (`ai.ContentPromptVersion`, persiste
+           d as `campaign_contents.prompt_version`): system prompt built 
+           from `content.Variables()` (names, declared maxima), the place
+           holder/fallback grammar, the hard limits (160/80/5,000) with t
+           he soft targets (150/70), the worst-case rule with a worked ex
+           ample, plain-text rules, "no invented facts", "the backend add
+           s the unsubscribe footer", and the offer rules. The user messa
+           ge carries one JSON request document (`channels`, `fields`, `c
+           ontent_brief`, `audience_rule`) inside `<content_request>` tag
+           s — `encoding/json` escapes `<`, `>` and `&`, so no value can 
+           close the tag — plus a deterministic restatement of the requir
+           ed fields and the authorized offer. Output language is English
+            (the content brief has no language field).
+      525  - **Schema** (`ai.ContentSchema`): a closed flat object whose 
+           properties are exactly the selected channels' fields (`sms_bod
+           y`; `email_subject` + `email_body`), all required strings. Thr
+           ee deterministic schemas exist.
+      526  - **Decoding** (`ai.ParseGeneratedContent`): ≤ 64 KiB, one JSO
+           N value, valid UTF-8, no duplicate or unknown properties (a fi
+           eld of an unselected channel is unknown), every field a string
+            (null/other types rejected); then `content.Parse` for the sel
+           ected channels (the single content validator) and the **offer 
+           policy**; all problems of both are reported together.
+      527 -- **Offer policy** (brief-dependent, so it lives in `ai`, not 
+          -`content`): `none` forbids percentages, discount/coupon/vouche
+          -r/promo/gift terms and free shipping; `percent_discount N` all
+          -ows only `N%` (also `%N`, `N percent`, `yüzde N`) and forbids 
+          -free shipping; `free_shipping` forbids percentages and discoun
+          -t terms. Monetary amounts (`₺50`, `500 TL`, `$5`) are always r
+          -ejected (`unauthorized_claim`). Matching is case-insensitive o
+          -ver English and common Turkish phrasings — conservative (it ca
+          -n reject "100% cotton" when no discount is authorized) and not
+          - language understanding. An authorized offer that a message do
+          -es not mention yields the warning `offer_not_mentioned`.      
+      527 +- **Offer policy** (brief-dependent, so it lives in `ai`, not 
+          +`content`): Terms fall into three groups: discount wording (`d
+          +iscount`, `indirim`, `% off`, `percent off`), separate incenti
+          +ves (coupon/kupon, voucher, promo code/promosyon, cashback, bu
+          +y one get one/BOGO, half price/yarı fiyat, free gift/hediye) a
+          +nd free shipping. `none` forbids percentages and all three gro
+          +ups; `percent_discount N` allows only `N%` (also `%N`, `N perc
+          +ent`, `yüzde N`) with discount wording ("20% off", "Save 20%",
+          + "%20 indirim") and forbids separate incentives and free shipp
+          +ing; `free_shipping` forbids percentages, discount wording and
+          + separate incentives. Monetary amounts (`₺50`, `500 TL`, `$5`)
+          + are always rejected (`unauthorized_claim`). Matching is case-
+          +insensitive over English and common Turkish phrasings — conser
+          +vative (it can reject "100% cotton" when no discount is author
+          +ized) and not language understanding. An authorized offer that
+          + a message does not mention yields the warning `offer_not_ment
+          +ioned`.                                                       
+      528  - **Model-call policy** is shared with the interpreter (`ai/ca
+           ll.go`): only `end_turn` is output; `refusal` → `ErrLLMRefused
+           ` (no repair); `max_tokens` → one retry with a doubled budget,
+            then `ErrLLMTruncated`; other stop reasons → `ErrLLMTruncated
+           `; one deadline (`CLAUDE_CONTENT_TIMEOUT`) spans all calls. In
+           valid output gets **one** repair turn (append-only history, st
+           ructured field errors, same schema); a second failure → `ErrOu
+           tputInvalid` with details and the bounded raw proposal. At mos
+           t 3 logical calls.
+      529  - **Configuration**: `CLAUDE_CONTENT_MODEL` (default `claude-o
+           pus-5-5`), `_EFFORT` (`medium`), `_TIMEOUT` (`90s`), `_MAX_TOK
+           ENS` (`8000`), validated like the segment task; logged at star
+           tup with `content_prompt_version`.
+      530  - **Demo** (`TaskContentGeneration` responder): fixed English 
+           templates chosen by goal keyword (cart recovery / win back / g
+           eneric), tone (friendly / urgent / formal) and length (email p
+           aragraphs); the offer is rendered only from its validated kind
+            and integer value; no brief text is ever copied into the outp
+           ut. Every combination is within the soft targets and passes th
+           e same pipeline in one call. Demo versions are stored with `mo
+           del = demo`, and `Generation.Notes` carries `ai.DemoContentNot
+           ice`.
+
+⏺ The offer-policy bug is fixed. A brief that authorizes a percentage discount
+  now rejects extra incentives, and all checks pass. Nothing is committed and
+  CP13 is not started.
+
+  The fix (internal/ai/content_policy.go)
+
+  I split the single incentive word list into two:
+  - Discount wording: discount, indirim, % off, percent off, per cent off. These
+    describe a percentage discount itself, so they are allowed when the brief
+    authorizes one.
+  - Separate incentives: coupon/kupon, voucher, promo code/promotion
+    code/promosyon, cashback/cash back, buy one get one/BOGO, half price/yarı
+    fiyat, free gift/hediye. No offer kind authorizes these.
+
+  How each offer kind now behaves:
+  - Percentage discount: it now also rejects separate incentives, with an
+    unauthorized_offer error on that field. The message is fixed and never
+    repeats the input text. A different percentage and free shipping are still
+    rejected, as before.
+  - Free shipping and no offer: they reject the same words as before, now listed
+    as both groups.
+  - Money amounts: still always rejected as unauthorized_claim.
+
+  The free-shipping words, the percentage pattern and the money pattern are
+  unchanged. I updated the one policy sentence in docs/ARCHITECTURE.md §7.8.
+
+  New tests (internal/ai/generator_test.go)
+
+  - TestOfferPolicyPercentDiscountOnly: a table for a 20% brief.
+    - Accepted: "20% discount", "20% off", "Save 20%", "20 percent off", "20%
+      indirim", "%20 İNDİRİM", "yüzde 20 indirim", and plain text with no extra
+      incentive.
+    - Rejected when combined with 20%: free gift or hediye, cashback or cash
+      back, coupon, voucher, promo code, kupon, BOGO (any case), half price,
+      free shipping, ücretsiz kargo.
+    - Also rejected: a wrong percentage (English and Turkish) and a money
+      amount.
+    - Regression cases: free shipping alone is accepted; free shipping plus a
+      discount, a percentage or a gift is rejected; no-offer text is accepted;
+      no-offer plus a discount, a percentage, free shipping or cashback is
+      rejected.
+  - TestGenerateRepairsExtraIncentive: runs the full generator. Output with "30%
+    off plus a free gift" goes to the one repair turn, and the repair message
+    includes unauthorized_offer.
+
+  Concurrent-generation test review
+
+  TestContentGenerationConcurrent has two rounds:
+  - Barrier round (the stale-version race): each generation reads the campaign
+    before its model call, and all model calls are held until all 8 have
+    started, so all 8 observe the same campaign version. It already asserted
+    that exactly one persists. I tightened it so it now also checks that the
+    other 7 are version conflicts against that one version, which makes the
+    stale-version case explicit.
+  - Free-running round: any interleaving, so some generations start from
+    versions that earlier ones just committed and some share a version. It
+    checks consistency only: version numbers are contiguous, the pointer is the
+    newest row, and the campaign version moved once per stored row. It does not
+    force strictly sequential fresh versions; that case is covered by the
+    earlier regeneration test, which runs version 1 then version 2.
+
+  No new integration test was needed; the existing one already covered the
+  stale-version race.
+
+  Verification
+
+  ┌─────────────────────────────────────┬───────────────────────────────────┐
+  │                Check                │              Result               │
+  ├─────────────────────────────────────┼───────────────────────────────────┤
+  │ Targeted offer-policy, generator    │ pass                              │
+  │ and demo tests                      │                                   │
+  ├─────────────────────────────────────┼───────────────────────────────────┤
+  │ make test (Go, 118 Vitest tests,    │ pass                              │
+  │ typecheck)                          │                                   │
+  ├─────────────────────────────────────┼───────────────────────────────────┤
+  │ go test -race -count=1 ./...        │ pass                              │
+  ├─────────────────────────────────────┼───────────────────────────────────┤
+  │ make test-integration               │ pass (14.7 s)                     │
+  ├─────────────────────────────────────┼───────────────────────────────────┤
+  │ make lint (gofmt, vet ×3,           │ pass, with the usual env -u       │
+  │ staticcheck)                        │ SSL_CERT_FILE fix                 │
+  └─────────────────────────────────────┴───────────────────────────────────┘
+
+  No live Anthropic requests were made. I didn't rerun the Compose stack, since
+  nothing in the build or wiring changed.

@@ -61,10 +61,21 @@ func run(log *slog.Logger) error {
 	if err != nil {
 		return err
 	}
+	generator, err := ai.NewGenerator(llmClient, ai.GeneratorConfig{
+		Model:     cfg.Content.Model,
+		Effort:    llm.Effort(cfg.Content.Effort),
+		Timeout:   cfg.Content.Timeout,
+		MaxTokens: cfg.Content.MaxTokens,
+	})
+	if err != nil {
+		return err
+	}
 	log.Info("configuration loaded", "http_addr", cfg.HTTPAddr, "llm_provider", cfg.LLM.Provider,
 		"llm_max_retries", cfg.LLM.MaxRetries, "segment_model", cfg.Segment.Model, "segment_effort", cfg.Segment.Effort,
 		"segment_timeout", cfg.Segment.Timeout.String(), "segment_max_tokens", cfg.Segment.MaxTokens,
-		"segment_prompt_version", ai.SegmentPromptVersion)
+		"segment_prompt_version", ai.SegmentPromptVersion, "content_model", cfg.Content.Model,
+		"content_effort", cfg.Content.Effort, "content_timeout", cfg.Content.Timeout.String(),
+		"content_max_tokens", cfg.Content.MaxTokens, "content_prompt_version", ai.ContentPromptVersion)
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
@@ -75,7 +86,7 @@ func run(log *slog.Logger) error {
 	}
 	defer pool.Close()
 
-	campaigns, err := campaign.NewService(campaign.NewRepository(pool), segment.NewAudienceRepository(pool), interpreter, log)
+	campaigns, err := campaign.NewService(campaign.NewRepository(pool), segment.NewAudienceRepository(pool), interpreter, generator, log)
 	if err != nil {
 		return err
 	}

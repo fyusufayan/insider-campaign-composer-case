@@ -52,7 +52,11 @@ func newAPIFixture(t *testing.T, client llm.Client) *apiFixture {
 	if err != nil {
 		t.Fatal(err)
 	}
-	svc, err := campaign.NewService(f.store, f.audience, it, log)
+	gen, err := ai.NewGenerator(client, ai.GeneratorConfig{Model: "cfg-content-model", Effort: llm.EffortMedium, Timeout: 5 * time.Second, MaxTokens: 2000})
+	if err != nil {
+		t.Fatal(err)
+	}
+	svc, err := campaign.NewService(f.store, f.audience, it, gen, log)
 	if err != nil {
 		t.Fatal(err)
 	}

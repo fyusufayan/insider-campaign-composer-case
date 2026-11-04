@@ -341,3 +341,23 @@ func offer(errs *segment.Errors, path string, raw json.RawMessage) Offer {
 	}
 	return o
 }
+
+// maxContentBriefBytes bounds a stored content brief (goal ≤64 and tone ≤32
+// runes plus a fixed structure).
+const maxContentBriefBytes = 4 << 10
+
+// ParseContentBrief strictly decodes and validates a content brief, e.g.
+// campaigns.content_brief read back from the database (never trusted
+// blindly). It applies exactly the rules of the interpretation envelope's
+// content_brief; field paths have no prefix.
+func ParseContentBrief(data []byte) (ContentBrief, segment.Errors) {
+	if fe := scanJSONLimit(data, maxContentBriefBytes); fe != nil {
+		return ContentBrief{}, segment.Errors{*fe}
+	}
+	var errs segment.Errors
+	cb, ok := contentBrief(&errs, "", data)
+	if !ok || len(errs) > 0 {
+		return ContentBrief{}, errs
+	}
+	return cb, nil
+}

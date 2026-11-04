@@ -34,7 +34,10 @@ import (
 // llm.New / llm.NewDemo. Demo output goes through the same Interpreter
 // pipeline (strict decode, validation, repair) as real model output.
 func DemoResponders() map[string]llm.DemoResponder {
-	return map[string]llm.DemoResponder{TaskSegmentInterpretation: demoSegmentResponder}
+	return map[string]llm.DemoResponder{
+		TaskSegmentInterpretation: demoSegmentResponder,
+		TaskContentGeneration:     demoContentResponder,
+	}
 }
 
 // DemoNotice is the first assumption of every demo interpretation, so demo

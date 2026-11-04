@@ -212,6 +212,40 @@ func TestSegmentTaskConfig(t *testing.T) {
 	}
 }
 
+func TestContentTaskConfig(t *testing.T) {
+	cfg, err := Load(env(validEnv()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := AITask{Model: "claude-opus-5-5", Effort: "medium", Timeout: 90 * time.Second, MaxTokens: 8000}
+	if cfg.Content != want {
+		t.Errorf("defaults = %+v, want %+v", cfg.Content, want)
+	}
+	cfg, err = Load(env(with(validEnv(),
+		"CLAUDE_CONTENT_MODEL", "claude-sonnet-5-5", "CLAUDE_CONTENT_EFFORT", "high",
+		"CLAUDE_CONTENT_TIMEOUT", "2m", "CLAUDE_CONTENT_MAX_TOKENS", "12000")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want = AITask{Model: "claude-sonnet-5-5", Effort: "high", Timeout: 2 * time.Minute, MaxTokens: 12000}
+	if cfg.Content != want {
+		t.Errorf("overrides = %+v, want %+v", cfg.Content, want)
+	}
+	if cfg.Segment.Model != "claude-haiku-5-5" {
+		t.Errorf("content overrides leaked into the segment task: %+v", cfg.Segment)
+	}
+	for _, kv := range [][2]string{
+		{"CLAUDE_CONTENT_MODEL", "two words"},
+		{"CLAUDE_CONTENT_EFFORT", "extreme"},
+		{"CLAUDE_CONTENT_TIMEOUT", "-1s"},
+		{"CLAUDE_CONTENT_MAX_TOKENS", "0"},
+	} {
+		if _, err := Load(env(with(validEnv(), kv[0], kv[1]))); err == nil || !strings.Contains(err.Error(), kv[0]) {
+			t.Errorf("%s=%q: err = %v", kv[0], kv[1], err)
+		}
+	}
+}
+
 func TestLLMMaxRetries(t *testing.T) {
 	cfg, err := Load(env(validEnv()))
 	if err != nil {

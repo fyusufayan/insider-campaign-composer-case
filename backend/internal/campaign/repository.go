@@ -84,9 +84,46 @@ type Mutation func(current Campaign) (next Campaign, changed bool, err error)
 // §5.1), apply mutate, write the result and commit. An error from mutate
 // rolls back and is returned unchanged.
 func (r *Repository) Update(ctx context.Context, id ID, mutate Mutation) (Campaign, error) {
+	var out Campaign
+	err := r.withLockedCampaign(ctx, id, func(tx pgx.Tx, cur Campaign) error {
+		next, changed, err := mutate(cur.clone())
+		if err != nil {
+			return err
+		}
+		if !changed {
+			out = cur
+			return nil
+		}
+		if next.ID != cur.ID {
+			return fmt.Errorf("campaign %s: mutation changed the id", id)
+		}
+		args, err := updateArgs(cur.Version, next)
+		if err != nil {
+			return fmt.Errorf("campaign %s: %w", id, err)
+		}
+		saved, err := scanCampaign(tx.QueryRow(ctx, sqlUpdateCampaign, args...))
+		if errors.Is(err, pgx.ErrNoRows) { // unreachable while the lock is held
+			return &ConflictError{Expected: cur.Version, Current: -1}
+		}
+		if err != nil {
+			return fmt.Errorf("campaign %s: update: %w", id, err)
+		}
+		out = saved
+		return nil
+	})
+	if err != nil {
+		return Campaign{}, err
+	}
+	return out, nil
+}
+
+// withLockedCampaign runs fn in one short transaction that first locks the
+// campaign row (§5.1) and commits iff fn succeeds. The rollback of a failed
+// or abandoned transaction runs even when ctx is already cancelled.
+func (r *Repository) withLockedCampaign(ctx context.Context, id ID, fn func(tx pgx.Tx, cur Campaign) error) error {
 	tx, err := r.pool.Begin(ctx)
 	if err != nil {
-		return Campaign{}, fmt.Errorf("campaign %s: begin: %w", id, err)
+		return fmt.Errorf("campaign %s: begin: %w", id, err)
 	}
 	defer func() {
 		cctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), cleanupTimeout)
@@ -94,43 +131,22 @@ func (r *Repository) Update(ctx context.Context, id ID, mutate Mutation) (Campai
 		_ = tx.Rollback(cctx) // no-op after commit
 	}()
 	if _, err := tx.Exec(ctx, sqlSetLocalTimeouts); err != nil {
-		return Campaign{}, fmt.Errorf("campaign %s: set timeouts: %w", id, err)
+		return fmt.Errorf("campaign %s: set timeouts: %w", id, err)
 	}
 	cur, err := scanCampaign(tx.QueryRow(ctx, sqlSelectCampaignForUpdate, uuidArg(id)))
 	if errors.Is(err, pgx.ErrNoRows) {
-		return Campaign{}, ErrNotFound
+		return ErrNotFound
 	}
 	if err != nil {
-		return Campaign{}, fmt.Errorf("campaign %s: lock: %w", id, err)
+		return fmt.Errorf("campaign %s: lock: %w", id, err)
 	}
-	next, changed, err := mutate(cur.clone())
-	if err != nil {
-		return Campaign{}, err
-	}
-	if !changed {
-		if err := tx.Commit(ctx); err != nil {
-			return Campaign{}, fmt.Errorf("campaign %s: commit: %w", id, err)
-		}
-		return cur, nil
-	}
-	if next.ID != cur.ID {
-		return Campaign{}, fmt.Errorf("campaign %s: mutation changed the id", id)
-	}
-	args, err := updateArgs(cur.Version, next)
-	if err != nil {
-		return Campaign{}, fmt.Errorf("campaign %s: %w", id, err)
-	}
-	saved, err := scanCampaign(tx.QueryRow(ctx, sqlUpdateCampaign, args...))
-	if errors.Is(err, pgx.ErrNoRows) { // unreachable while the lock is held
-		return Campaign{}, &ConflictError{Expected: cur.Version, Current: -1}
-	}
-	if err != nil {
-		return Campaign{}, fmt.Errorf("campaign %s: update: %w", id, err)
+	if err := fn(tx, cur); err != nil {
+		return err
 	}
 	if err := tx.Commit(ctx); err != nil {
-		return Campaign{}, fmt.Errorf("campaign %s: commit: %w", id, err)
+		return fmt.Errorf("campaign %s: commit: %w", id, err)
 	}
-	return saved, nil
+	return nil
 }
 
 func updateArgs(lockedVersion int, c Campaign) ([]any, error) {

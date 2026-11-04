@@ -47,7 +47,11 @@ func newFixture(t *testing.T) *fixture {
 	if err != nil {
 		t.Fatal(err)
 	}
-	f.svc, err = campaign.NewService(f.store, f.audience, it, logging.New(f.logs, slog.LevelDebug))
+	gen, err := ai.NewGenerator(f.llm, ai.GeneratorConfig{Model: "cfg-content-model", Effort: llm.EffortMedium, Timeout: 5 * time.Second, MaxTokens: 2000})
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.svc, err = campaign.NewService(f.store, f.audience, it, gen, logging.New(f.logs, slog.LevelDebug))
 	if err != nil {
 		t.Fatal(err)
 	}

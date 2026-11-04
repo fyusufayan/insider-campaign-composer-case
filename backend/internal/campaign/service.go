@@ -10,6 +10,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/fyusufayan/insider-campaign-composer-case/backend/internal/ai"
+	"github.com/fyusufayan/insider-campaign-composer-case/backend/internal/content"
 	"github.com/fyusufayan/insider-campaign-composer-case/backend/internal/segment"
 )
 
@@ -20,6 +21,11 @@ type Store interface {
 	Create(ctx context.Context, d Draft) (Campaign, error)
 	Get(ctx context.Context, id ID) (Campaign, error)
 	Update(ctx context.Context, id ID, mutate Mutation) (Campaign, error)
+	// SaveContent atomically inserts a content version decided by mutate
+	// under the campaign row lock and points the campaign at it.
+	SaveContent(ctx context.Context, id ID, mutate ContentMutation) (Campaign, content.Version, error)
+	// GetContent reads one (re-validated) content version of a campaign.
+	GetContent(ctx context.Context, id ID, contentID int64) (content.Version, error)
 }
 
 // AudienceCounter computes audience statistics. *segment.AudienceRepository
@@ -29,16 +35,17 @@ type AudienceCounter interface {
 	Stats(ctx context.Context, rule segment.Validated, channels []segment.Channel) (segment.AudienceStats, error)
 }
 
-// Service implements the campaign use cases of Slice 1a.
+// Service implements the campaign authoring use cases.
 type Service struct {
 	store       Store
 	audience    AudienceCounter
 	interpreter *ai.Interpreter
+	generator   *ai.Generator
 	log         *slog.Logger
 }
 
 // NewService wires the service.
-func NewService(store Store, audience AudienceCounter, interpreter *ai.Interpreter, log *slog.Logger) (*Service, error) {
+func NewService(store Store, audience AudienceCounter, interpreter *ai.Interpreter, generator *ai.Generator, log *slog.Logger) (*Service, error) {
 	switch {
 	case store == nil:
 		return nil, errors.New("campaign: nil store")
@@ -46,10 +53,12 @@ func NewService(store Store, audience AudienceCounter, interpreter *ai.Interpret
 		return nil, errors.New("campaign: nil audience counter")
 	case interpreter == nil:
 		return nil, errors.New("campaign: nil interpreter")
+	case generator == nil:
+		return nil, errors.New("campaign: nil content generator")
 	case log == nil:
 		return nil, errors.New("campaign: nil logger")
 	}
-	return &Service{store: store, audience: audience, interpreter: interpreter, log: log}, nil
+	return &Service{store: store, audience: audience, interpreter: interpreter, generator: generator, log: log}, nil
 }
 
 // Create validates and stores a new draft campaign.

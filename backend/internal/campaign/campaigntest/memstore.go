@@ -7,10 +7,12 @@ package campaigntest
 import (
 	"context"
 	"crypto/rand"
+	"errors"
 	"sync"
 	"time"
 
 	"github.com/fyusufayan/insider-campaign-composer-case/backend/internal/campaign"
+	"github.com/fyusufayan/insider-campaign-composer-case/backend/internal/content"
 	"github.com/fyusufayan/insider-campaign-composer-case/backend/internal/segment"
 )
 
@@ -21,13 +23,82 @@ import (
 type MemoryStore struct {
 	mu        sync.Mutex
 	campaigns map[campaign.ID]campaign.Campaign
+	contents  map[campaign.ID][]content.Version
+	nextID    int64
 	// Updates counts committed writes (creates excluded).
 	updates int
 }
 
 // NewMemoryStore returns an empty store.
 func NewMemoryStore() *MemoryStore {
-	return &MemoryStore{campaigns: map[campaign.ID]campaign.Campaign{}}
+	return &MemoryStore{campaigns: map[campaign.ID]campaign.Campaign{}, contents: map[campaign.ID][]content.Version{}}
+}
+
+// SaveContent implements campaign.Store with the repository's semantics:
+// serialized like the row lock; the version is appended and the pointer,
+// status and version written together, or nothing is written.
+func (m *MemoryStore) SaveContent(ctx context.Context, id campaign.ID, mutate campaign.ContentMutation) (campaign.Campaign, content.Version, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return campaign.Campaign{}, content.Version{}, err
+	}
+	cur, ok := m.campaigns[id]
+	if !ok {
+		return campaign.Campaign{}, content.Version{}, campaign.ErrNotFound
+	}
+	var current *content.Version
+	if cur.CurrentContentID != nil {
+		for _, v := range m.contents[id] {
+			if v.ID == *cur.CurrentContentID {
+				v := v
+				current = &v
+			}
+		}
+		if current == nil {
+			return campaign.Campaign{}, content.Version{}, errors.New("memstore: current content missing")
+		}
+	}
+	next, v, created, err := mutate(copyOf(cur), current)
+	if err != nil {
+		return campaign.Campaign{}, content.Version{}, err
+	}
+	if !created {
+		return copyOf(cur), *current, nil
+	}
+	if next.Version != cur.Version+1 {
+		return campaign.Campaign{}, content.Version{}, errors.New("memstore: content mutation must advance the version by one")
+	}
+	m.nextID++
+	v.ID = m.nextID
+	v.CreatedAt = time.Now().UTC()
+	m.contents[id] = append(m.contents[id], v)
+	vid := v.ID
+	next.CurrentContentID = &vid
+	next.UpdatedAt = v.CreatedAt
+	m.campaigns[id] = copyOf(next)
+	m.updates++
+	return copyOf(next), v, nil
+}
+
+// GetContent implements campaign.Store.
+func (m *MemoryStore) GetContent(_ context.Context, id campaign.ID, contentID int64) (content.Version, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, v := range m.contents[id] {
+		if v.ID == contentID {
+			return v, nil
+		}
+	}
+	return content.Version{}, campaign.ErrContentNotFound
+}
+
+// ContentVersions returns the stored versions of a campaign in insertion
+// order.
+func (m *MemoryStore) ContentVersions(id campaign.ID) []content.Version {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return append([]content.Version(nil), m.contents[id]...)
 }
 
 // Create implements campaign.Store.
@@ -105,6 +176,14 @@ func copyOf(c campaign.Campaign) campaign.Campaign {
 	}
 	if c.ContentBrief != nil {
 		c.ContentBrief = append([]byte(nil), c.ContentBrief...)
+	}
+	if c.CurrentContentID != nil {
+		v := *c.CurrentContentID
+		c.CurrentContentID = &v
+	}
+	if c.ActiveApprovalID != nil {
+		v := *c.ActiveApprovalID
+		c.ActiveApprovalID = &v
 	}
 	return c
 }

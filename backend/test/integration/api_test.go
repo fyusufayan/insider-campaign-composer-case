@@ -77,6 +77,7 @@ type apiEnv struct {
 	pool   *pgxpool.Pool
 	srv    *httptest.Server
 	llm    *llm.Scripted
+	svc    *campaign.Service
 	dbURL  string
 	tracer *sqlRecorder
 }
@@ -97,11 +98,17 @@ func newAPIEnv(t *testing.T, client llm.Client) *apiEnv {
 	if err != nil {
 		t.Fatal(err)
 	}
-	log := logging.New(io.Discard, slog.LevelInfo)
-	svc, err := campaign.NewService(campaign.NewRepository(e.pool), segment.NewAudienceRepository(e.pool), it, log)
+	gen, err := ai.NewGenerator(client, ai.GeneratorConfig{Model: "integration-content-model", Effort: llm.EffortMedium,
+		Timeout: 30 * time.Second, MaxTokens: 2000})
 	if err != nil {
 		t.Fatal(err)
 	}
+	log := logging.New(io.Discard, slog.LevelInfo)
+	svc, err := campaign.NewService(campaign.NewRepository(e.pool), segment.NewAudienceRepository(e.pool), it, gen, log)
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.svc = svc
 	e.srv = httptest.NewServer(httpapi.NewRouter(log, httpapi.Deps{Campaigns: svc}))
 	t.Cleanup(e.srv.Close)
 	return e
