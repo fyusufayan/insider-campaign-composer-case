@@ -415,6 +415,15 @@ The same validator handles every source of rules.
 ### 6.4 Compilation
 `segment.Compile(rule) (sql string, args []any, err error)`: each registry entry owns a fragment builder; identifiers come only from Go constants; every value is a bind parameter. Behavioural predicates compile to `EXISTS` / `NOT EXISTS` subqueries over `cart_events` / `purchases` with `now() - make_interval(days => $n)`. Queries run in a read-only transaction with `SET LOCAL statement_timeout = '5s'`.
 
+Clarifications fixed by the compiler (CP4):
+- **Input/output.** `Compile` accepts only a non-zero `segment.Validated` and returns `SELECT u.id FROM users AS u WHERE (…)` — one row per matched user (no joins; events are correlated subqueries). Placeholders `$1..$n` are numbered in order of appearance; the statement is a pure function of the normalized rule.
+- **Composition.** The rule's `match` combines each top-level condition and each group (top-level conditions first, then groups in order); a group is one operand whose conditions are combined with the group's own `match`.
+- **Windows.** "Last N days" is `now() - N days <= t <= now()` (both edges inclusive); future-dated events never match, for `cart_add`, `purchase`, counts and `not_exists` alike. The evaluation time is the statement's `now()` (one value per transaction). This is a historical audience query, so `now()` is correct here; approval expiry keeps using `clock_timestamp()` after the campaign lock (§5, ADR-006).
+- **`*_days_ago`** is the number of whole elapsed days, `floor((now() - t) / 1 day)`; **age** is whole years between `birth_date` and the current UTC date. A NULL `birth_date` / `last_active_at`, or a future-dated `signup_at` / `last_active_at`, never satisfies a condition.
+- **`abandoned_cart(N)`**: only cart events in the window `[now() - N days, now()]` are considered; a purchase of the user (any or no category, not limited to the window) with `cart.occurred_at <= purchased_at <= now()` recovers that cart, so a future-dated purchase does not; one unrecovered cart event in the window suffices.
+- **Category filters** never match a purchase whose category is NULL.
+- **Empty channel selection**: `by_channel` is empty, `messages = 0`, `reach_users.unreachable = matched_users`. With one selected channel, its eligible users are `sms_only`/`email_only` and everyone else is `unreachable`.
+
 ### 6.5 Audience statistics (unambiguous partition)
 For each **selected** channel, every matched user is placed in exactly one category, evaluated in order:
 1. `no_contact` — no phone (SMS) / no email (email).

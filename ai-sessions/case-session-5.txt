@@ -1,0 +1,1434 @@
+ ▐▛███▛█   Claude Code v2.1.318
+▝▜██████▀  Opus 5.5 · Claude Pro
+ ▝▝   ▝▝   ~/Desktop/devel/leet/insider-case/insider-campaign-composer-case
+
+
+❯ We are continuing Smart Campaign Composer development.                        
+  CP1, CP2 and CP3 are complete. CP3 has been reviewed and its targeted         
+  corrections are accepted.                                                     
+  Start CP4 — Parameterized SQL Compiler and Audience Partition.                
+  Follow CLAUDE.md. Inspect only the relevant sections of ARCHITECTURE.md,      
+  especially §4 and §6, and the applicable ADRs and roadmap acceptance          
+  criteria. Reuse the implemented segmentation DSL and validated wrapper.       
+  Objective                                                                     
+  Implement:                                                                    
+  Validated Segment Rule → Parameterized PostgreSQL Query → Matched Audience →  
+  Exclusive Per-Channel Eligibility Statistics.                                 
+  This is the first checkpoint that executes segment queries against real       
+  seeded customer data.                                                         
+  1. Safe SQL compilation                                                       
+  Implement the compiler inside `backend/internal/segment/`.                    
+  Requirements:                                                                 
+                                                                                
+  * Accept only a non-zero `segment.Validated` value.                           
+  * Never accept raw JSON or unvalidated `Rule` as compiler input.              
+  * Never generate SQL from arbitrary user or LLM-provided identifiers.         
+  * SQL identifiers and expression templates must come exclusively from trusted 
+  Go constants or registry-owned compiler definitions.                          
+  * Every dynamic value must be a PostgreSQL bind parameter.                    
+  * Use deterministic placeholder numbering and argument ordering.              
+  * Support every allowed attribute, event and behavior predicate.              
+  * Implement top-level match and shallow group composition exactly as          
+  specified in ARCHITECTURE.md.                                                 
+  * Do not introduce new DSL syntax.                                            
+                                                                                
+  An invalid or zero-valued compiler input must return a controlled error,      
+  never a panic or unfiltered query.                                            
+  2. Event predicates                                                           
+  Implement correct event semantics with time windows and optional category     
+  filters.                                                                      
+  The following properties must hold:                                           
+                                                                                
+  * Users with no matching events have event count zero.                        
+  * `count_lte: 0` is equivalent to `not_exists` when filters are identical.    
+  * `count_gte: 1` is equivalent to `exists` when filters are identical.        
+  * `count_gte: 0` matches every user, including users with no events.          
+  * Avoid inner joins that accidentally remove zero-event users.                
+  * Window boundaries and UTC time semantics must match the architecture.       
+  * Count predicates must not multiply event counts because of joins.           
+                                                                                
+  Use PostgreSQL integration tests to verify these properties.                  
+  3. Abandoned-cart predicate                                                   
+  Implement the `abandoned_cart` behavior using the exact purchase-recovery and 
+  time-window semantics defined in ARCHITECTURE.md.                             
+  Test at least:                                                                
+                                                                                
+  * Cart event with no subsequent purchase.                                     
+  * Cart event followed by a qualifying purchase.                               
+  * Purchase before the cart event.                                             
+  * Cart and purchase at the same timestamp.                                    
+  * Cart and purchase in different categories.                                  
+  * Cart events exactly at the window boundary.                                 
+  * Multiple cart events belonging to one user.                                 
+                                                                                
+  Do not invent new business rules if the architecture already defines the      
+  behavior.                                                                     
+  4. Audience statistics                                                        
+  Implement the audience query and its data types according to §6.5.            
+  For each selected channel, produce a mutually exclusive partition in this     
+  priority order:                                                               
+                                                                                
+  1. `no_contact`                                                               
+  2. `no_consent`                                                               
+  3. `eligible`                                                                 
+                                                                                
+  The invariant is:                                                             
+  `eligible + no_consent + no_contact = matched_users`                          
+  Also compute the reach partition for selected channels:                       
+                                                                                
+  * both                                                                        
+  * sms_only                                                                    
+  * email_only                                                                  
+  * unreachable                                                                 
+                                                                                
+  The four reach counts must sum to matched_users.                              
+  Report users and messages as distinct units; do not confuse people reached    
+  with message volume.                                                          
+  Missing consent rows always mean no consent.                                  
+  An opted-out user must never be counted as eligible.                          
+  A user without contact information must never be counted as eligible, even    
+  when opted in.                                                                
+  For empty selected channels, return the documented zero-message and           
+  unreachable-audience behavior.                                                
+  Ensure aggregate queries do not duplicate matched users when multiple cart    
+  events, purchases or consent records exist.                                   
+  5. Database query safety                                                      
+                                                                                
+  * Use a read-only transaction where required.                                 
+  * Set the transaction-local statement timeout described in the architecture.  
+  * Keep query arguments parameterized.                                         
+  * Do not interpolate raw values into SQL text.                                
+  * Do not hold a transaction across network I/O.                               
+  * Handle context cancellation and query errors explicitly.                    
+  * Verify partition identities before returning results.                       
+                                                                                
+  Keep repository responsibilities separate from HTTP routing and business      
+  orchestration.                                                                
+  6. Tests                                                                      
+  Unit tests (without Docker)                                                   
+                                                                                
+  * Golden SQL and argument lists for each supported field/operator.            
+  * Match/group composition.                                                    
+  * Event predicates and parameter ordering.                                    
+  * Zero-valued validated input.                                                
+  * SQL injection strings never becoming SQL syntax.                            
+  * Deterministic compilation of the same normalized rule.                      
+                                                                                
+  PostgreSQL integration tests                                                  
+  Use the existing Testcontainers infrastructure and the `integration` build    
+  tag.                                                                          
+  Create an independent 30-user fixture with hand-computed expected counts. Do  
+  not derive expected counts by calling the compiler being tested.              
+  Cover:                                                                        
+                                                                                
+  * Turkish city normalization.                                                 
+  * All channel eligibility combinations.                                       
+  * Missing contacts and missing consent rows.                                  
+  * Multiple events per user.                                                   
+  * Zero-event users.                                                           
+  * `count_lte: 0` / `not_exists` equivalence.                                  
+  * `count_gte: 0` / all-user equivalence.                                      
+  * Recovered and abandoned carts.                                              
+  * Window boundaries.                                                          
+  * NULL birth dates and last activity.                                         
+  * Both-channel reach partition.                                               
+  * Single-channel and empty-channel selections.                                
+                                                                                
+  Run additional partition-identity tests over the deterministic 5,000-user     
+  seed.                                                                         
+  7. Scope constraints                                                          
+  Do not:                                                                       
+                                                                                
+  * Implement LLM integration.                                                  
+  * Implement the interpreter.                                                  
+  * Implement campaign APIs.                                                    
+  * Implement approval or delivery functionality.                               
+  * Implement Vue components.                                                   
+  * Add infrastructure.                                                         
+  * Modify migrations or DSL semantics merely to simplify SQL compilation.      
+                                                                                
+  If an architectural ambiguity is genuinely blocking, report it. Otherwise     
+  implement the documented behavior and record any necessary small              
+  clarification.                                                                
+  8. Verification                                                               
+  Run:                                                                          
+                                                                                
+  * `make test`                                                                 
+  * `make test-integration`                                                     
+  * `go test -race ./...`                                                       
+  * `make lint`                                                                 
+                                                                                
+  If an external TLS or tooling problem prevents staticcheck, report it         
+  separately from actual lint failures.                                         
+  9. Completion report                                                          
+  At completion, report:                                                        
+                                                                                
+  1. Files created or modified.                                                 
+  2. Compiler public API and safety boundaries.                                 
+  3. Event and abandoned-cart semantics.                                        
+  4. Audience partition calculations.                                           
+  5. Unit and integration test results.                                         
+  6. Actual counts for the example İstanbul abandoned-cart segment using        
+  `seed-today`.                                                                 
+  7. Any limitations or deviations.                                             
+                                                                                
+  Do not commit anything.                                                       
+  Do not proceed to CP5.                                                        
+  Stop after CP4 and wait for review.                                           
+
+  Searched for 1 pattern, ran 3 shell commands (ctrl+o to expand)
+
+⏺ Now the existing segment code.
+
+  Ran 6 shell commands (ctrl+o to expand)
+
+⏺ Context gathered (architecture §4/§6, ADR-003/004, the segment package, test
+  infra). Now checking how groups combine before writing the compiler.
+
+  Searched for 1 pattern (ctrl+o to expand)
+
+⏺ I'm starting the compiler and will record one design note in the report: I
+  read the architecture's "top-level match + non-nesting groups" as each group
+  being one operand evaluated with its own match.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ Write(backend/internal/segment/compile.go)
+  ⎿  Wrote 313 lines to backend/internal/segment/compile.go
+       1 package segment
+       2 
+       3 import (
+       4   "errors"
+       5   "fmt"
+       6   "strconv"
+       7   "strings"
+       8 )
+       9 
+      10 // ErrUncompilable is returned when a Validated rule contains so
+     … +304 lines (~11 KB) (ctrl+o to expand)
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ Update(backend/internal/segment/compile.go)
+  ⎿  Added 4 lines
+      192    if want := valueKindFor(a.Op); want == ValueInvalid || a.Val
+           ue.Kind != want {
+      193      return "", fmt.Errorf("%w: field %q operator %q", ErrUncom
+           pilable, a.Field, a.Op)
+      194    }
+      195 +  if a.Value.Kind == ValueStrings && len(a.Value.Strs) == 0 { 
+      196 +    // "<> ALL('{}')" is true for everyone: fail closed instea
+          +d.                                                            
+      197 +    return "", fmt.Errorf("%w: field %q empty list", ErrUncomp
+          +ilable, a.Field)                                              
+      198 +  }                                                           
+      199    switch col.kind {
+      200    case attrText:
+      201      switch a.Op {
+
+⏺ Compiler written. Now the audience statistics types and repository.
+
+⏺ Write(backend/internal/segment/audience.go)
+  ⎿  Wrote 185 lines to backend/internal/segment/audience.go
+       1 package segment
+       2 
+       3 import (
+       4   "errors"
+       5   "fmt"
+       6   "slices"
+       7   "time"
+       8 )
+       9 
+      10 // Channel is a delivery channel (the PostgreSQL enum "channel")
+     … +176 lines (~7 KB) (ctrl+o to expand)
+
+⏺ Write(backend/internal/segment/audience_repo.go)
+  ⎿  Wrote 134 lines to backend/internal/segment/audience_repo.go
+       1 package segment
+       2 
+       3 import (
+       4   "context"
+       5   "errors"
+       6   "fmt"
+       7   "time"
+       8 
+       9   "github.com/jackc/pgx/v5"
+      10   "github.com/jackc/pgx/v5/pgxpool"
+     … +124 lines (ctrl+o to expand)
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ Builds clean. Now unit tests — checking existing test helpers first.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ Write(backend/internal/segment/compile_test.go)
+  ⎿  Wrote 516 lines to backend/internal/segment/compile_test.go
+      1 package segment
+      2 
+      3 import (
+      4   "errors"
+      5   "fmt"
+      6   "reflect"
+      7   "strings"
+      8   "testing"
+      9 )
+     … +507 lines (ctrl+o to expand)
+
+⏺ The substring check would false-positive on short values like "en" in
+  cart_events, and the replacement map can yield invalid windows depending on
+  iteration order. I'm rewriting that test with explicit per-case alternatives.
+
+⏺ Bash(python3 - <<'EOF'
+      p='compile_test.go'…)
+  ⎿  --- FAIL: TestCompileValuesNeverBecomeSQL (0.00s)
+         compile_test.go:446: value "$1" appears in SQL text: SELECT u.id F
+     ROM users AS u WHERE ((u.city_normalized = $1::text) OR (u.country::te
+     … +7 lines (ctrl+o to expand)
+  ⎿  Updated backend/internal/segment/compile_test.go (+34 -18)
+      464  }
+      465  
+      466  // For every golden case, changing only the values leaves the 
+           SQL text
+      467 -// unchanged and the text never contains a string value.      
+      467 +// unchanged, and no string value (≥ 3 bytes; shorter ones suc
+          +h as "en" occur                                               
+      468 +// inside identifiers like cart_events by coincidence) occurs 
+          +in the text.                                                  
+      469  func TestCompileTextIsValueIndependent(t *testing.T) {
+      470          alt := map[string]string{
+      470 -                `"İSTANBUL"`: `"Van"`, `"Ankara"`: `"Muş"`, `[
+          -"İzmir","ISTANBUL","istanbul"]`: `["Kars"]`,                  
+      471 -                `["Çanakkale","Iğdır"]`: `["Rize","Bolu","Sino
+          -p"]`, `"tr"`: `"US"`, `["gb","DE"]`: `["FR"]`,                
+      472 -                `"Female"`: `"male"`, `["unknown","other"]`: `
+          -["female"]`, `"EN"`: `"tr"`, `["tr","en"]`: `["tr"]`,         
+      473 -                `:18}`: `:99}`, `:35}`: `:13}`, `{"min":25,"ma
+          -x":34}`: `{"min":40,"max":41}`,                               
+      474 -                `:365}`: `:0}`, `:30}`: `:3650}`, `{"min":30,"
+          -max":60}`: `{"min":1,"max":2}`, `:7}`: `:1}`,                 
+      475 -                `"within_days":30`: `"within_days":365`, `"wit
+          -hin_days":14`: `"within_days":1`,                             
+      476 -                `["Toys","books"]`: `["grocery"]`, `["home"]`:
+          - `["beauty","fashion"]`, `["sports"]`: `["electronics"]`,     
+      477 -                `"count":2`: `"count":100`, `"count":0,"within
+          -_days":60`: `"count":7,"within_days":2`,                      
+      478 -                `"within_days":7,`: `"within_days":8,`, `"with
+          -in_days":90`: `"within_days":91`,                             
+      471 +                "city eq":                             `{"type
+          +":"attribute","field":"city","op":"eq","value":"Van"}`,       
+      472 +                "city neq":                            `{"type
+          +":"attribute","field":"city","op":"neq","value":"Muş"}`,      
+      473 +                "city in":                             `{"type
+          +":"attribute","field":"city","op":"in","value":["Kars"]}`,    
+      474 +                "city not_in":                         `{"type
+          +":"attribute","field":"city","op":"not_in","value":["Rize","Bo
+          +lu","Sinop"]}`,                                               
+      475 +                "country eq":                          `{"type
+          +":"attribute","field":"country","op":"eq","value":"US"}`,     
+      476 +                "country in":                          `{"type
+          +":"attribute","field":"country","op":"in","value":["FR"]}`,   
+      477 +                "gender eq":                           `{"type
+          +":"attribute","field":"gender","op":"eq","value":"male"}`,    
+      478 +                "gender in":                           `{"type
+          +":"attribute","field":"gender","op":"in","value":["female"]}`,
+      479 +                "language eq":                         `{"type
+          +":"attribute","field":"language","op":"eq","value":"tr"}`,    
+      480 +                "language in":                         `{"type
+          +":"attribute","field":"language","op":"in","value":["tr"]}`,  
+      481 +                "age gte":                             `{"type
+          +":"attribute","field":"age","op":"gte","value":99}`,          
+      482 +                "age lte":                             `{"type
+          +":"attribute","field":"age","op":"lte","value":13}`,          
+      483 +                "age between":                         `{"type
+          +":"attribute","field":"age","op":"between","value":{"min":40,"
+          +max":41}}`,                                                   
+      484 +                "signup_days_ago gte":                 `{"type
+          +":"attribute","field":"signup_days_ago","op":"gte","value":0}`
+          +,                                                             
+      485 +                "signup_days_ago lte":                 `{"type
+          +":"attribute","field":"signup_days_ago","op":"lte","value":365
+          +0}`,                                                          
+      486 +                "signup_days_ago between":             `{"type
+          +":"attribute","field":"signup_days_ago","op":"between","value"
+          +:{"min":1,"max":2}}`,                                         
+      487 +                "last_active_days_ago gte":            `{"type
+          +":"attribute","field":"last_active_days_ago","op":"gte","value
+          +":1}`,                                                        
+      488 +                "last_active_days_ago lte":            `{"type
+          +":"attribute","field":"last_active_days_ago","op":"lte","value
+          +":3650}`,                                                     
+      489 +                "cart exists":                         `{"type
+          +":"event","event":"cart_add","op":"exists","within_days":365}`
+          +,                                                             
+      490 +                "cart not_exists":                     `{"type
+          +":"event","event":"cart_add","op":"not_exists","within_days":1
+          +}`,                                                           
+      491 +                "purchase exists with categories":     `{"type
+          +":"event","event":"purchase","op":"exists","within_days":8,"ca
+          +tegory_in":["grocery"]}`,                                     
+      492 +                "purchase not_exists with categories": `{"type
+          +":"event","event":"purchase","op":"not_exists","within_days":9
+          +1,"category_in":["beauty","fashion"]}`,                       
+      493 +                "cart count_gte with categories":      `{"type
+          +":"event","event":"cart_add","op":"count_gte","count":100,"wit
+          +hin_days":2,"category_in":["electronics"]}`,                  
+     … 32 more lines (ctrl+o to expand)
+
+⏺ The $1 "injection" trivially matches a real placeholder; the stronger check
+  (text identical to the benign rule) still holds. Swapping it for a
+  dollar-quoting payload.
+
+⏺ Bash(sed -i '' 's/          `\$1`,/         `$$ OR true $$`,/' compile_test.go
+      && grep -n 'OR true' compile_test.go && go test ./ 2>&1 | tail -20)
+  ⎿  418:            `$$ OR true $$`,
+     ok
+     github.com/fyusufayan/insider-campaign-composer-case/backend/inter
+     nal/segment     0.250s
+  ⎿  Updated backend/internal/segment/compile_test.go (+1 -1)
+      415          injections := []string{
+      416                  `istanbul'; DROP TABLE users; --`,
+      417                  `' OR '1'='1`,
+      418 -                `$1`,                                         
+      418 +                `$$ OR true $$`,                              
+      419                  `"; SELECT pg_sleep(10); --`,
+      420                  `istanbul) OR (1=1`,
+      421                  "istanbul\x00",
+
+⏺ Now the audience unit tests (projection, identities, channel selection).
+⏺ Write(backend/internal/segment/audience_test.go)
+  ⎿  Wrote 182 lines to backend/internal/segment/audience_test.go
+      1 package segment
+      2 
+      3 import (
+      4   "encoding/json"
+      5   "errors"
+      6   "reflect"
+      7   "testing"
+      8   "time"
+      9 )
+     … +173 lines (ctrl+o to expand)
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ Unit tests pass. Moving to the PostgreSQL integration tests; checking the seed
+  helper's signature first.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ Write(backend/test/integration/segment_fixture_test.go)
+  ⎿  Wrote 544 lines to backend/test/integration/segment_fixture_test.go
+       1 //go:build integration
+       2 
+       3 package integration
+       4 
+       5 import (
+       6   "context"
+       7   "errors"
+       8   "fmt"
+       9   "reflect"
+      10   "slices"
+     … +534 lines (ctrl+o to expand)
+
+⏺ The last test only rebuilds the transaction setup rather than exercising
+  Stats, so I'm replacing it with a real check that holds a lock on users and
+  expects the 5 s timeout (SQLSTATE 57014).
+
+⏺ Bash(cd /Users/bilgem/Desktop/devel/leet/insider-case/insider-campaign-compose
+      r-case/backend/test/integration && python3 - <<'EOF'
+      p='segment_fixture_test.go'…)
+  ⎿  Updated backend/test/integration/segment_fixture_test.go (+32 -18)
+       9          "reflect"
+      10          "slices"
+      11          "testing"
+      12 +        "time"                                                 
+      13  
+      14          "github.com/jackc/pgx/v5"
+      15 +        "github.com/jackc/pgx/v5/pgconn"                       
+      16          "github.com/jackc/pgx/v5/pgxpool"
+      17  
+      18          "github.com/fyusufayan/insider-campaign-composer-case/b
+          ackend/internal/segment"
+     ...
+      511          }
+      512  }
+      513  
+      512 -// The audience transaction is read-only and carries the 5 s s
+          -tatement timeout.                                             
+      513 -// Observed from inside ComputeAudienceStats' Querier, which s
+          -ees the same                                                  
+      514 -// transaction Stats opened.                                  
+      515 -func TestAudienceStatsTransactionSettings(t *testing.T) {     
+      514 +// Stats runs under the transaction-local 5 s statement timeou
+          +t: while another                                              
+      515 +// transaction holds an exclusive lock on users, the audience 
+          +query is                                                      
+      516 +// cancelled by the server (SQLSTATE 57014) after ~5 s instead
+          + of waiting.                                                  
+      517 +// The wait is the timeout itself, not a sleep.               
+      518 +func TestAudienceStatsStatementTimeout(t *testing.T) {        
+      519          pool := testsupport.Pool(t, pg.NewMigratedDatabase(t))
+      520          loadFixture(t, pool)
+      521 +        repo := segment.NewAudienceRepository(pool)           
+      522          rule := parseRule(t, cond(abandoned30))
+      519 -                                                              
+      520 -        // Reproduce Stats' transaction set-up through the pub
+          -lic API and check the                                         
+      521 -        // settings are what the architecture requires and tha
+          -t writes fail.                                                
+      523          ctx := context.Background()
+      523 -        tx, err := pool.BeginTx(ctx, pgx.TxOptions{AccessMode:
+          - pgx.ReadOnly})                                               
+      524 +                                                              
+      525 +        locker, err := pool.Begin(ctx)                        
+      526          if err != nil {
+      527                  t.Fatal(err)
+      528          }
+      527 -        defer tx.Rollback(ctx) //nolint:errcheck              
+      528 -        if _, err := tx.Exec(ctx, "SET LOCAL statement_timeout
+          - = '5s'"); err != nil {                                       
+      529 +        defer locker.Rollback(ctx) //nolint:errcheck          
+      530 +        if _, err := locker.Exec(ctx, "LOCK TABLE users IN ACC
+          +ESS EXCLUSIVE MODE"); err != nil {                            
+     … 36 more lines (ctrl+o to expand)
+
+⏺ Now the window-boundary test (single transaction, exact edges) and the
+  5,000-user seed tests.
+
+⏺ Write(backend/test/integration/segment_seed_test.go)
+  ⎿  Wrote 276 lines to backend/test/integration/segment_seed_test.go
+       1 //go:build integration
+       2 
+       3 package integration
+       4 
+       5 import (
+       6   "context"
+       7   "fmt"
+       8   "slices"
+       9   "testing"
+      10   "time"
+     … +266 lines (ctrl+o to expand)
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ All 8 new integration tests passed on the first run. Next I'll record the
+  small semantic clarifications in ARCHITECTURE §6.4 before the full
+  verification.
+
+⏺ Update(docs/ARCHITECTURE.md)
+  ⎿  Added 9 lines
+      415  ### 6.4 Compilation
+      416  `segment.Compile(rule) (sql string, args []any, err error)`: e
+           ach registry entry owns a fragment builder; identifiers come o
+           nly from Go constants; every value is a bind parameter. Behavi
+           oural predicates compile to `EXISTS` / `NOT EXISTS` subqueries
+            over `cart_events` / `purchases` with `now() - make_interval(
+           days => $n)`. Queries run in a read-only transaction with `SET
+            LOCAL statement_timeout = '5s'`.
+      417  
+      418 +Clarifications fixed by the compiler (CP4):                   
+      419 +- **Input/output.** `Compile` accepts only a non-zero `segment
+          +.Validated` and returns `SELECT u.id FROM users AS u WHERE (…)
+          +` — one row per matched user (no joins; events are correlated 
+          +subqueries). Placeholders `$1..$n` are numbered in order of ap
+          +pearance; the statement is a pure function of the normalized r
+          +ule.                                                          
+      420 +- **Composition.** The rule's `match` combines each top-level 
+          +condition and each group (top-level conditions first, then gro
+          +ups in order); a group is one operand whose conditions are com
+          +bined with the group's own `match`.                           
+      421 +- **Windows.** "Last N days" is `t >= now() - N days` (inclusi
+          +ve lower edge, no upper edge).                                
+      422 +- **`*_days_ago`** is the number of whole elapsed days, `floor
+          +((now() - t) / 1 day)`; **age** is whole years between `birth_
+          +date` and the current UTC date. A NULL `birth_date` / `last_ac
+          +tive_at` never satisfies a condition.                         
+      423 +- **`abandoned_cart(N)`**: any purchase of the user (any or no
+          + category, not limited to the window) at or after the cart eve
+          +nt's timestamp recovers that cart; one unrecovered cart event 
+          +in the window suffices.                                       
+      424 +- **Category filters** never match a purchase whose category i
+          +s NULL.                                                       
+      425 +- **Empty channel selection**: `by_channel` is empty, `message
+          +s = 0`, `reach_users.unreachable = matched_users`. With one se
+          +lected channel, its eligible users are `sms_only`/`email_only`
+          + and everyone else is `unreachable`.                          
+      426 +                                                              
+      427  ### 6.5 Audience statistics (unambiguous partition)
+      428  For each **selected** channel, every matched user is placed in
+            exactly one category, evaluated in order:
+      429  1. `no_contact` — no phone (SMS) / no email (email).
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ Bash(gofmt -w backend/internal/segment/audience_test.go && make lint 2>&1 |
+      tail -15)
+  ⎿  cd backend && go vet ./... && go vet -tags=integration ./...
+     cd backend && go run honnef.co/go/tools/cmd/staticcheck@v0.8.2 ./...
+     go: honnef.co/go/tools/cmd/staticcheck@v0.8.2: honnef.co/go/tools/cmd/
+     … +4 lines (ctrl+o to expand)
+  ⎿  Updated backend/internal/segment/audience_test.go (+3 -1)
+      129                  t.Fatal(err)
+      130          }
+      131          bad := map[string]func(*AudienceStats){
+      132 -                "channel sum":            func(s *AudienceStat
+          -s) { s.ByChannel[ChannelSMS] = ChannelStats{Eligible: 5, NoCon
+          -sent: 3, NoContact: 3} },                                     
+      132 +                "channel sum": func(s *AudienceStats) {       
+      133 +                        s.ByChannel[ChannelSMS] = ChannelStats
+          +{Eligible: 5, NoConsent: 3, NoContact: 3}                     
+      134 +                },                                            
+      135                  "reach sum":              func(s *AudienceStat
+           s) { s.ReachUsers.Unreachable = 5 },
+      136                  "messages":               func(s *AudienceStat
+           s) { s.Messages = 19 },
+      137                  "users added to message": func(s *AudienceStat
+           s) { s.Messages = s.MatchedUsers },
+
+⏺ gofmt and both go vet passes are clean. staticcheck couldn't be downloaded
+  (TLS certificate error reaching proxy.golang.org). Checking whether a cached
+  copy exists to run it offline.
+
+  Listed 1 directory, ran 1 shell command (ctrl+o to expand)
+
+⏺ The module is in the local cache. Running it from the cache via a file://
+  proxy (no network).
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ staticcheck is clean, including the integration-tagged files. Now the full
+  make test-integration.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ CP4 is done and all checks pass. Nothing is committed, and I've stopped before
+  CP5.
+
+  1. Files
+
+  New
+  - compile.go: the SQL compiler
+  - audience.go: Channel, the statistics types, the identity check and the
+    per-channel projection
+  - audience_repo.go: AudienceRepository.Stats and ComputeAudienceStats
+  - compile_test.go, audience_test.go: unit tests
+  - segment_fixture_test.go, segment_seed_test.go: integration tests
+
+  Modified
+  - ARCHITECTURE.md §6.4: a short "Clarifications fixed by the compiler (CP4)"
+    list. No migrations or DSL semantics changed.
+
+  2. Compiler API and safety boundaries
+
+  segment.Compile(v Validated) (sql string, args []any, err error) returns
+  SELECT u.id FROM users AS u WHERE (…).
+  - One row per user. There are no joins; every event check is a correlated
+    subquery.
+  - Input. It only accepts a Validated, so raw JSON and an unvalidated Rule
+    can't reach it. A zero value returns ErrNotValidated.
+  - SQL text. All SQL comes from Go constants: attributeColumns, eventTables and
+    a few fixed fragments. Every value is a typed bind parameter ($n::text,
+    ::text[], ::integer, ::bigint).
+  - Numbering. Placeholders are numbered in the order they appear, and the same
+    rule always compiles to the same SQL and arguments.
+  - Fails closed. If anything can't be compiled (a field/operator mismatch, an
+    empty list, an empty rule, a bad window), it returns ErrUncompilable — never
+    a panic and never an unfiltered query. A test covers 20 such forged rules.
+
+  3. Event and abandoned-cart semantics
+
+  - Windows are t >= now() - make_interval(days => $n): the edge is included and
+    there is no upper limit.
+  - Exists / not_exists use EXISTS / NOT EXISTS.
+  - count_gte / count_lte use a scalar (SELECT count(*) …), so a user with no
+    events counts as 0 and joins can't multiply counts. This gives count_lte 0 =
+    not_exists, count_gte 1 = exists, and count_gte 0 = everyone.
+  - Category filters never match a purchase whose category is NULL.
+  - abandoned_cart(N): the user has a cart event in the window with no purchase
+    at or after that cart event's timestamp.
+    - Any purchase recovers the cart, whatever its category, because the
+      architecture defines no category matching.
+    - A purchase at the same instant also recovers it.
+    - One unrecovered cart event is enough.
+
+  4. Audience partition
+
+  - One query. The compiled statement becomes a CTE. Each user is classified
+    once per channel: 0 = no_contact, 1 = no_consent, 2 = eligible.
+  - Consent rows. These are LEFT JOINs on the primary key, so a user can't be
+    duplicated. A missing consent row counts as no consent, and a user with no
+    phone or email is no_contact even if opted in.
+  - Counts. The query returns the per-channel counts and a 2×2 eligibility
+    cross-tab. Go then projects these onto the selected channels:
+    - Two channels: the reach partition is both / sms_only / email_only /
+      unreachable.
+    - One channel: its eligible users are sms_only or email_only and everyone
+      else is unreachable.
+    - No channels: by_channel is {}, messages is 0, and unreachable equals
+      matched_users.
+  - Checks before returning. The raw counts must agree with each other, and
+    AudienceStats.Check() verifies every identity. A violation returns
+    ErrPartitionViolation and no statistics.
+  - Transaction. Stats runs in a read-only transaction with SET LOCAL 
+    statement_timeout = '5s'. ComputeAudienceStats(ctx, Querier, …) runs inside
+    a transaction the caller already has, for the future prepare step.
+
+  5. Test results
+
+  ┌────────────────────────────┬────────────────────────────────────────────┐
+  │          Command           │                   Result                   │
+  ├────────────────────────────┼────────────────────────────────────────────┤
+  │ make test                  │ pass                                       │
+  ├────────────────────────────┼────────────────────────────────────────────┤
+  │ go test -race ./...        │ pass                                       │
+  ├────────────────────────────┼────────────────────────────────────────────┤
+  │ make test-integration      │ pass, 12.7 s                               │
+  │ (race)                     │                                            │
+  ├────────────────────────────┼────────────────────────────────────────────┤
+  │ make lint                  │ gofmt and both go vet passes clean; see    │
+  │                            │ note below                                 │
+  └────────────────────────────┴────────────────────────────────────────────┘
+
+  - Unit tests cover:
+    - golden SQL and arguments for every field × operator, every event operator
+      (with and without categories) and the predicate, plus a test that the
+      golden table covers the whole vocabulary
+    - composition and placeholder ordering, including the largest allowed rule
+    - determinism across different spellings of the same rule
+    - SQL injection: payloads are rejected by the validator, and when forged
+      past it they appear only as bind values; the SQL text is identical to the
+      text for harmless values
+    - zero-value input and forged rules that can't be compiled
+    - every partition-projection case and every way the identities can be
+      violated
+  - Integration tests use the 30-user fixture with hand-computed sets of user 
+    ids, not just counts. They cover:
+    - Turkish city spellings: İSTANBUL, ıstanbul, IGDIR, sanliurfa
+    - every contact/consent combination, including "opted in but no contact"
+    - NULL birth dates and last activity, and users with several events or none
+    - the event equivalences across 2 events × 5 windows × 3 category filters
+    - recovered and abandoned carts, and composition with groups
+    - the four channel selections, with exact partitions
+  - Exact window edges are tested inside one transaction: the edge, 1 µs before
+    it, a purchase at the same instant, days_ago edges and a birthday today.
+  - Statement timeout: while another transaction holds an exclusive lock on
+    users, Stats is cancelled after about 5 s with SQLSTATE 57014.
+  - Cancellation: a cancelled context returns context.Canceled.
+  - On the 5,000-user seed:
+    - the identities hold for 8 rules × 4 channel selections
+    - the whole-population partition and both match separately written SQL
+    - abandoned_cart matches a different formulation (latest cart in the window
+      later than the latest purchase)
+    - the event equivalences hold
+
+  Lint note: make lint itself fails before running staticcheck, because
+  downloading it from proxy.golang.org gives a TLS error (x509: certificate 
+  signed by unknown authority). That's a network problem, not a lint finding. I
+  ran the same v0.8.2 from the local module cache (file:// proxy, checksum
+  database off) and it is clean for both the normal and integration-tagged code.
+
+  6. Example İstanbul abandoned-cart segment on seed-today
+
+  Reference time 2026-11-04T00:00:00Z, 1,522 İstanbul users. Rule: city İstanbul
+  and abandoned_cart(30).
+
+  ┌───────┬──────────┬────────────┬────────────┐
+  │       │ eligible │ no_consent │ no_contact │
+  ├───────┼──────────┼────────────┼────────────┤
+  │ SMS   │ 113      │ 69         │ 15         │
+  ├───────┼──────────┼────────────┼────────────┤
+  │ Email │ 116      │ 73         │ 8          │
+  └───────┴──────────┴────────────┴────────────┘
+
+  - matched_users: 197
+  - reach (both channels): both 66, sms_only 47, email_only 50, unreachable 34 →
+    229 messages
+  - SMS only: 113 reachable, 84 unreachable, 113 messages
+  - Email only: 116 reachable, 81 unreachable, 116 messages
+  - No channels: 197 unreachable, 0 messages
+
+  The count matches a separately written SQL query. With the default seed
+  reference (2026-11-01) the same rule matches 185 users. The numbers change
+  with the day the test runs, so the test asserts the identities and only logs
+  the counts.
+
+  7. Limitations and deviations
+
+  - Recorded clarifications, not design changes:
+    - Group composition: the rule's match combines its top-level conditions and
+      its groups, each group being one operand.
+    - *_days_ago: whole elapsed days.
+    - Age: whole years, by the current UTC date.
+    - Window edge: included, with no upper limit.
+  - Compile output: it returns a full SELECT u.id … statement, not a bare WHERE
+    fragment, so the audience query (and later the prepare step) can wrap it
+    unchanged.
+  - New types in segment: Channel lives there for now, since no shared domain
+    package exists yet. Later packages can import it.
+  - Read-only mode is set by pgx.TxOptions{AccessMode: ReadOnly} and checked by
+    code review; no test fails a write through Stats.
+
+❯ CP4 review is complete. The overall SQL compiler, parameterization,           
+  correlated subqueries, audience partition and integration fixtures are        
+  accepted.                                                                     
+  Before closing CP4, make two targeted correctness improvements.               
+  Do not redesign the compiler or start CP5.                                    
+  1. Exclude future events from historical windows                              
+     The current event predicates use only a lower time bound:                  
+     event_time >= now() - make_interval(days => N)                             
+     This allows future-dated events to match historical queries.               
+     Update the SQL semantics so that:                                          
+                                                                                
+  - A historical event matches only when its timestamp is within the inclusive  
+  interval [evaluation_time - N days, evaluation_time].                         
+  - Apply this to both cart_add and purchase.                                   
+  - The abandoned_cart predicate only considers carts within that interval.     
+  - A recovery purchase must be at or after the cart timestamp AND no later     
+  than evaluation time.                                                         
+  - Future purchases must not recover an otherwise abandoned cart.              
+  - Future-dated signup_at and last_active_at must not satisfy *_days_ago       
+  conditions.                                                                   
+  - Preserve the existing handling of NULL values.                              
+  - Use a consistent evaluation time within the query. PostgreSQL now() is      
+  acceptable here because these are historical audience queries, not            
+  approval-expiry checks.                                                       
+                                                                                
+  Add PostgreSQL integration tests covering:                                    
+                                                                                
+  1. Future cart event does not match cart_add exists.                          
+  2. Future purchase does not match purchase exists.                            
+  3. Future events do not affect count_gte, count_lte, or not_exists.           
+  4. Future cart does not match abandoned_cart.                                 
+  5. Future purchase does not recover a historical abandoned cart.              
+  6. Purchase at the exact evaluation timestamp is included.                    
+  7. Event at the exact lower-window boundary is included.                      
+  8. Future signup and last-activity timestamps do not match historical         
+  days-ago rules.                                                               
+                                                                                
+  For exact time-boundary tests, use a controlled PostgreSQL transaction and a  
+  consistent database evaluation time rather than comparing independently       
+  measured wall-clock timestamps.                                               
+  Update the relevant ARCHITECTURE §6.4 clarification and SQL golden tests.     
+  Do not change the approval-expiry design: approval transitions must still use 
+  clock_timestamp() after acquiring the campaign lock.                          
+  2. Bound transaction rollback cleanup                                         
+  AudienceRepository.Stats currently defers:                                    
+  tx.Rollback(context.WithoutCancel(ctx))                                       
+  This preserves cleanup after request cancellation, but also removes all       
+  deadlines.                                                                    
+  Replace it with a bounded cleanup context independent of request              
+  cancellation.                                                                 
+  Requirements:                                                                 
+                                                                                
+  - Rollback can run after the original context is cancelled.                   
+  - Cleanup has a finite deadline.                                              
+  - The cleanup context is always cancelled after rollback.                     
+  - Successful commit remains unaffected.                                       
+  - No connection or transaction is intentionally left open.                    
+  - Do not change normal audience-query behavior.                               
+                                                                                
+  Add a regression test where practical, without introducing elaborate mocking  
+  infrastructure.                                                               
+  Final verification                                                            
+  Run:                                                                          
+                                                                                
+  - make test                                                                   
+  - make test-integration                                                       
+  - go test -race ./...                                                         
+  - make lint                                                                   
+                                                                                
+  If staticcheck cannot download because of the known TLS certificate issue,    
+  distinguish that clearly from an actual code failure.                         
+  Report:                                                                       
+                                                                                
+  1. Files changed.                                                             
+  2. Exact corrections.                                                         
+  3. New integration test cases.                                                
+  4. Verification results.                                                      
+  5. Any remaining limitations.                                                 
+                                                                                
+  Do not commit.                                                                
+  Do not proceed to CP5.                                                        
+  Stop after these corrections.                                                 
+
+⏺ Bash(cd /Users/bilgem/Desktop/devel/leet/insider-case/insider-campaign-compose
+      r-case/backend/internal/segment && python3 - <<'EOF'
+      p='compile.go'…)
+  ⎿  34:// Time semantics (ARCHITECTURE §6.4, §18; evaluation time = now(),
+      UTC):
+     35://   - event windows: occurred_at/purchased_at in [now() − within_d
+     … +16 lines (ctrl+o to expand)
+  ⎿  Updated backend/internal/segment/compile.go (+16 -11)
+      32  // ErrNotValidated.
+      33  //
+      34  // Time semantics (ARCHITECTURE §6.4, §18; evaluation time = no
+          w(), UTC):
+      35 -//   - event windows: occurred_at/purchased_at ≥ now() − within
+         -_days days                                                     
+      36 -//     (inclusive lower bound, no upper bound);                
+      35 +//   - event windows: occurred_at/purchased_at in [now() − with
+         +in_days days,                                                  
+      36 +//     now()], both bounds inclusive; future-dated events never
+         + match;                                                        
+      37  //   - *_days_ago: the number of whole elapsed days, floor((now
+          () − t) / 1 day);
+      38 +//     a future-dated t satisfies no days-ago condition;       
+      39  //   - age: whole years between birth_date and the current UTC 
+          date;
+      40  //   - NULL birth_date / last_active_at never satisfy an attrib
+          ute condition.
+      41  func Compile(v Validated) (sql string, args []any, err error) {
+     ...
+      248          return col + " <= now() - make_interval(days => " + c.
+           param(n) + "::integer)"
+      249  }
+      250  
+      250 -// days_ago ≤ n  ⇔  days_ago < n+1  ⇔  t > now() − (n+1) days.
+      251 +// days_ago ≤ n  ⇔  days_ago < n+1  ⇔  t > now() − (n+1) days,
+          + and t ≤ now()                                                
+      252 +// (a future timestamp has no days-ago value; the ≥ form alrea
+          +dy implies it).                                               
+      253  func (c *compiler) daysAgoAtMost(col string, n int) string {
+      252 -        return col + " > now() - make_interval(days => " + c.p
+          -aram(n) + "::integer + 1)"                                    
+      254 +        return col + " > now() - make_interval(days => " + c.p
+          +aram(n) + "::integer + 1) AND " + col + " <= now()"           
+      255  }
+      256  
+      257  // event compiles to a correlated subquery over the user's eve
+           nts, so users
+     ...
+      273                  return "", fmt.Errorf("%w: event operator %q c
+           ount", ErrUncompilable, e.Op)
+      274          }
+      275  
+      274 -        where := "e.user_id = u.id AND " + t.at + " >= now() -
+          - make_interval(days => " + c.param(e.WithinDays) + "::integer)
+          -"                                                             
+      276 +        where := "e.user_id = u.id AND " + t.at + " >= now() -
+          + make_interval(days => " + c.param(e.WithinDays) + "::integer)
+          +" +                                                           
+      277 +                " AND " + t.at + " <= now()"                  
+      278          if e.CategoryIn != nil {
+      279                  where += " AND e.category = ANY(" + c.param(cl
+           oneStrings(e.CategoryIn)) + "::text[])"
+      280          }
+     ...
+      298  // behavior compiles named predicates.
+      299  //
+      300  // abandoned_cart(N) (ARCHITECTURE §6.1): the user has a cart 
+           event with
+      298 -// occurred_at ≥ now() − N days for which no purchase of the u
+          -ser has                                                       
+      299 -// purchased_at ≥ that cart event's occurred_at. Any purchase 
+          -recovers the                                                  
+      300 -// cart, whatever its category (the definition has no category
+          - matching); a                                                 
+      301 -// purchase at the same instant recovers it ("at or after"); p
+          -urchases are not                                              
+     … 19 more lines (ctrl+o to expand)
+
+⏺ Compiler bounds added. Now the rollback cleanup.
+⏺ Bash(python3 - <<'EOF'
+      p='audience_repo.go'…)
+  ⎿  Updated backend/internal/segment/audience_repo.go (+16 -3)
+      51  FROM classified`
+      52  )
+      53  
+      54 +// rollbackTimeout bounds the transaction cleanup that runs aft
+         +er Stats returns.                                              
+      55 +const rollbackTimeout = 5 * time.Second                        
+      56 +                                                               
+      57 +// cleanupContext returns a context for cleanup work after ctx 
+         +may have been                                                  
+      58 +// cancelled: it keeps ctx's values, ignores its cancellation a
+         +nd deadline, and                                               
+      59 +// expires after rollbackTimeout. The caller must call the Canc
+         +elFunc.                                                        
+      60 +func cleanupContext(ctx context.Context) (context.Context, cont
+         +ext.CancelFunc) {                                              
+      61 +        return context.WithTimeout(context.WithoutCancel(ctx), 
+         +rollbackTimeout)                                               
+      62 +}                                                              
+      63 +                                                               
+      64  // Querier is the subset of pgx.Tx / pgx.Conn / pgxpool.Pool us
+          ed to run the
+      65  // audience query inside a caller's transaction.
+      66  type Querier interface {
+     ...
+       95                  return AudienceStats{}, fmt.Errorf("segment: b
+           egin audience transaction: %w", err)
+       96          }
+       97          defer func() {
+       88 -                // No-op after a successful commit; the read-o
+          -nly transaction has                                           
+       89 -                // nothing to undo, so only the connection sta
+          -te matters.                                                   
+       90 -                _ = tx.Rollback(context.WithoutCancel(ctx))   
+       98 +                // No-op after a successful commit. Otherwise 
+          +the rollback must still                                       
+       99 +                // run when ctx is already cancelled (to retur
+          +n a clean connection to                                       
+      100 +                // the pool), but never without a deadline.   
+      101 +                cleanupCtx, cancel := cleanupContext(ctx)     
+      102 +                defer cancel()                                
+      103 +                _ = tx.Rollback(cleanupCtx)                   
+      104          }()
+      105          if _, err := tx.Exec(ctx, sqlSetStatementTimeout); err
+            != nil {
+      106                  return AudienceStats{}, fmt.Errorf("segment: s
+           et statement timeout: %w", err)
+  ⎿  Updated backend/internal/segment/audience_test.go (+32 -0)
+      1  package segment
+      2  
+      3  import (
+      4 +        "context"                                               
+      5          "encoding/json"
+      6          "errors"
+      7          "reflect"
+     ...
+      183                  t.Errorf("JSON (no channels)\n got: %s\nwant: 
+           %s", b, wantNone)
+      184          }
+      185  }
+      186 +                                                              
+      187 +func TestCleanupContextIsBoundedAndIgnoresParentCancellation(t
+          + *testing.T) {                                                
+      188 +        type key struct{}                                     
+      189 +        parent, cancelParent := context.WithCancel(context.Wit
+          +hValue(context.Background(), key{}, "v"))                     
+      190 +        cancelParent()                                        
+      191 +                                                              
+      192 +        before := time.Now()                                  
+      193 +        ctx, cancel := cleanupContext(parent)                 
+      194 +        if err := ctx.Err(); err != nil {                     
+      195 +                t.Fatalf("cleanup context inherits parent canc
+          +ellation: %v", err)                                           
+      196 +        }                                                     
+      197 +        deadline, ok := ctx.Deadline()                        
+      198 +        if !ok {                                              
+      199 +                t.Fatal("cleanup context has no deadline")    
+      200 +        }                                                     
+      201 +        if d := deadline.Sub(before); d <= 0 || d > rollbackTi
+          +meout {                                                       
+      202 +                t.Errorf("deadline %v after creation, want (0,
+          + %v]", d, rollbackTimeout)                                    
+      203 +        }                                                     
+      204 +        if ctx.Value(key{}) != "v" {                          
+      205 +                t.Error("cleanup context lost the parent's val
+          +ues")                                                         
+      206 +        }                                                     
+      207 +        cancel()                                              
+      208 +        select {                                              
+      209 +        case <-ctx.Done():                                    
+      210 +        default:                                              
+      211 +                t.Fatal("cleanup context not done after cancel
+          +")                                                            
+      212 +        }                                                     
+      213 +        if !errors.Is(ctx.Err(), context.Canceled) {          
+      214 +                t.Errorf("err = %v, want context.Canceled", ct
+          +x.Err())                                                      
+      215 +        }                                                     
+     … 1 more lines (ctrl+o to expand)
+
+⏺ Now the golden tests and the §6.4 clarification.
+
+⏺ Bash(python3 - <<'EOF'
+      import re…)
+  ⎿  17
+     --- FAIL: TestCleanupContextIsBoundedAndIgnoresParentCancellation (0.0
+     0s)
+     … +6 lines (ctrl+o to expand)
+  ⎿  Updated backend/internal/segment/compile_test.go (+15 -15)
+       72          {"signup_days_ago gte", `{"type":"attribute","field":"
+           signup_days_ago","op":"gte","value":365}`,
+       73                  "u.signup_at <= now() - make_interval(days => 
+           $1::integer)", []any{365}},
+       74          {"signup_days_ago lte", `{"type":"attribute","field":"
+           signup_days_ago","op":"lte","value":30}`,
+       75 -                "u.signup_at > now() - make_interval(days => $
+          -1::integer + 1)", []any{30}},                                 
+       75 +                "u.signup_at > now() - make_interval(days => $
+          +1::integer + 1) AND u.signup_at <= now()", []any{30}},        
+       76          {"signup_days_ago between", `{"type":"attribute","fiel
+           d":"signup_days_ago","op":"between","value":{"min":30,"max":60
+           }}`,
+       77 -                "u.signup_at <= now() - make_interval(days => 
+          -$1::integer) AND u.signup_at > now() - make_interval(days => $
+          -2::integer + 1)", []any{30, 60}},                             
+       77 +                "u.signup_at <= now() - make_interval(days => 
+          +$1::integer) AND u.signup_at > now() - make_interval(days => $
+          +2::integer + 1) AND u.signup_at <= now()", []any{30, 60}},    
+       78          {"last_active_days_ago gte", `{"type":"attribute","fie
+           ld":"last_active_days_ago","op":"gte","value":30}`,
+       79                  "u.last_active_at <= now() - make_interval(day
+           s => $1::integer)", []any{30}},
+       80          {"last_active_days_ago lte", `{"type":"attribute","fie
+           ld":"last_active_days_ago","op":"lte","value":7}`,
+       81 -                "u.last_active_at > now() - make_interval(days
+          - => $1::integer + 1)", []any{7}},                             
+       81 +                "u.last_active_at > now() - make_interval(days
+          + => $1::integer + 1) AND u.last_active_at <= now()", []any{7}}
+          +,                                                             
+       82  
+       83          // ---- events ----
+       84          {"cart exists", `{"type":"event","event":"cart_add","o
+           p":"exists","within_days":30}`,
+       85 -                "EXISTS (SELECT 1 FROM cart_events AS e WHERE 
+          -e.user_id = u.id AND e.occurred_at >= now() - make_interval(da
+          -ys => $1::integer))",                                         
+       85 +                "EXISTS (SELECT 1 FROM cart_events AS e WHERE 
+          +e.user_id = u.id AND e.occurred_at >= now() - make_interval(da
+          +ys => $1::integer) AND e.occurred_at <= now())",              
+       86                  []any{30}},
+       87          {"cart not_exists", `{"type":"event","event":"cart_add
+           ","op":"not_exists","within_days":14}`,
+       88 -                "NOT EXISTS (SELECT 1 FROM cart_events AS e WH
+          -ERE e.user_id = u.id AND e.occurred_at >= now() - make_interva
+          -l(days => $1::integer))",                                     
+       88 +                "NOT EXISTS (SELECT 1 FROM cart_events AS e WH
+          +ERE e.user_id = u.id AND e.occurred_at >= now() - make_interva
+          +l(days => $1::integer) AND e.occurred_at <= now())",          
+       89                  []any{14}},
+       90          {"purchase exists with categories", `{"type":"event","
+           event":"purchase","op":"exists","within_days":7,"category_in":
+           ["Toys","books"]}`,
+       91 -                "EXISTS (SELECT 1 FROM purchases AS e WHERE e.
+          -user_id = u.id AND e.purchased_at >= now() - make_interval(day
+          -s => $1::integer) AND e.category = ANY($2::text[]))",         
+       91 +                "EXISTS (SELECT 1 FROM purchases AS e WHERE e.
+          +user_id = u.id AND e.purchased_at >= now() - make_interval(day
+          +s => $1::integer) AND e.purchased_at <= now() AND e.category =
+          + ANY($2::text[]))",                                           
+       92                  []any{7, []string{"books", "toys"}}},
+       93          {"purchase not_exists with categories", `{"type":"even
+           t","event":"purchase","op":"not_exists","within_days":90,"cate
+           gory_in":["home"]}`,
+       94 -                "NOT EXISTS (SELECT 1 FROM purchases AS e WHER
+          -E e.user_id = u.id AND e.purchased_at >= now() - make_interval
+          -(days => $1::integer) AND e.category = ANY($2::text[]))",     
+       94 +                "NOT EXISTS (SELECT 1 FROM purchases AS e WHER
+          +E e.user_id = u.id AND e.purchased_at >= now() - make_interval
+          +(days => $1::integer) AND e.purchased_at <= now() AND e.catego
+          +ry = ANY($2::text[]))",                                       
+       95                  []any{90, []string{"home"}}},
+       96          {"cart count_gte with categories", `{"type":"event","e
+           vent":"cart_add","op":"count_gte","count":2,"within_days":14,"
+           category_in":["sports"]}`,
+       97 -                "(SELECT count(*) FROM cart_events AS e WHERE 
+          -e.user_id = u.id AND e.occurred_at >= now() - make_interval(da
+          -ys => $1::integer) AND e.category = ANY($2::text[])) >= $3::bi
+          -gint",                                                        
+       97 +                "(SELECT count(*) FROM cart_events AS e WHERE 
+          +e.user_id = u.id AND e.occurred_at >= now() - make_interval(da
+          +ys => $1::integer) AND e.occurred_at <= now() AND e.category =
+          + ANY($2::text[])) >= $3::bigint",                             
+       98                  []any{14, []string{"sports"}, 2}},
+       99          {"purchase count_lte", `{"type":"event","event":"purch
+           ase","op":"count_lte","count":0,"within_days":60}`,
+      100 -                "(SELECT count(*) FROM purchases AS e WHERE e.
+          -user_id = u.id AND e.purchased_at >= now() - make_interval(day
+          -s => $1::integer)) <= $2::bigint",                            
+      100 +                "(SELECT count(*) FROM purchases AS e WHERE e.
+          +user_id = u.id AND e.purchased_at >= now() - make_interval(day
+          +s => $1::integer) AND e.purchased_at <= now()) <= $2::bigint",
+      101                  []any{60, 0}},
+      102          {"purchase count_gte zero", `{"type":"event","event":"
+           purchase","op":"count_gte","count":0,"within_days":1}`,
+     … 31 more lines (ctrl+o to expand)
+
+⏺ Goldens pass. The deadline check was off by the clock read order; bounding it
+  between before/after timestamps instead.
+
+⏺ Bash(python3 - <<'EOF'
+      p='audience_test.go'…)
+  ⎿  ok
+     github.com/fyusufayan/insider-campaign-composer-case/backend/inter
+     nal/segment     0.265s
+     421:- **Windows.** "Last N days" is `t >= now() - N days` (inclusive l
+     … +9 lines (ctrl+o to expand)
+  ⎿  Updated backend/internal/segment/audience_test.go (+3 -2)
+      191  
+      192          before := time.Now()
+      193          ctx, cancel := cleanupContext(parent)
+      194 +        after := time.Now()                                   
+      195          if err := ctx.Err(); err != nil {
+      196                  t.Fatalf("cleanup context inherits parent canc
+           ellation: %v", err)
+      197          }
+     ...
+      199          if !ok {
+      200                  t.Fatal("cleanup context has no deadline")
+      201          }
+      201 -        if d := deadline.Sub(before); d <= 0 || d > rollbackTi
+          -meout {                                                       
+      202 -                t.Errorf("deadline %v after creation, want (0,
+          - %v]", d, rollbackTimeout)                                    
+      202 +        if deadline.Before(before.Add(rollbackTimeout)) || dea
+          +dline.After(after.Add(rollbackTimeout)) {                     
+      203 +                t.Errorf("deadline %v not %v after creation", 
+          +deadline, rollbackTimeout)                                    
+      204          }
+      205          if ctx.Value(key{}) != "v" {
+      206                  t.Error("cleanup context lost the parent's val
+           ues")
+
+⏺ Bash(cd /Users/bilgem/Desktop/devel/leet/insider-case/insider-campaign-compose
+      r-case && python3 - <<'EOF'
+      p='docs/ARCHITECTURE.md'…)
+  ⎿  ok
+  ⎿  Updated docs/ARCHITECTURE.md (+3 -3)
+      418  Clarifications fixed by the compiler (CP4):
+      419  - **Input/output.** `Compile` accepts only a non-zero `segment
+           .Validated` and returns `SELECT u.id FROM users AS u WHERE (…)
+           ` — one row per matched user (no joins; events are correlated 
+           subqueries). Placeholders `$1..$n` are numbered in order of ap
+           pearance; the statement is a pure function of the normalized r
+           ule.
+      420  - **Composition.** The rule's `match` combines each top-level 
+           condition and each group (top-level conditions first, then gro
+           ups in order); a group is one operand whose conditions are com
+           bined with the group's own `match`.
+      421 -- **Windows.** "Last N days" is `t >= now() - N days` (inclusi
+          -ve lower edge, no upper edge).                                
+      422 -- **`*_days_ago`** is the number of whole elapsed days, `floor
+          -((now() - t) / 1 day)`; **age** is whole years between `birth_
+          -date` and the current UTC date. A NULL `birth_date` / `last_ac
+          -tive_at` never satisfies a condition.                         
+      423 -- **`abandoned_cart(N)`**: any purchase of the user (any or no
+          - category, not limited to the window) at or after the cart eve
+          -nt's timestamp recovers that cart; one unrecovered cart event 
+          -in the window suffices.                                       
+      421 +- **Windows.** "Last N days" is `now() - N days <= t <= now()`
+          + (both edges inclusive); future-dated events never match, for 
+          +`cart_add`, `purchase`, counts and `not_exists` alike. The eva
+          +luation time is the statement's `now()` (one value per transac
+          +tion). This is a historical audience query, so `now()` is corr
+          +ect here; approval expiry keeps using `clock_timestamp()` afte
+          +r the campaign lock (§5, ADR-006).                            
+      422 +- **`*_days_ago`** is the number of whole elapsed days, `floor
+          +((now() - t) / 1 day)`; **age** is whole years between `birth_
+          +date` and the current UTC date. A NULL `birth_date` / `last_ac
+          +tive_at`, or a future-dated `signup_at` / `last_active_at`, ne
+          +ver satisfies a condition.                                    
+      423 +- **`abandoned_cart(N)`**: only cart events in the window `[no
+          +w() - N days, now()]` are considered; a purchase of the user (
+          +any or no category, not limited to the window) with `cart.occu
+          +rred_at <= purchased_at <= now()` recovers that cart, so a fut
+          +ure-dated purchase does not; one unrecovered cart event in the
+          + window suffices.                                             
+      424  - **Category filters** never match a purchase whose category i
+           s NULL.
+      425  - **Empty channel selection**: `by_channel` is empty, `message
+           s = 0`, `reach_users.unreachable = matched_users`. With one se
+           lected channel, its eligible users are `sms_only`/`email_only`
+            and everyone else is `unreachable`.
+      426  
+
+⏺ Now the integration tests. Checking the existing lock-wait helper so I can
+  reuse it for the cancellation regression test.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ Write(backend/test/integration/segment_future_test.go)
+  ⎿  Wrote 176 lines to backend/test/integration/segment_future_test.go
+       1 //go:build integration
+       2 
+       3 package integration
+       4 
+       5 import (
+       6   "context"
+       7   "errors"
+       8   "slices"
+       9   "testing"
+      10   "time"
+     … +166 lines (ctrl+o to expand)
+
+⏺ Swapping the poll's time.Sleep for a ticker to match the project convention,
+  and adding the upper bound to the hand-written cross-check SQL in the seed
+  tests.
+
+⏺ Bash(cd /Users/bilgem/Desktop/devel/leet/insider-case/insider-campaign-compose
+      r-case/backend/test/integration && python3 - <<'EOF'
+      p='segment_future_test.go'…)
+  ⎿  --- PASS: TestSegmentFixtureMatches (0.15s)
+     --- PASS: TestSegmentFixtureEventEquivalences (0.15s)
+     --- PASS: TestAudienceStatsFixture (0.11s)
+     … +16 lines (ctrl+o to expand)
+  ⎿  Updated backend/test/integration/segment_future_test.go (+3 -1)
+      151          // Deadline-bounded polling: the repository pool holds
+            no connection and
+      152          // no other session of this database is in a transacti
+           on.
+      153          deadline := time.Now().Add(30 * time.Second)
+      154 +        tick := time.NewTicker(10 * time.Millisecond)         
+      155 +        defer tick.Stop()                                     
+      156          for {
+      157                  var inTx int64
+      158                  err := admin.QueryRow(ctx, `
+     ...
+      166                  if time.Now().After(deadline) {
+      167                          t.Fatalf("after cancellation: sessions
+            in a transaction = %d, acquired repo connections = %d (err %v
+           )", inTx, acquired, err)
+      168                  }
+      167 -                time.Sleep(10 * time.Millisecond) // polling i
+          -nterval, not synchronization                                  
+      169 +                <-tick.C                                      
+      170          }
+      171  
+      172          if err := locker.Rollback(ctx); err != nil {
+  ⎿  Updated backend/test/integration/segment_seed_test.go (+4 -4)
+      214          abandonedIDs := matchedIDs(t, pool, parseRule(t, cond(
+           abandoned30)))
+      215          rows, err := pool.Query(ctx, `
+      216                  SELECT u.id FROM users u
+      217 -                JOIN LATERAL (SELECT max(occurred_at) AS last_
+          -cart FROM cart_events WHERE user_id = u.id AND occurred_at >= 
+          -now() - interval '30 days') c ON true                         
+      218 -                JOIN LATERAL (SELECT max(purchased_at) AS last
+          -_purchase FROM purchases WHERE user_id = u.id) p ON true      
+      217 +                JOIN LATERAL (SELECT max(occurred_at) AS last_
+          +cart FROM cart_events WHERE user_id = u.id AND occurred_at >= 
+          +now() - interval '30 days' AND occurred_at <= now()) c ON true
+      218 +                JOIN LATERAL (SELECT max(purchased_at) AS last
+          +_purchase FROM purchases WHERE user_id = u.id AND purchased_at
+          + <= now()) p ON true                                          
+      219                  WHERE c.last_cart IS NOT NULL AND (p.last_purc
+           hase IS NULL OR p.last_purchase < c.last_cart)
+      220                  ORDER BY u.id`)
+      221          if err != nil {
+     ...
+      264          want := scalar(t, pool, `
+      265                  SELECT count(*) FROM users u
+      266                  WHERE u.city_normalized = 'istanbul'
+      267 -                  AND (SELECT max(occurred_at) FROM cart_event
+          -s WHERE user_id = u.id AND occurred_at >= now() - interval '30
+          - days')                                                       
+      268 -                      > coalesce((SELECT max(purchased_at) FRO
+          -M purchases WHERE user_id = u.id), '-infinity')`)             
+      267 +                  AND (SELECT max(occurred_at) FROM cart_event
+          +s WHERE user_id = u.id AND occurred_at >= now() - interval '30
+          + days' AND occurred_at <= now())                              
+      268 +                      > coalesce((SELECT max(purchased_at) FRO
+          +M purchases WHERE user_id = u.id AND purchased_at <= now()), '
+          +-infinity')`)                                                 
+      269          t.Logf("  İstanbul users=%d", istanbul)
+      270          if s.MatchedUsers != want {
+      271                  t.Errorf("matched_users = %d, independent SQL 
+           = %d", s.MatchedUsers, want)
+
+⏺ All pass. Running the full verification suite.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ Both corrections are in and all tests pass. make lint still stops at the known
+  staticcheck download TLS error; that is not a code failure. Nothing is
+  committed, and I haven't started CP5.
+
+  1. Files changed
+
+  - compile.go: upper time bounds added to the event, days-ago and
+    abandoned-cart SQL; doc comments updated.
+  - audience_repo.go: bounded rollback cleanup.
+  - compile_test.go: golden SQL updated (17 fragments).
+  - audience_test.go: unit test for the cleanup context.
+  - segment_future_test.go: new, the future-event and cancellation tests.
+  - segment_seed_test.go: the separately written cross-check SQL now uses the
+    same <= now() bounds.
+  - ARCHITECTURE.md §6.4: the clarifications for windows, days-ago and
+    abandoned_cart are updated. The note now says approval expiry still uses
+    clock_timestamp() after the campaign lock. That design is unchanged.
+
+  2. Exact corrections
+
+  Historical windows are now [now() − N days, now()], inclusive at both ends.
+  now() is the one evaluation time for the whole transaction.
+  - Events (cart_add and purchase): the subquery adds AND e.occurred_at <= now()
+    or AND e.purchased_at <= now(). Because exists, not_exists and both count
+    operators share the same subquery filter, future events affect none of them.
+  - abandoned_cart: a cart counts only if it falls in the window, now including
+    AND c.occurred_at <= now(). A purchase recovers it only if p.purchased_at >=
+    c.occurred_at AND p.purchased_at <= now().
+  - *_days_ago:
+    - The lte form adds AND col <= now(), so between gets it too.
+    - The gte form (col <= now() − N days) already excluded future timestamps,
+      because N ≥ 0.
+    - NULL handling is unchanged.
+
+  Rollback cleanup: Stats now defers this:
+  cleanupCtx, cancel := cleanupContext(ctx) // WithTimeout(WithoutCancel(ctx), 
+  rollbackTimeout = 5s)
+  defer cancel()
+  _ = tx.Rollback(cleanupCtx)
+  - After cancellation: rollback still runs once the request context is
+    cancelled, and it has a 5 s deadline.
+  - Always cancelled: the cleanup context is cancelled after the rollback.
+  - After a commit: the rollback does nothing, as before.
+  - Normal queries: behave as before.
+
+  3. New tests
+
+  TestSegmentFutureEvents uses one controlled transaction, so the rows and the
+  queries see the same now(). Your eight cases:
+  1. A future cart doesn't match cart_add exists or count_gte 1.
+  2. A future purchase doesn't match purchase exists or count_gte 1.
+  3. Future events change nothing:
+     - not_exists and count_lte 0 still match the users with only future events.
+     - A user with 2 past and 2 future carts matches count_gte 2, but not
+       count_gte 3 or count_lte 1, and still matches count_lte 2.
+     - count_gte 0 still matches everyone.
+  4. A future cart doesn't make a user match abandoned_cart.
+  5. A future purchase doesn't recover a cart from 5 days ago.
+  6. A purchase exactly at now() matches purchase exists and does recover the
+     cart. A cart exactly at now() also counts.
+  7. A cart exactly now() − 30 days matches cart exists and abandoned_cart(30).
+  8. A future signup_at or last_active_at fails lte 0, lte 3650, gte 0 and
+     between 0..10. A timestamp exactly at now() counts as 0 days ago.
+
+  TestAudienceStatsCancelledMidQueryReleasesConnection:
+  - Stats is cancelled while its query waits on a table lock and returns
+    context.Canceled.
+  - Polling with a deadline then confirms the repository's pool holds no
+    connection and no other session is still inside a transaction.
+  - After that, the pool works normally.
+
+  Unit test TestCleanupContextIsBoundedAndIgnoresParentCancellation checks that:
+  - a cancelled parent context doesn't cancel cleanup;
+  - the deadline is 5 s after creation;
+  - the parent's values are kept;
+  - the cleanup context is done after cancel().
+
+  4. Verification
+
+  ┌──────────────────────────────┬──────────────────────────────────────────┐
+  │           Command            │                  Result                  │
+  ├──────────────────────────────┼──────────────────────────────────────────┤
+  │ make test                    │ pass                                     │
+  ├──────────────────────────────┼──────────────────────────────────────────┤
+  │ make test-integration (race) │ pass, 12.8 s                             │
+  ├──────────────────────────────┼──────────────────────────────────────────┤
+  │ go test -race ./...          │ pass                                     │
+  ├──────────────────────────────┼──────────────────────────────────────────┤
+  │                              │ gofmt and both go vet passes clean;      │
+  │ make lint                    │ staticcheck couldn't be downloaded       │
+  │                              │ (x509: certificate signed by unknown     │
+  │                              │ authority from proxy.golang.org)         │
+  ├──────────────────────────────┼──────────────────────────────────────────┤
+  │ staticcheck v0.8.2 from the  │                                          │
+  │ local module cache (no       │ clean, for the normal and                │
+  │ network, checksum database   │ integration-tagged code                  │
+  │ off)                         │                                          │
+  └──────────────────────────────┴──────────────────────────────────────────┘
+
+  The seed-today numbers for the İstanbul example are unchanged (197 matched
+  users, 229 messages), because the seed has no future-dated rows.
+
+  5. Remaining limitations
+
+  - Rollback deadline: no test makes a rollback actually hit its 5 s deadline.
+    That would need a server that stops responding mid-rollback. The bound is
+    covered by the unit test on the cleanup context.
+  - Future birth dates: age is unchanged. A future birth date already fails gte
+    (13 is the minimum), but can pass age lte. You didn't ask for this; the
+    schema and seed don't produce it.
