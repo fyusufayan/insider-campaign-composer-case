@@ -139,14 +139,16 @@ var (
 	consentSources = []string{"signup_form", "checkout", "preference_center", "import"}
 
 	categories = []category{
-		{"electronics", "ELC", 49900, 2499900},
-		{"fashion", "FSH", 9900, 349900},
-		{"home", "HOM", 4900, 499900},
-		{"beauty", "BTY", 2900, 149900},
-		{"sports", "SPT", 7900, 399900},
-		{"books", "BKS", 2900, 49900},
-		{"grocery", "GRC", 990, 29900},
-		{"toys", "TOY", 4900, 249900},
+		// Names come from the segment catalog; the order here is part of the
+		// deterministic draw sequence and must not change.
+		{segment.CategoryElectronics, "ELC", 49900, 2499900},
+		{segment.CategoryFashion, "FSH", 9900, 349900},
+		{segment.CategoryHome, "HOM", 4900, 499900},
+		{segment.CategoryBeauty, "BTY", 2900, 149900},
+		{segment.CategorySports, "SPT", 7900, 399900},
+		{segment.CategoryBooks, "BKS", 2900, 49900},
+		{segment.CategoryGrocery, "GRC", 990, 29900},
+		{segment.CategoryToys, "TOY", 4900, 249900},
 	}
 )
 

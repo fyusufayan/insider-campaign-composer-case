@@ -3,6 +3,7 @@ package main
 import (
 	"reflect"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -74,6 +75,36 @@ func TestGenerateGoldenHash(t *testing.T) {
 	const golden = "c553fe3638a6664a1c0de01035237a64d0dc4de72cde58c771cf9ed64fe2da25"
 	if got := mustGenerate(t, defaultParams()).Hash(); got != golden {
 		t.Errorf("default dataset hash = %s, want %s", got, golden)
+	}
+}
+
+// Seed categories are exactly the segment catalog, so every generated
+// cart/purchase category is expressible (and validated) in category_in.
+func TestSeedCategoriesMatchSegmentCatalog(t *testing.T) {
+	var names []string
+	seen := map[string]bool{}
+	for _, c := range categories {
+		if seen[c.name] {
+			t.Errorf("duplicate seed category %q", c.name)
+		}
+		seen[c.name] = true
+		names = append(names, c.name)
+	}
+	slices.Sort(names)
+	if want := segment.Categories(); !reflect.DeepEqual(names, want) {
+		t.Errorf("seed categories %v, segment catalog %v", names, want)
+	}
+	// Generated data uses only catalog categories.
+	d := mustGenerate(t, defaultParams())
+	for _, e := range d.CartEvents {
+		if !seen[e.Category] {
+			t.Fatalf("cart event category %q not in catalog", e.Category)
+		}
+	}
+	for _, p := range d.Purchases {
+		if p.Category != nil && !seen[*p.Category] {
+			t.Fatalf("purchase category %q not in catalog", *p.Category)
+		}
 	}
 }
 

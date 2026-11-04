@@ -372,6 +372,8 @@ Behavior  := { "type":"behavior", "predicate":"abandoned_cart", "within_days": i
 ```
 `abandoned_cart(N)` = the user has a cart event in the last N days with **no purchase at or after that cart event**.
 
+**Event counts.** The count of an event condition is the number of the user's events of that kind within the window (and in `category_in`, when present); a user with no matching events has count **0**. Therefore, for identical event, window and category filters, `count_lte: 0` ≡ `not_exists`, `count_gte: 1` ≡ `exists`, and `count_gte: 0` matches every user. The compiler must honour this (e.g. a correlated `COUNT(*)` subquery, never an inner join that drops zero-count users).
+
 **Field registry (allow-list)**
 
 | field | operators | value |
@@ -384,7 +386,9 @@ Behavior  := { "type":"behavior", "predicate":"abandoned_cart", "within_days": i
 | last_active_days_ago | gte, lte | 0–3650 |
 | language | eq, in | tr, en |
 
-Limits: `within_days` 1–365; `count` 1–100; ≤10 conditions per group; ≤5 groups; `in` lists ≤50 items. Consent and contact fields are **not** part of the DSL; any attempt is rejected with `consent_is_backend_enforced`.
+Limits: `within_days` 1–365; `count` 0–100; ≤10 conditions per group; ≤5 groups; `in` lists ≤50 items. Consent and contact fields are **not** part of the DSL; any attempt is rejected with `consent_is_backend_enforced`.
+
+Value shapes (fixed per operator): `eq`/`neq` → string; `in`/`not_in` → non-empty array of strings; `gte`/`lte` → integer; `between` → `{"min": int, "max": int}` (inclusive, `min ≤ max`). A rule needs ≥1 condition in total; groups need ≥1 condition. `"version"` is optional on input (must be `1`) and always present in the normalized form. `category_in` values must be known product categories (`segment.Categories()`; the seed generator takes its category names from the same catalog). String values are canonicalized case-insensitively (city → folded key, country → upper-case alpha-2, gender/language/category → lower case); `in` lists and `category_in` are sorted and de-duplicated; condition and group order is preserved.
 
 ### 6.2 Example interpretation output (example brief)
 ```json
