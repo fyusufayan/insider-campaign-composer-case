@@ -1,4 +1,4 @@
-# Smart Campaign Composer — local stack (Slice 1a).
+# Smart Campaign Composer — local stack.
 #
 #   docker compose up --build        → http://localhost:8000
 #
@@ -6,7 +6,11 @@
 #   postgres (healthy) → migrate (exit 0) → seed (exit 0) → api (ready) → frontend
 # A failed migration or seed stops the chain: api and frontend are not started.
 #
-# worker and mockprovider join in the delivery slices (ARCHITECTURE §2).
+# Delivery (CP16): mockprovider (fake SMS/email provider, sends nothing) starts
+# once api is healthy (it runs the image the api service builds); worker starts
+# once mockprovider is healthy.
+# Exactly one worker replica (ARCHITECTURE §2): never scale it.
+# Neither the worker nor the mock provider sees any LLM setting or API key.
 #
 # Every value below can be overridden from the shell or a local, uncommitted
 # .env file (see .env.example). No secret has a committed value: the database
@@ -109,6 +113,74 @@ services:
       start_period: 5s
     restart: unless-stopped
 
+  # Fake SMS/email provider (ADR-020): durable idempotency ledger and fault
+  # injection; no outbound connections. Internal only. The ledger lives on
+  # the mockledger volume: restart, `down`/`up` and container recreation keep
+  # it (replays work across them); only `docker compose down -v` (or the
+  # opt-in admin reset) destroys it. A corrupt ledger stops the service
+  # (fail closed), and the worker then does not start.
+  mockprovider:
+    <<: *backend
+    command: ["/app/mockprovider"]
+    volumes:
+      - mockledger:/var/lib/mockprovider
+    environment:
+      MOCK_PROVIDER_ADDR: ":8090"
+      MOCK_LEDGER_PATH: /var/lib/mockprovider/ledger.journal
+      # Destructive POST /admin/reset; off in the demo stack.
+      MOCK_ADMIN_RESET_ENABLED: "false"
+      MOCK_FAULT_5XX_RATE: ${MOCK_FAULT_5XX_RATE:-0.03}
+      MOCK_FAULT_429_RATE: ${MOCK_FAULT_429_RATE:-0.01}
+      MOCK_FAULT_TIMEOUT_RATE: ${MOCK_FAULT_TIMEOUT_RATE:-0.005}
+      MOCK_LATENCY_MS: ${MOCK_LATENCY_MS:-50-200}
+      # Destinations ending with this suffix are rejected permanently ("-" disables).
+      MOCK_PERMANENT_FAIL_PATTERN: ${MOCK_PERMANENT_FAIL_PATTERN:-0000}
+      MOCK_RANDOM_SEED: ${MOCK_RANDOM_SEED:-1}
+    depends_on:
+      api:
+        condition: service_healthy
+    expose: ["8090"]
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8090/healthz"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+
+  # Delivery worker: claims only rows released by an explicit send (consumed
+  # approval of a sending campaign). One replica.
+  worker:
+    <<: *backend
+    command: ["/app/worker"]
+    environment:
+      <<: *backend-env
+      WORKER_ID: worker
+      WORKER_METRICS_ADDR: ":9091"
+      PROVIDER_BASE_URL: http://mockprovider:8090
+      PROVIDER_REQUEST_TIMEOUT: ${PROVIDER_REQUEST_TIMEOUT:-5s}
+      SENDER_POOL_SIZE: ${SENDER_POOL_SIZE:-20}
+      CLAIM_BATCH_SIZE: ${CLAIM_BATCH_SIZE:-50}
+      LEASE_DURATION: ${LEASE_DURATION:-60s}
+      WORKER_POLL_INTERVAL: ${WORKER_POLL_INTERVAL:-500ms}
+      MAX_TRANSIENT_ATTEMPTS: ${MAX_TRANSIENT_ATTEMPTS:-5}
+      MAX_RATE_LIMITED_ATTEMPTS: ${MAX_RATE_LIMITED_ATTEMPTS:-10}
+      DELIVERY_RETRY_DELAY: ${DELIVERY_RETRY_DELAY:-5s}
+      RETRY_AFTER_CAP: ${RETRY_AFTER_CAP:-30s}
+    depends_on:
+      seed:
+        condition: service_completed_successfully
+      mockprovider:
+        condition: service_healthy
+    expose: ["9091"]
+    # SIGTERM → stop claiming, finish in-flight requests (≤ 10 s), release the rest.
+    stop_grace_period: 20s
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:9091/healthz"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
   frontend:
     build:
       context: ./frontend
@@ -139,3 +211,5 @@ services:
 
 volumes:
   pgdata:
+  # Mock provider idempotency ledger (mounted only in mockprovider).
+  mockledger:

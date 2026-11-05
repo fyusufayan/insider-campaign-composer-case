@@ -5,16 +5,20 @@ typed audience rule, the backend validates it and shows a live,
 database-backed audience preview; the AI then writes SMS/email content that
 the backend validates and stores as immutable versions the marketer can edit;
 the marketer then prepares an approval (a frozen recipient snapshot), reviews
-it and confirms or withdraws it. No real messages are sent.
+it and confirms or withdraws it, and explicitly starts sending; a
+PostgreSQL-backed worker delivers through a **mock** SMS/email provider. No
+real messages are sent.
 
 Design and rationale: `docs/ARCHITECTURE.md`, `DECISIONS.md`, `docs/ROADMAP.md`,
 `CLAUDE.md`. Current scope: **Slices 1a, 1b and 2** — brief →
 interpretation (demo, or real Claude when a key is configured) → validated
 segment → audience preview → streamed content generation, editing,
 validation and immutable content versions, plus Slice 3's approval
-preparation, review, confirmation, withdrawal and expiry (CP14–CP15).
-Sending (worker, provider, rate limiting) comes in Slice 4: an approved
-campaign stays approved and nothing is sent.
+preparation, review, confirmation, withdrawal and expiry (CP14–CP15), and
+the first half of Slice 4 (CP16): the send API, the delivery worker and the
+mock provider. Not yet: the per-channel 100 req/s rate limiter, exponential
+backoff, the cancel endpoint, the expiry sweeper, metrics and any delivery UI
+(no Send button, no dashboard, no live progress) — those follow in CP17 / Slice 5.
 
 ## Quick start (Docker only)
 
@@ -101,14 +105,67 @@ make smoke
    confirmation step; the server does not record or enforce it — it enforces
    the version and the reviewed binding) and click
    **Confirm approval**: the campaign becomes *Approved* (valid 24 h) and the
-   read-only summary is shown after a reload too. Nothing is sent — there is no
-   send button in this version.
+   read-only summary is shown after a reload too. Confirming sends nothing;
+   sending is a separate, explicit API call (see *Send* below; no button yet).
 8. **Withdraw approval** (pending: one click in the dialog or panel; approved:
    a second confirmation step) releases the snapshot and returns the campaign to
    *Content ready*. To see expiry, start the stack with short TTLs, e.g.
    `APPROVAL_PENDING_TTL=30s APPROVAL_APPROVED_TTL=1m docker compose up -d`;
    an expired approval cannot be confirmed (`409 approval_expired`) and the UI
    shows *Approval expired — review again*.
+
+### Send (API only in this version)
+
+There is no Send button yet. A confirmed campaign is sent with one explicit API
+call (through the frontend proxy); confirming never sends:
+
+```bash
+curl -sS -X POST -H 'Content-Type: application/json' \
+  -d '{"approval_id":"<approval id>","expected_version":<campaign version>}' \
+  http://localhost:8000/api/v1/campaigns/<campaign id>/send
+```
+
+`202 {status: "sending", released: {sms, email}, …}` consumes the approval and
+releases its frozen rows to the worker; repeating the call returns `200` with
+`already_started: true` and writes nothing. The worker then, per row: renders
+the approved content version with the **frozen** personalization values,
+re-checks the **current** consent and contact (missing consent or contact →
+skipped, never sent), persists the destination, and sends to the mock
+provider, recording every attempt. The campaign becomes `completed` (or
+`completed_with_failures` if any row failed) once every row is terminal — the
+campaign page shows the status after a reload. `scripts/smoke-send.sh`
+(`make smoke-send`) runs this whole flow against the stack and checks the
+database and the mock provider's counters:
+
+```bash
+LLM_PROVIDER=demo ANTHROPIC_API_KEY= docker compose up --build -d --wait && make smoke-send
+```
+
+The mock provider (internal only, never published) injects faults by default
+(3 % 5xx, 1 % 429, 0.5 % timeouts that commit before stalling, destinations
+ending `0000` rejected) to exercise retries and idempotency; set
+`MOCK_FAULT_5XX_RATE=0 MOCK_FAULT_429_RATE=0 MOCK_FAULT_TIMEOUT_RATE=0
+MOCK_PERMANENT_FAIL_PATTERN=-` for a clean run. Its counters (per-process
+counters restart at 0; `messages` counts the durable ledger, and
+`?key_prefix=<campaign id>:` counts one campaign):
+`docker compose exec mockprovider wget -qO- http://127.0.0.1:8090/admin/stats`.
+
+**Guarantees, honestly:** provider requests are at-least-once; every retry of a
+delivery sends the same idempotency key (`campaign:user:channel`), destination
+and body, and the mock provider replays instead of sending again, so with the
+mock there is at most one delivered message per recipient and channel **while
+its durable idempotency ledger is retained and intact**. The ledger is an
+fsynced journal on the `mockledger` volume: it survives provider crashes,
+`docker compose restart`, `down`/`up` and container recreation; only
+`docker compose down -v` (which also deletes the database) or the opt-in
+admin reset forget earlier keys. A corrupt ledger stops the mock provider
+(and therefore the worker) instead of starting empty. This is
+a property of the provider's idempotency, not of our database locks; we never
+claim exactly-once. Rows whose last attempt was ambiguous and that end unsent
+are flagged `outcome_uncertain`. Consent is re-checked immediately before each
+request, so a revocation committed before that check is always honoured; one
+committed during the few milliseconds between the check and the request is
+not (§10.10).
 
 ### Restart, keep data
 
@@ -120,7 +177,9 @@ docker compose down
 docker compose up
 ```
 
-`down` (without `-v`) keeps the `pgdata` volume. On the next start `migrate`
+`down` (without `-v`) keeps the `pgdata` volume and the mock provider's
+idempotency ledger (`mockledger`), so a retry after a restart is still
+recognised as a replay. On the next start `migrate`
 finds the schema current and `seed` finds users present; both exit without
 changes, so campaigns and customer data are preserved. `docker compose restart`
 or Ctrl+C followed by `docker compose up` behave the same.
@@ -132,7 +191,7 @@ make reset-volumes CONFIRM=yes
 ```
 
 This runs `docker compose down -v`, removing the database volume with every
-campaign. The next `docker compose up --build` migrates and seeds from scratch.
+campaign and the mock provider's idempotency ledger (`mockledger`). The next `docker compose up --build` migrates and seeds from scratch.
 The stack never resets an existing database on its own.
 
 ## AI provider and demo mode
@@ -240,6 +299,10 @@ beyond 3, and it only starts with `LLM_PROVIDER=anthropic`,
 outside the repository. The counter fails closed: it must be created
 deliberately (`echo 0 > "$LIVE_BUDGET_FILE"`); a missing or corrupt counter sends
 nothing.
+
+The delivery integration tests run the real worker against the mock provider
+over TCP (crash recovery, consent/contact rechecks, two concurrent workers on
+2,000 rows, injected database failures, graceful shutdown).
 
 Lint (gofmt, go vet, staticcheck):
 

@@ -17,6 +17,7 @@ import (
 //	GET  /api/v1/campaigns/{id}/approvals/{aid}             summary (lazy expiry first)
 //	POST /api/v1/campaigns/{id}/approvals/{aid}/confirm     {expected_version, segment_version, content_version, channels}
 //	POST /api/v1/campaigns/{id}/approvals/{aid}/withdraw    {expected_version}
+//	POST /api/v1/campaigns/{id}/send                        {approval_id, expected_version} (CP16)
 //
 // Every response is {campaign, approval, server_time}. Responses carry
 // counts, binding metadata, the content review (rendered with fictional
@@ -32,6 +33,74 @@ func (h *approvalHandlers) register(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v1/campaigns/{id}/approvals/{aid}", h.get)
 	mux.HandleFunc("POST /api/v1/campaigns/{id}/approvals/{aid}/confirm", h.confirm)
 	mux.HandleFunc("POST /api/v1/campaigns/{id}/approvals/{aid}/withdraw", h.withdraw)
+	mux.HandleFunc("POST /api/v1/campaigns/{id}/send", h.send)
+}
+
+// POST /api/v1/campaigns/{id}/send {approval_id, expected_version} (CP16,
+// §5.5 "Send", §11.4) → 202 {status, released, campaign, …} when this
+// request consumed the approval and released its snapshot to the delivery
+// queue; 200 with already_started = true for a repeat on a campaign that is
+// already sending (or finished) with the same approval (idempotent; nothing
+// written). Expired → 409 approval_expired; not confirmed / withdrawn /
+// cancelled → 409 invalid_state; stale version → 409 version_conflict;
+// binding drift → 409 approval_mismatch. The response carries counts only:
+// no recipient ids, contacts, names or message text. No provider request
+// is made by the API; the worker sends asynchronously.
+func (h *approvalHandlers) send(w http.ResponseWriter, r *http.Request) {
+	id, ok := h.pathID(w, r)
+	if !ok {
+		return
+	}
+	b, apiErr := decodeBody(w, r, false, "approval_id", "expected_version")
+	if apiErr != nil {
+		writeError(w, apiErr)
+		return
+	}
+	raw, present := b.string("approval_id")
+	version, _ := b.positiveInt("expected_version")
+	var aid campaign.ID
+	if present {
+		var err error
+		if aid, err = campaign.ParseID(raw); err != nil {
+			b.add("approval_id", fieldInvalidValue, "must be a UUID")
+		}
+	}
+	if apiErr := b.err(); apiErr != nil {
+		writeError(w, apiErr)
+		return
+	}
+	out, err := h.svc.Send(r.Context(), id, aid, version)
+	if err != nil {
+		h.fail(w, r, err)
+		return
+	}
+	c, err := toCampaignDTO(out.Campaign)
+	if err != nil {
+		h.fail(w, r, err)
+		return
+	}
+	dto := sendResponseDTO{Status: c.Status, ApprovalID: out.ApprovalID.String(), Released: map[string]int64{},
+		AlreadyStarted: !out.Started, Campaign: c, ServerTime: time.Now().UTC()}
+	for ch, n := range out.Released {
+		dto.Released[string(ch)] = n
+	}
+	status := http.StatusAccepted
+	if !out.Started {
+		status = http.StatusOK
+	}
+	writeJSON(w, status, dto)
+}
+
+// sendResponseDTO is the response of POST /send. status is the campaign
+// status (sending, or a finished status for a late repeat); released counts
+// the delivery rows of the consumed approval per selected channel.
+type sendResponseDTO struct {
+	Status         string           `json:"status"`
+	ApprovalID     string           `json:"approval_id"`
+	Released       map[string]int64 `json:"released"`
+	AlreadyStarted bool             `json:"already_started"`
+	Campaign       campaignDTO      `json:"campaign"`
+	ServerTime     time.Time        `json:"server_time"`
 }
 
 // POST /api/v1/campaigns/{id}/approvals {expected_version} → 201

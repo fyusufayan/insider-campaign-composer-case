@@ -38,6 +38,12 @@ check-unit-isolation:
 	@cd $(BACKEND) && if go list -deps ./cmd/... | grep -q '/internal/llm/anthropictest$$'; then \
 		echo "error: a production binary depends on the test-only anthropictest package" >&2; exit 1; \
 	fi
+	@cd $(BACKEND) && if go list -deps ./cmd/api ./cmd/worker ./cmd/migrate ./cmd/seed | grep -q '/internal/mockprovider$$'; then \
+		echo "error: a production binary depends on the mock provider" >&2; exit 1; \
+	fi
+	@cd $(BACKEND) && if go list -deps ./internal/delivery | grep -qE '/internal/(ai|llm|campaign)$$'; then \
+		echo "error: internal/delivery must not import ai, llm or campaign" >&2; exit 1; \
+	fi
 
 .PHONY: test-integration
 test-integration: ## Integration tests (requires Docker)
@@ -66,6 +72,10 @@ logs: ## Follow logs of all services
 .PHONY: smoke
 smoke: ## HTTP smoke test against the running stack (needs curl, python3)
 	scripts/smoke.sh
+
+.PHONY: smoke-send
+smoke-send: ## Delivery smoke test (demo LLM): send a campaign, wait for the worker, verify DB + mock provider
+	scripts/smoke-send.sh
 
 # Destroys the local database volume (all campaigns and the seed). The next
 # `make up` starts from an empty volume: migrate + seed run from scratch.

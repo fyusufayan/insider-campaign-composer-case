@@ -328,3 +328,82 @@ func WriteApprovalStateTx(ctx context.Context, tx pgx.Tx, cur, next Campaign) (C
 	}
 	return saved, nil
 }
+
+// ---- Send (CP16, §5.2 approved → send → sending, §5.5 "Send") ----
+
+// OpSend is the explicit start of sending.
+const OpSend Operation = "send"
+
+// CheckSendAt reports whether the confirmed approval approvalID may be
+// consumed on top of expectedVersion (§5.2 approved → send → sending): the
+// version matches (optimistic concurrency) and the campaign is approved
+// with approvalID as its active approval. The approval row's own status,
+// expiry, binding and held snapshot are checked by the approval
+// transaction under the same campaign lock. Sending is never a side effect
+// of any other operation.
+func (c Campaign) CheckSendAt(expectedVersion int, approvalID ID) error {
+	if c.Version != expectedVersion {
+		return &ConflictError{Expected: expectedVersion, Current: c.Version}
+	}
+	active := c.ActiveApprovalID != nil && *c.ActiveApprovalID == approvalID
+	switch {
+	case c.Status == StatusApproved && active:
+		return nil
+	case c.Status == StatusPendingApproval && active:
+		return &StateError{Op: OpSend, Status: c.Status, Reason: "the approval has not been confirmed yet"}
+	case c.Status == StatusPendingApproval || c.Status == StatusApproved:
+		return &StateError{Op: OpSend, Status: c.Status, Reason: "this is not the campaign's current approval; reload the campaign"}
+	case c.Status == StatusContentReady || c.Status == StatusSegmented || c.Status == StatusDraft:
+		return &StateError{Op: OpSend, Status: c.Status, Reason: "the campaign has no confirmed approval; prepare and confirm one first"}
+	case c.Status == StatusSending:
+		return &StateError{Op: OpSend, Status: c.Status, Reason: "the campaign is already sending"}
+	default:
+		return &StateError{Op: OpSend, Status: c.Status, Reason: "the campaign has finished or was cancelled"}
+	}
+}
+
+// WithSendStarted applies a successful send start (§5.2 send): status →
+// sending, version + 1; active_approval_id keeps pointing at the (now
+// consumed) approval. The checks of CheckSendAt are repeated. It is pure.
+func (c Campaign) WithSendStarted(expectedVersion int, approvalID ID) (Campaign, error) {
+	if err := c.CheckSendAt(expectedVersion, approvalID); err != nil {
+		return Campaign{}, err
+	}
+	next := c.clone()
+	next.Status = StatusSending
+	next.Version++
+	return next, nil
+}
+
+// sqlUpdateCampaignSending writes the send start of the locked campaign:
+// only status, version, send_started_at (database time) and updated_at.
+// The status/approval predicates are redundant while the lock is held.
+const sqlUpdateCampaignSending = `UPDATE campaigns
+SET status = 'sending', version = $2, send_started_at = now(), updated_at = now()
+WHERE id = $1 AND version = $3 AND status = 'approved' AND active_approval_id = $4
+RETURNING ` + campaignColumns
+
+// WriteSendStartedTx writes next = cur.WithSendStarted(…) for the locked
+// campaign cur inside the send transaction.
+func WriteSendStartedTx(ctx context.Context, tx pgx.Tx, cur, next Campaign) (Campaign, error) {
+	switch {
+	case next.ID != cur.ID || cur.Status != StatusApproved || next.Status != StatusSending:
+		return Campaign{}, fmt.Errorf("campaign %s: invalid send transition %s → %s", cur.ID, cur.Status, next.Status)
+	case next.Version != cur.Version+1:
+		return Campaign{}, fmt.Errorf("campaign %s: send must advance the version by one", cur.ID)
+	case cur.ActiveApprovalID == nil || !ptrEqual(next.ActiveApprovalID, cur.ActiveApprovalID):
+		return Campaign{}, fmt.Errorf("campaign %s: send changed the active approval", cur.ID)
+	case !slices.Equal(next.Channels, cur.Channels) || next.SegmentVersion != cur.SegmentVersion ||
+		!ptrEqual(next.CurrentContentID, cur.CurrentContentID):
+		return Campaign{}, fmt.Errorf("campaign %s: send changed authored fields", cur.ID)
+	}
+	saved, err := scanCampaign(tx.QueryRow(ctx, sqlUpdateCampaignSending,
+		uuidArg(cur.ID), next.Version, cur.Version, uuidArg(*cur.ActiveApprovalID)))
+	if errors.Is(err, pgx.ErrNoRows) { // unreachable while the lock is held
+		return Campaign{}, &ConflictError{Expected: cur.Version, Current: -1}
+	}
+	if err != nil {
+		return Campaign{}, fmt.Errorf("campaign %s: update send state: %w", cur.ID, err)
+	}
+	return saved, nil
+}

@@ -6,7 +6,10 @@
 // audience partition.
 //
 // CP14 implements preparation and expiry; CP15 adds confirmation,
-// withdrawal and the reviewable summary read. Sending follows in Slice 4.
+// withdrawal and the reviewable summary read; CP16 adds the send start
+// (consume the confirmed approval and release its held rows, send.go). The
+// delivery worker (package delivery) processes released rows; it never
+// inserts or deletes delivery rows.
 //
 // Privacy boundary: recipient rows (user ids, names, cities) are read only
 // inside the preparation transaction and written only to campaign_deliveries.
