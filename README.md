@@ -15,10 +15,12 @@ interpretation (demo, or real Claude when a key is configured) → validated
 segment → audience preview → streamed content generation, editing,
 validation and immutable content versions, plus Slice 3's approval
 preparation, review, confirmation, withdrawal and expiry (CP14–CP15), and
-the first half of Slice 4 (CP16): the send API, the delivery worker and the
-mock provider. Not yet: the per-channel 100 req/s rate limiter, exponential
-backoff, the cancel endpoint, the expiry sweeper, metrics and any delivery UI
-(no Send button, no dashboard, no live progress) — those follow in CP17 / Slice 5.
+Slice 4's backend (CP16–CP17A): the send API, the delivery worker and the
+mock provider, the per-channel rate limiter (≤ 100 requests per channel in
+any rolling second, retries included), exponential backoff with jitter, 429
+channel pauses, the cancel endpoint and the background approval-expiry
+sweeper. Not yet: delivery statistics, metrics, live progress and any
+delivery UI (no Send/Cancel button, no dashboard) — those follow in CP17B.
 
 ## Quick start (Docker only)
 
@@ -149,6 +151,35 @@ MOCK_PERMANENT_FAIL_PATTERN=-` for a clean run. Its counters (per-process
 counters restart at 0; `messages` counts the durable ledger, and
 `?key_prefix=<campaign id>:` counts one campaign):
 `docker compose exec mockprovider wget -qO- http://127.0.0.1:8090/admin/stats`.
+
+**Rate limit and retries (CP17A).** Per channel, at most
+`RATE_LIMIT_PER_SECOND` (100) provider requests in any `1 s +
+RATE_SAFETY_MARGIN` window — a sliding-window log in the worker, counting
+first attempts and retries; SMS and email are independent. Every request is
+issued within `DISPATCH_MAX_SLOT_TO_REQUEST` (20 ms) of its slot or not at
+all. Only one worker process dispatches (it holds a PostgreSQL advisory
+lock); a second one stands by, so the limit holds for the deployment. A 429
+pauses only its channel for `Retry-After` (1 s – 30 s), durably across
+worker restarts; transient failures and timeouts retry after a full-jitter
+exponential backoff (≤ 60 s, 5 attempts); permanent 4xx are never retried.
+The mock provider measures the result: `max_in_any_rolling_1s` and
+`limit_exceeded` (its own strict limiter) per channel in `/admin/stats`.
+
+**Cancel** (no button yet; the frontend gets one in CP17B):
+
+```bash
+curl -sS -X POST -H 'Content-Type: application/json' -d '{"expected_version":<campaign version>}' \
+  http://localhost:8000/api/v1/campaigns/<campaign id>/cancel
+```
+
+Before sending it revokes the approval and deletes the frozen rows. While
+sending, queued rows are cancelled at once; rows already in flight finish
+truthfully — the response's `in_flight` is the number of requests that may
+still reach the provider (at most one per row; a request on the wire cannot
+be recalled). A repeat is `409 invalid_state`. `make smoke-cancel` exercises
+both cases against the stack. Due approvals are also expired in the
+background every `APPROVAL_SWEEP_INTERVAL` (30 s); correctness never depends
+on it (confirm and send re-check expiry under the campaign lock).
 
 **Guarantees, honestly:** provider requests are at-least-once; every retry of a
 delivery sends the same idempotency key (`campaign:user:channel`), destination
@@ -302,7 +333,11 @@ nothing.
 
 The delivery integration tests run the real worker against the mock provider
 over TCP (crash recovery, consent/contact rechecks, two concurrent workers on
-2,000 rows, injected database failures, graceful shutdown).
+2,000 rows, injected database failures, graceful shutdown) and, since CP17A,
+prove the rate guarantee from the provider's side (real time, 1,200
+messages with injected 5xx/429: `max_in_any_rolling_1s ≤ 100`, arrivals =
+recorded attempts), a dispatch handover between two workers, 429 channel
+isolation and pause persistence, cancellation races and the expiry sweeper.
 
 Lint (gofmt, go vet, staticcheck):
 

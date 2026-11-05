@@ -77,6 +77,10 @@ smoke: ## HTTP smoke test against the running stack (needs curl, python3)
 smoke-send: ## Delivery smoke test (demo LLM): send a campaign, wait for the worker, verify DB + mock provider
 	scripts/smoke-send.sh
 
+.PHONY: smoke-cancel
+smoke-cancel: ## Cancellation smoke test (demo LLM): cancel before and during sending, verify DB
+	scripts/smoke-cancel.sh
+
 # Destroys the local database volume (all campaigns and the seed). The next
 # `make up` starts from an empty volume: migrate + seed run from scratch.
 .PHONY: reset-volumes

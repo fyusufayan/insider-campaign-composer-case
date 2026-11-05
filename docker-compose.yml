@@ -136,6 +136,10 @@ services:
       # Destinations ending with this suffix are rejected permanently ("-" disables).
       MOCK_PERMANENT_FAIL_PATTERN: ${MOCK_PERMANENT_FAIL_PATTERN:-0000}
       MOCK_RANDOM_SEED: ${MOCK_RANDOM_SEED:-1}
+      # The mock's own strict per-channel limit (requests per rolling second;
+      # 0 disables). The worker stays below it; violations are counted in
+      # /admin/stats as limit_exceeded.
+      MOCK_RATE_LIMIT_PER_SECOND: ${MOCK_RATE_LIMIT_PER_SECOND:-100}
     depends_on:
       api:
         condition: service_healthy
@@ -148,7 +152,10 @@ services:
     restart: unless-stopped
 
   # Delivery worker: claims only rows released by an explicit send (consumed
-  # approval of a sending campaign). One replica.
+  # approval of a sending campaign). One replica: the rate limiter is
+  # in-process; an accidental second process stands by (PostgreSQL dispatch
+  # lock, ADR-025) instead of doubling the rate. It also runs the
+  # approval-expiry sweeper, the lease reaper and the heartbeat.
   worker:
     <<: *backend
     command: ["/app/worker"]
@@ -164,8 +171,14 @@ services:
       WORKER_POLL_INTERVAL: ${WORKER_POLL_INTERVAL:-500ms}
       MAX_TRANSIENT_ATTEMPTS: ${MAX_TRANSIENT_ATTEMPTS:-5}
       MAX_RATE_LIMITED_ATTEMPTS: ${MAX_RATE_LIMITED_ATTEMPTS:-10}
-      DELIVERY_RETRY_DELAY: ${DELIVERY_RETRY_DELAY:-5s}
+      BACKOFF_BASE: ${BACKOFF_BASE:-1s}
+      BACKOFF_CAP: ${BACKOFF_CAP:-60s}
       RETRY_AFTER_CAP: ${RETRY_AFTER_CAP:-30s}
+      RATE_LIMIT_PER_SECOND: ${RATE_LIMIT_PER_SECOND:-100}
+      RATE_SAFETY_MARGIN: ${RATE_SAFETY_MARGIN:-50ms}
+      DISPATCH_MAX_SLOT_TO_REQUEST: ${DISPATCH_MAX_SLOT_TO_REQUEST:-20ms}
+      DISPATCH_MAX_PRECHECK: ${DISPATCH_MAX_PRECHECK:-15ms}
+      APPROVAL_SWEEP_INTERVAL: ${APPROVAL_SWEEP_INTERVAL:-30s}
     depends_on:
       seed:
         condition: service_completed_successfully

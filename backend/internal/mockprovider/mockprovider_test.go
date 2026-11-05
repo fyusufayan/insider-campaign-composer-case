@@ -339,3 +339,43 @@ func TestConcurrentIdenticalRequestsAcceptOnce(t *testing.T) {
 		t.Errorf("accepted %d, replayed %d, ids %v, ledger %d", accepted, replayed, ids, len(e.srv.Messages()))
 	}
 }
+
+// The provider's own strict limiter: more than RateLimit arrivals of one
+// channel within a rolling second are answered 429 rate_limit_exceeded
+// (counted apart from injected 429s, nothing recorded); the other channel
+// is independent; every arrival is in max_in_any_rolling_1s.
+func TestStrictRateLimitAndRollingStats(t *testing.T) {
+	e := newEnv(t, mockprovider.Config{RateLimit: 5}, 2*time.Second)
+	start := time.Now()
+	var accepted, limited int
+	for i := 0; i < 8; i++ {
+		m := sms
+		m.IdempotencyKey = "c1:" + string(rune('a'+i)) + ":sms"
+		switch r := e.send(m); r.Outcome {
+		case provider.OutcomeAccepted:
+			accepted++
+		case provider.OutcomeRateLimited:
+			limited++
+			if r.RetryAfter != time.Second {
+				t.Errorf("429 = %+v", r)
+			}
+		default:
+			t.Fatalf("outcome %+v", r)
+		}
+	}
+	if time.Since(start) >= time.Second {
+		t.Skip("8 loopback requests took over a second; the burst premise does not hold on this machine")
+	}
+	if r := e.send(email); r.Outcome != provider.OutcomeAccepted {
+		t.Errorf("email limited by sms traffic: %+v", r)
+	}
+	st := e.srv.Stats()
+	s := st.Channels[provider.ChannelSMS]
+	if accepted != 5 || limited != 3 || s.LimitExceeded != 3 || s.Injected429 != 0 || s.Messages != 5 ||
+		s.Arrivals != 8 || s.MaxInAnyRolling1s != 8 {
+		t.Errorf("accepted=%d limited=%d stats=%+v", accepted, limited, s)
+	}
+	if em := st.Channels[provider.ChannelEmail]; em.LimitExceeded != 0 || em.MaxInAnyRolling1s != 1 {
+		t.Errorf("email stats = %+v", em)
+	}
+}

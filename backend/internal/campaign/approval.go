@@ -407,3 +407,92 @@ func WriteSendStartedTx(ctx context.Context, tx pgx.Tx, cur, next Campaign) (Cam
 	}
 	return saved, nil
 }
+
+// ---- Cancel (CP17, §5.2 cancel rows, §10.8) ----
+
+// OpCancel is the marketer's cancellation of a campaign.
+const OpCancel Operation = "cancel"
+
+// CheckCancelAt reports whether the campaign may be cancelled on top of
+// expectedVersion (§5.2): every non-terminal status may be cancelled. A
+// finished or already cancelled campaign is refused with a StateError
+// BEFORE the version check, so a repeated cancel (e.g. a retry after a
+// lost response, whose version is stale) learns that the campaign is
+// already cancelled instead of seeing a bare version conflict.
+func (c Campaign) CheckCancelAt(expectedVersion int) error {
+	switch c.Status {
+	case StatusCancelled:
+		return &StateError{Op: OpCancel, Status: c.Status, Reason: "the campaign is already cancelled"}
+	case StatusCompleted, StatusCompletedWithFailures:
+		return &StateError{Op: OpCancel, Status: c.Status, Reason: "the campaign has already finished sending"}
+	}
+	if c.Version != expectedVersion {
+		return &ConflictError{Expected: expectedVersion, Current: c.Version}
+	}
+	switch c.Status {
+	case StatusDraft, StatusSegmented, StatusContentReady:
+		if c.ActiveApprovalID != nil { // impossible for a consistent row
+			return fmt.Errorf("campaign %s: %s with an active approval", c.ID, c.Status)
+		}
+	case StatusPendingApproval, StatusApproved, StatusSending:
+		if c.ActiveApprovalID == nil { // impossible for a consistent row
+			return fmt.Errorf("campaign %s: %s without an active approval", c.ID, c.Status)
+		}
+	default:
+		return fmt.Errorf("campaign %s: unknown status %q", c.ID, c.Status)
+	}
+	return nil
+}
+
+// WithCancelled applies a cancellation (§5.2): status → cancelled, version
+// + 1. A live (pending/approved) approval is closed by the caller in the
+// same transaction and active_approval_id is cleared; a sending campaign
+// keeps pointing at its consumed approval (its rows remain the campaign's
+// delivery record). The checks of CheckCancelAt are repeated. It is pure.
+func (c Campaign) WithCancelled(expectedVersion int) (Campaign, error) {
+	if err := c.CheckCancelAt(expectedVersion); err != nil {
+		return Campaign{}, err
+	}
+	next := c.clone()
+	if c.Status == StatusPendingApproval || c.Status == StatusApproved {
+		next.ActiveApprovalID = nil
+	}
+	next.Status = StatusCancelled
+	next.Version++
+	return next, nil
+}
+
+// sqlUpdateCampaignCancelled writes a cancellation of the locked campaign:
+// status, active_approval_id, version, cancelled_at (database time) and
+// updated_at only.
+const sqlUpdateCampaignCancelled = `UPDATE campaigns
+SET status = 'cancelled', active_approval_id = $2, version = $3, cancelled_at = now(), updated_at = now()
+WHERE id = $1 AND version = $4 AND status = $5
+RETURNING ` + campaignColumns
+
+// WriteCancelledTx writes next = cur.WithCancelled(…) for the locked
+// campaign cur inside the cancel transaction.
+func WriteCancelledTx(ctx context.Context, tx pgx.Tx, cur, next Campaign) (Campaign, error) {
+	switch {
+	case next.ID != cur.ID || next.Status != StatusCancelled:
+		return Campaign{}, fmt.Errorf("campaign %s: invalid cancel transition %s → %s", cur.ID, cur.Status, next.Status)
+	case next.Version != cur.Version+1:
+		return Campaign{}, fmt.Errorf("campaign %s: cancel must advance the version by one", cur.ID)
+	case !slices.Equal(next.Channels, cur.Channels) || next.SegmentVersion != cur.SegmentVersion ||
+		!ptrEqual(next.CurrentContentID, cur.CurrentContentID):
+		return Campaign{}, fmt.Errorf("campaign %s: cancel changed authored fields", cur.ID)
+	}
+	var approval any
+	if next.ActiveApprovalID != nil {
+		approval = uuidArg(*next.ActiveApprovalID)
+	}
+	saved, err := scanCampaign(tx.QueryRow(ctx, sqlUpdateCampaignCancelled,
+		uuidArg(cur.ID), approval, next.Version, cur.Version, string(cur.Status)))
+	if errors.Is(err, pgx.ErrNoRows) { // unreachable while the lock is held
+		return Campaign{}, &ConflictError{Expected: cur.Version, Current: -1}
+	}
+	if err != nil {
+		return Campaign{}, fmt.Errorf("campaign %s: update cancel state: %w", cur.ID, err)
+	}
+	return saved, nil
+}

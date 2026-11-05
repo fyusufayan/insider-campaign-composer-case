@@ -86,7 +86,8 @@ func TestSendAPIFlowAndPrivacy(t *testing.T) {
 		t.Fatal(err)
 	}
 	w, err := delivery.New(delivery.NewRepository(e.pool), client, delivery.Config{WorkerID: "api-test", PollInterval: 20 * time.Millisecond,
-		CompletionInterval: 50 * time.Millisecond, ReaperInterval: 100 * time.Millisecond}, logging.New(e.logs, slog.LevelInfo))
+		CompletionInterval: 50 * time.Millisecond, ReaperInterval: 100 * time.Millisecond, RateWindow: testRateWindow, Gate: testGate,
+		LockCheckInterval: 100 * time.Millisecond, LockCheckTimeout: 100 * time.Millisecond}, logging.New(e.logs, slog.LevelInfo))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -141,4 +142,54 @@ func TestSendAPIFlowAndPrivacy(t *testing.T) {
 func (e *apiEnv) count(sql string, args ...any) int64 {
 	e.t.Helper()
 	return scalar(e.t, e.pool, sql, args...)
+}
+
+// ---- CP17: POST /cancel over HTTP ----
+
+type apiCancelResp struct {
+	Status              string           `json:"status"`
+	PreviousStatus      string           `json:"previous_status"`
+	RevokedApprovalID   *string          `json:"revoked_approval_id"`
+	ReleasedHeldRows    int64            `json:"released_held_rows"`
+	CancelledDeliveries map[string]int64 `json:"cancelled_deliveries"`
+	InFlight            map[string]int64 `json:"in_flight"`
+	Campaign            struct {
+		apiCampaign
+		ActiveApprovalID *string `json:"active_approval_id"`
+	} `json:"campaign"`
+	ServerTime time.Time `json:"server_time"`
+}
+
+func TestCancelAPI(t *testing.T) {
+	e := newAPIEnv(t, nil)
+	c := e.readyViaAPI(prepSMS, prepSubject, prepBody)
+	p := e.prepareViaAPI(c.ID, c.Version)
+	conf := must[apiApprovalResp](t, e.call("POST", approvalPath(c.ID, p.Approval.ApprovalID, "confirm"), confirmBody(p.Campaign.Version, p.Approval)), 200)
+	cancelPath := "/api/v1/campaigns/" + c.ID + "/cancel"
+	body := func(v int) string { return fmt.Sprintf(`{"expected_version":%d}`, v) }
+
+	mustError(t, e.call("POST", cancelPath, body(p.Campaign.Version)), 409, "version_conflict")
+	mustError(t, e.call("POST", cancelPath, `{}`), 422, "validation_failed")
+	mustError(t, e.call("POST", "/api/v1/campaigns/00000000-0000-4000-8000-000000000000/cancel", body(1)), 404, "not_found")
+
+	res := e.call("POST", cancelPath, body(conf.Campaign.Version))
+	out := must[apiCancelResp](t, res, 200)
+	if out.Status != "cancelled" || out.PreviousStatus != "approved" || out.RevokedApprovalID == nil ||
+		*out.RevokedApprovalID != p.Approval.ApprovalID || out.ReleasedHeldRows != 5 || len(out.CancelledDeliveries) != 0 ||
+		len(out.InFlight) != 0 || out.Campaign.Version != conf.Campaign.Version+1 || out.Campaign.ActiveApprovalID != nil ||
+		out.ServerTime.IsZero() {
+		t.Errorf("cancel = %+v", out)
+	}
+	if n := e.count(`SELECT count(*) FROM campaign_deliveries`); n != 0 {
+		t.Errorf("held rows left: %d", n)
+	}
+	// Repeats — current or stale version — and a send are refused as invalid_state.
+	mustError(t, e.call("POST", cancelPath, body(out.Campaign.Version)), 409, "invalid_state")
+	mustError(t, e.call("POST", cancelPath, body(conf.Campaign.Version)), 409, "invalid_state")
+	mustError(t, e.call("POST", "/api/v1/campaigns/"+c.ID+"/send", sendBody(p.Approval.ApprovalID, out.Campaign.Version)), 409, "invalid_state")
+	for _, s := range []string{"@example.test", "+90555", `"user_id"`, `"vars"`, `"destination"`, `"idempotency_key"`} {
+		if strings.Contains(string(res.body), s) {
+			t.Errorf("cancel response contains %q", s)
+		}
+	}
 }

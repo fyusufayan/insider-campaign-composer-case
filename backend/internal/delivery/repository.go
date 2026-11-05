@@ -26,8 +26,9 @@ const (
 	sqlSetWorkerTimeouts = `SET LOCAL lock_timeout = '5s'; SET LOCAL statement_timeout = '10s'`
 
 	// Claim: only rows of the consumed approval of a sending campaign, ready
-	// now, in deterministic order (next_attempt_at, id), skipping rows
-	// locked by another claimer. The lease makes a crashed worker's rows
+	// now, of a channel that is not paused (durable 429 pause), in
+	// deterministic order (next_attempt_at, id), skipping rows locked by
+	// another claimer. The lease makes a crashed worker's rows
 	// recoverable (reaper). dispatch_started_at is cleared: no request of
 	// this claim has happened yet.
 	sqlClaim = `WITH picked AS (
@@ -36,6 +37,7 @@ const (
   JOIN campaign_approvals AS a ON a.id = d.approval_id AND a.status = 'consumed'
   JOIN campaigns AS c ON c.id = d.campaign_id AND c.status = 'sending' AND c.active_approval_id = d.approval_id
   WHERE d.channel = $1::channel AND d.status IN ('pending', 'retry_scheduled') AND d.next_attempt_at <= now()
+    AND NOT EXISTS (SELECT 1 FROM channel_pauses AS p WHERE p.channel = d.channel AND p.paused_until > now())
   ORDER BY d.next_attempt_at, d.id
   LIMIT $2
   FOR UPDATE OF d SKIP LOCKED
@@ -80,8 +82,13 @@ WHERE d.id = $1 AND d.leased_by = $2 AND d.status = 'in_flight' AND d.dispatch_s
   AND (d.destination IS NOT NULL OR ` + validContact + `)
 RETURNING d.destination, d.dispatch_started_at`
 
-	// Why did the precheck match nothing? Evaluated in §10.3 order.
-	sqlClassifyMiss = `SELECT d.status = 'in_flight' AND d.leased_by IS NOT DISTINCT FROM $2 AND d.dispatch_started_at IS NULL,
+	// Why did the precheck match nothing? Evaluated in §10.3 order. A row we
+	// still own whose dispatch_started_at is set can only carry one of this
+	// claim's own aborted prechecks that committed late (claim clears it,
+	// completion clears it, and a precheck that led to a request is followed
+	// by completion, never by another precheck).
+	sqlClassifyMiss = `SELECT d.status = 'in_flight' AND d.leased_by IS NOT DISTINCT FROM $2,
+       d.dispatch_started_at IS NOT NULL,
        c.status = 'sending' AND a.status = 'consumed',
        ` + consentOptedIn + `,
        d.destination IS NOT NULL OR ` + validContact + `
@@ -107,12 +114,52 @@ WHERE d.id = $1 AND d.leased_by = $2 AND d.status = 'in_flight' AND d.dispatch_s
 RETURNING d.status`
 
 	// Gives a claimed row back without counting an attempt: no request was
-	// made (shutdown before the precheck, precheck failed or raced). Also
-	// clears dispatch_started_at of a precheck whose outcome is unknown.
-	sqlRelease = `UPDATE campaign_deliveries
-SET status = 'pending', next_attempt_at = now() + $3::bigint * interval '1 microsecond',
+	// made (shutdown before the precheck, precheck failed or raced, slot
+	// deadline aborts). Also clears dispatch_started_at of a precheck whose
+	// outcome is unknown. A row of a campaign that is no longer sending
+	// (cancelled meanwhile) becomes cancelled instead of pending: pending
+	// rows of a cancelled campaign could never be claimed again and would
+	// stay non-terminal for ever.
+	sqlRelease = `UPDATE campaign_deliveries AS d
+SET status = CASE WHEN c.status = 'sending' THEN 'pending' ELSE 'cancelled' END,
+    last_error = CASE WHEN c.status = 'sending' THEN d.last_error ELSE 'campaign_not_sending' END,
+    outcome_uncertain = CASE WHEN c.status = 'sending' THEN d.outcome_uncertain
+                             ELSE d.outcome_uncertain OR ` + priorAmbiguous + ` END,
+    next_attempt_at = now() + $3::bigint * interval '1 microsecond',
     lease_until = NULL, leased_by = NULL, dispatch_started_at = NULL, updated_at = now()
+FROM campaigns AS c
+WHERE d.id = $1 AND d.leased_by = $2 AND d.status = 'in_flight' AND c.id = d.campaign_id
+RETURNING d.status`
+
+	// Undoes a precheck whose request was not made (slot deadline missed):
+	// the row stays ours and in flight, so the next slot can run a fresh
+	// precheck (which requires dispatch_started_at IS NULL). A persisted
+	// destination stays persisted (it is immutable once set).
+	sqlClearDispatch = `UPDATE campaign_deliveries
+SET dispatch_started_at = NULL, updated_at = now()
 WHERE id = $1 AND leased_by = $2 AND status = 'in_flight'`
+
+	// Durable channel pause after a 429 (ADR-025): only ever extended.
+	sqlUpsertPause = `INSERT INTO channel_pauses AS p (channel, paused_until, updated_at)
+VALUES ($1::channel, now() + $2::bigint * interval '1 microsecond', now())
+ON CONFLICT (channel) DO UPDATE
+SET paused_until = GREATEST(p.paused_until, EXCLUDED.paused_until), updated_at = now()`
+
+	// Remaining pause per channel, measured with the database clock.
+	sqlActivePauses = `SELECT channel::text, (EXTRACT(EPOCH FROM (paused_until - clock_timestamp())) * 1000000)::bigint
+FROM channel_pauses WHERE paused_until > clock_timestamp()`
+
+	sqlHeartbeat = `INSERT INTO worker_heartbeats AS h (worker_id, last_seen_at) VALUES ($1, now())
+ON CONFLICT (worker_id) DO UPDATE SET last_seen_at = now()`
+
+	// Heartbeats of processes gone for a day are dropped (one row per
+	// process start would otherwise accumulate).
+	sqlPruneHeartbeats = `DELETE FROM worker_heartbeats WHERE last_seen_at < now() - interval '1 day'`
+
+	// The dispatch lock (ADR-025): a session-level advisory lock. Exactly one
+	// worker process holds it and dispatches; the in-process rate limiter
+	// therefore bounds the whole deployment.
+	sqlTryDispatchLock = `SELECT pg_try_advisory_lock($1::bigint)`
 
 	// Complete, step 1: lock our row (guarded by lease owner, status and
 	// the dispatch_started_at of our precheck — a fencing token, so a
@@ -147,9 +194,16 @@ ORDER BY d.lease_until, d.id
 LIMIT $1
 FOR UPDATE OF d SKIP LOCKED`
 
-	sqlReapUndispatched = `UPDATE campaign_deliveries
-SET status = 'pending', next_attempt_at = now(), lease_until = NULL, leased_by = NULL, dispatch_started_at = NULL, updated_at = now()
-WHERE id = $1 AND status = 'in_flight'`
+	// An expired lease without a request goes back to pending — or to
+	// cancelled when the campaign is no longer sending (it could never be
+	// claimed again).
+	sqlReapUndispatched = `UPDATE campaign_deliveries AS d
+SET status = CASE WHEN $2::boolean THEN 'pending' ELSE 'cancelled' END,
+    last_error = CASE WHEN $2::boolean THEN d.last_error ELSE 'campaign_not_sending' END,
+    outcome_uncertain = CASE WHEN $2::boolean THEN d.outcome_uncertain
+                             ELSE d.outcome_uncertain OR ` + priorAmbiguous + ` END,
+    next_attempt_at = now(), lease_until = NULL, leased_by = NULL, dispatch_started_at = NULL, updated_at = now()
+WHERE d.id = $1 AND d.status = 'in_flight'`
 
 	sqlSendingCampaigns = `SELECT id::text FROM campaigns WHERE status = 'sending' ORDER BY send_started_at NULLS FIRST, id LIMIT $1`
 
@@ -270,12 +324,16 @@ const (
 	// MissNoContact: no persisted destination and no valid current contact
 	// (only possible before the first request) → skipped_no_contact.
 	MissNoContact
+	// MissStaleDispatch: we own the row but dispatch_started_at is set by an
+	// aborted precheck of ours that committed after its undo; no request was
+	// made → released without an attempt.
+	MissStaleDispatch
 )
 
 // ClassifyMiss reads why the precheck did not match.
 func (r *Repository) ClassifyMiss(ctx context.Context, j Job, worker string) (MissReason, error) {
-	var owned, sending, consent, contact bool
-	err := r.pool.QueryRow(ctx, sqlClassifyMiss, j.ID, worker).Scan(&owned, &sending, &consent, &contact)
+	var owned, stale, sending, consent, contact bool
+	err := r.pool.QueryRow(ctx, sqlClassifyMiss, j.ID, worker).Scan(&owned, &stale, &sending, &consent, &contact)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return MissLeaseLost, nil
 	}
@@ -285,6 +343,8 @@ func (r *Repository) ClassifyMiss(ctx context.Context, j Job, worker string) (Mi
 	switch {
 	case !owned:
 		return MissLeaseLost, nil
+	case stale:
+		return MissStaleDispatch, nil
 	case !sending:
 		return MissNotSending, nil
 	case !consent:
@@ -313,21 +373,130 @@ func (r *Repository) FinishWithoutRequest(ctx context.Context, j Job, worker str
 	return Status(final), true, nil
 }
 
-// Release gives an owned row back (pending, claimable after delay) without
-// counting an attempt. Only for rows whose request was not made.
-func (r *Repository) Release(ctx context.Context, j Job, worker string, delay time.Duration) (bool, error) {
-	tag, err := r.pool.Exec(ctx, sqlRelease, j.ID, worker, micros(delay))
+// Release gives an owned row back without counting an attempt: pending,
+// claimable after delay — or cancelled if its campaign is no longer
+// sending. Only for rows whose request was not made. ok is false if the
+// lease was lost.
+func (r *Repository) Release(ctx context.Context, j Job, worker string, delay time.Duration) (Status, bool, error) {
+	var st string
+	err := r.pool.QueryRow(ctx, sqlRelease, j.ID, worker, micros(delay)).Scan(&st)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", false, nil
+	}
 	if err != nil {
-		return false, fmt.Errorf("delivery %d: release: %w", j.ID, err)
+		return "", false, fmt.Errorf("delivery %d: release: %w", j.ID, err)
+	}
+	return Status(st), true, nil
+}
+
+// ClearDispatch undoes an owned row's precheck after a slot-deadline abort
+// (no request was made), so the next slot may precheck again.
+func (r *Repository) ClearDispatch(ctx context.Context, j Job, worker string) (bool, error) {
+	tag, err := r.pool.Exec(ctx, sqlClearDispatch, j.ID, worker)
+	if err != nil {
+		return false, fmt.Errorf("delivery %d: clear dispatch: %w", j.ID, err)
 	}
 	return tag.RowsAffected() == 1, nil
 }
+
+// PersistPause extends the channel's durable pause to now() + d (never
+// shortens it).
+func (r *Repository) PersistPause(ctx context.Context, ch provider.Channel, d time.Duration) error {
+	if _, err := r.pool.Exec(ctx, sqlUpsertPause, string(ch), micros(d)); err != nil {
+		return fmt.Errorf("delivery: persist %s pause: %w", ch, err)
+	}
+	return nil
+}
+
+// ActivePauses returns the remaining durable pause per channel, measured
+// with the database clock (channels that are not paused are absent).
+func (r *Repository) ActivePauses(ctx context.Context) (map[provider.Channel]time.Duration, error) {
+	rows, err := r.pool.Query(ctx, sqlActivePauses)
+	if err != nil {
+		return nil, fmt.Errorf("delivery: active pauses: %w", err)
+	}
+	defer rows.Close()
+	out := map[provider.Channel]time.Duration{}
+	for rows.Next() {
+		var (
+			ch string
+			us int64
+		)
+		if err := rows.Scan(&ch, &us); err != nil {
+			return nil, fmt.Errorf("delivery: active pauses: %w", err)
+		}
+		out[provider.Channel(ch)] = time.Duration(us) * time.Microsecond
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("delivery: active pauses: %w", err)
+	}
+	return out, nil
+}
+
+// Heartbeat records that worker is alive (database time) and prunes
+// heartbeats of processes that have been gone for a day.
+func (r *Repository) Heartbeat(ctx context.Context, worker string) error {
+	if _, err := r.pool.Exec(ctx, sqlHeartbeat, worker); err != nil {
+		return fmt.Errorf("delivery: heartbeat: %w", err)
+	}
+	if _, err := r.pool.Exec(ctx, sqlPruneHeartbeats); err != nil {
+		return fmt.Errorf("delivery: prune heartbeats: %w", err)
+	}
+	return nil
+}
+
+// DispatchLockKey identifies the dispatch advisory lock (ADR-025).
+const DispatchLockKey int64 = 0x636f6d706f736572 // "composer"
+
+// DispatchLease is the held dispatch lock: a dedicated database session
+// (taken out of the pool) holding a session-level advisory lock. The lock
+// lives exactly as long as the session.
+type DispatchLease struct {
+	conn *pgx.Conn
+}
+
+// TryDispatchLock tries once to take the dispatch lock. It returns nil (no
+// error) when another session holds it.
+func (r *Repository) TryDispatchLock(ctx context.Context) (*DispatchLease, error) {
+	c, err := r.pool.Acquire(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("delivery: dispatch lock: %w", err)
+	}
+	var got bool
+	if err := c.QueryRow(ctx, sqlTryDispatchLock, DispatchLockKey).Scan(&got); err != nil {
+		c.Release()
+		return nil, fmt.Errorf("delivery: dispatch lock: %w", err)
+	}
+	if !got {
+		c.Release()
+		return nil, nil
+	}
+	// The session now holds the lock: it must never go back to the pool
+	// (another user of the pool would inherit it).
+	return &DispatchLease{conn: c.Hijack()}, nil
+}
+
+// Check verifies that the lease's session is still alive (and therefore
+// still holds the lock: it is never unlocked explicitly).
+func (l *DispatchLease) Check(ctx context.Context) error {
+	if _, err := l.conn.Exec(ctx, "SELECT 1"); err != nil {
+		return fmt.Errorf("delivery: dispatch lock session: %w", err)
+	}
+	return nil
+}
+
+// Close ends the session, which releases the lock.
+func (l *DispatchLease) Close(ctx context.Context) error { return l.conn.Close(ctx) }
 
 // Completion is the persisted result of one attempt.
 type Completion struct {
 	Status    Status
 	AttemptNo int
 	Uncertain bool
+	// Delay is the retry delay (retry_scheduled; cancelled rows keep it).
+	Delay time.Duration
+	// Pause is the channel pause requested by a 429.
+	Pause time.Duration
 }
 
 // Complete records the result of the provider request made after precheck
@@ -336,7 +505,11 @@ type Completion struct {
 // locked here. A retry of a campaign that is no longer sending becomes
 // cancelled. ok is false if the row is no longer ours (lease expired and
 // reaped); then nothing is written.
-func (r *Repository) Complete(ctx context.Context, j Job, worker string, p Precheck, res provider.Result, policy Policy) (c Completion, ok bool, err error) {
+//
+// u is the jitter sample for the retry delay (Policy.Decide). A 429 also
+// extends the channel's durable pause (channel_pauses) in the same
+// transaction.
+func (r *Repository) Complete(ctx context.Context, j Job, worker string, p Precheck, res provider.Result, policy Policy, u float64) (c Completion, ok bool, err error) {
 	err = pgx.BeginTxFunc(ctx, r.pool, pgx.TxOptions{IsoLevel: pgx.ReadCommitted}, func(tx pgx.Tx) error {
 		if _, err := tx.Exec(ctx, sqlSetWorkerTimeouts); err != nil {
 			return err
@@ -359,11 +532,16 @@ func (r *Repository) Complete(ctx context.Context, j Job, worker string, p Prech
 		if dest == nil { // the precheck persisted it; a row without one is a bug
 			return fmt.Errorf("delivery %d: dispatched row without a destination", j.ID)
 		}
-		d, err := policy.Decide(res.Outcome, int(att), int(rla), res.RetryAfter)
+		d, err := policy.Decide(res.Outcome, int(att), int(rla), res.RetryAfter, u)
 		if err != nil {
 			return err
 		}
-		c = Completion{Status: d.Status, AttemptNo: int(att) + int(rla) + 1, Uncertain: uncertain}
+		if d.Pause > 0 {
+			if _, err := tx.Exec(ctx, sqlUpsertPause, string(j.Channel), micros(d.Pause)); err != nil {
+				return err
+			}
+		}
+		c = Completion{Status: d.Status, AttemptNo: int(att) + int(rla) + 1, Uncertain: uncertain, Delay: d.Delay, Pause: d.Pause}
 		if c.Status == StatusRetryScheduled && campaignStatus != "sending" {
 			c.Status = StatusCancelled
 		}
@@ -428,7 +606,9 @@ type ReapStats struct {
 // destination and body on the retry, so an idempotent provider replays),
 // failed when the attempts are exhausted, or cancelled when the campaign is
 // no longer sending; a terminal non-sent row is marked uncertain.
-func (r *Repository) Reap(ctx context.Context, n int, policy Policy) (ReapStats, error) {
+//
+// rnd draws the jitter samples of the retry delays (uniform in [0, 1)).
+func (r *Repository) Reap(ctx context.Context, n int, policy Policy, rnd func() float64) (ReapStats, error) {
 	var st ReapStats
 	err := pgx.BeginTxFunc(ctx, r.pool, pgx.TxOptions{IsoLevel: pgx.ReadCommitted}, func(tx pgx.Tx) error {
 		st = ReapStats{}
@@ -457,13 +637,13 @@ func (r *Repository) Reap(ctx context.Context, n int, policy Policy) (ReapStats,
 		}
 		for _, d := range list {
 			if d.dispatchStartedAt == nil || d.destination == nil {
-				if _, err := tx.Exec(ctx, sqlReapUndispatched, d.id); err != nil {
+				if _, err := tx.Exec(ctx, sqlReapUndispatched, d.id, d.sending); err != nil {
 					return err
 				}
 				st.Released++
 				continue
 			}
-			dec, err := policy.Decide(provider.OutcomeUnknown, int(d.attempts), int(d.rl), 0)
+			dec, err := policy.Decide(provider.OutcomeUnknown, int(d.attempts), int(d.rl), 0, rnd())
 			if err != nil {
 				return err
 			}

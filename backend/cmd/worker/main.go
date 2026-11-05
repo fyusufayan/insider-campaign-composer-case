@@ -1,7 +1,10 @@
 // Command worker is the delivery worker (ARCHITECTURE §10): it processes
 // delivery rows released by an explicit send, through the provider at
 // PROVIDER_BASE_URL (the mock provider; no real SMS/email vendor exists).
-// Run exactly one replica (the CP17 rate limiter is in-process).
+// Run exactly one replica: the rate limiter is in-process. A second process
+// (e.g. an overlapping restart) does not dispatch: only the holder of the
+// PostgreSQL dispatch lock does (ADR-025); every process runs the reaper,
+// completion detector, approval-expiry sweeper and heartbeat.
 //
 // The worker never consumes an approval or starts a send by itself: it only
 // claims rows of a consumed approval of a sending campaign.
@@ -20,6 +23,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/fyusufayan/insider-campaign-composer-case/backend/internal/approval"
 	"github.com/fyusufayan/insider-campaign-composer-case/backend/internal/delivery"
 	"github.com/fyusufayan/insider-campaign-composer-case/backend/internal/platform/config"
 	"github.com/fyusufayan/insider-campaign-composer-case/backend/internal/platform/db"
@@ -59,15 +63,25 @@ func run(log *slog.Logger) error {
 		return err
 	}
 	policy := delivery.Policy{MaxTransientAttempts: cfg.MaxTransientAttempts, MaxRateLimitedAttempts: cfg.MaxRateLimitedAttempts,
-		RetryDelay: cfg.RetryDelay, RetryAfterCap: cfg.RetryAfterCap}
+		BackoffBase: cfg.BackoffBase, BackoffCap: cfg.BackoffCap, RetryAfterCap: cfg.RetryAfterCap}
+	wcfg := delivery.Config{
+		WorkerID: workerID, PoolSize: cfg.SenderPoolSize, ClaimBatch: cfg.ClaimBatchSize,
+		Lease: cfg.LeaseDuration, PollInterval: cfg.PollInterval, Policy: policy,
+		RatePerSecond: cfg.RateLimitPerSecond, RateWindow: time.Second + cfg.RateSafetyMargin,
+		Gate: delivery.GateConfig{MaxPrecheck: cfg.DispatchMaxPrecheck, MaxSlotToRequest: cfg.DispatchMaxSlotToRequest},
+	}
 	horizon := delivery.RetryHorizon(policy, cfg.ProviderRequestTimeout, cfg.LeaseDuration, delivery.DefaultReaperInterval)
 	caps := client.Capabilities()
 	log.Info("configuration loaded", "worker_id", workerID, "provider", caps.Name,
 		"provider_idempotency_keys", caps.IdempotencyKeys, "provider_request_timeout", cfg.ProviderRequestTimeout.String(),
 		"sender_pool_size", cfg.SenderPoolSize, "claim_batch_size", cfg.ClaimBatchSize, "lease", cfg.LeaseDuration.String(),
 		"max_transient_attempts", cfg.MaxTransientAttempts, "max_rate_limited_attempts", cfg.MaxRateLimitedAttempts,
-		"retry_delay", cfg.RetryDelay.String(), "retry_horizon", horizon.String(),
-		"rate_limit", "none (CP16; per-channel limiter follows in CP17)",
+		"backoff_base", cfg.BackoffBase.String(), "backoff_cap", cfg.BackoffCap.String(),
+		"retry_after_cap", cfg.RetryAfterCap.String(), "retry_horizon", horizon.String(),
+		"rate_limit", fmt.Sprintf("at most %d requests per channel in any %s window (sliding-window log, per channel)",
+			cfg.RateLimitPerSecond, (time.Second+cfg.RateSafetyMargin).String()),
+		"dispatch_max_precheck", cfg.DispatchMaxPrecheck.String(), "dispatch_max_slot_to_request", cfg.DispatchMaxSlotToRequest.String(),
+		"dispatch_quiet_period", wcfg.QuietPeriod().String(), "approval_sweep_interval", cfg.ApprovalSweepInterval.String(),
 		"effective_guarantee", delivery.EffectiveGuarantee(caps, horizon))
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
@@ -78,10 +92,11 @@ func run(log *slog.Logger) error {
 	}
 	defer pool.Close()
 
-	w, err := delivery.New(delivery.NewRepository(pool), client, delivery.Config{
-		WorkerID: workerID, PoolSize: cfg.SenderPoolSize, ClaimBatch: cfg.ClaimBatchSize,
-		Lease: cfg.LeaseDuration, PollInterval: cfg.PollInterval, Policy: policy,
-	}, log)
+	w, err := delivery.New(delivery.NewRepository(pool), client, wcfg, log)
+	if err != nil {
+		return err
+	}
+	sweeper, err := approval.NewSweeper(approval.NewRepository(pool), approval.SweeperConfig{Interval: cfg.ApprovalSweepInterval}, log)
 	if err != nil {
 		return err
 	}
@@ -103,5 +118,9 @@ func run(log *slog.Logger) error {
 		defer cancel()
 		_ = health.Shutdown(sctx)
 	}()
-	return w.Run(ctx)
+	sweepDone := make(chan struct{})
+	go func() { defer close(sweepDone); sweeper.Run(ctx) }()
+	err = w.Run(ctx)
+	<-sweepDone
+	return err
 }

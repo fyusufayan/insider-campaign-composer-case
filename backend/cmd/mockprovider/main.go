@@ -38,7 +38,7 @@ func run(log *slog.Logger) error {
 		Fault5xxRate: cfg.Fault5xxRate, Fault429Rate: cfg.Fault429Rate, FaultTimeoutRate: cfg.FaultTimeoutRate,
 		LatencyMin: cfg.LatencyMin, LatencyMax: cfg.LatencyMax, PermanentFailSuffix: cfg.PermanentFailSuffix,
 		TimeoutStall: cfg.TimeoutStall, RetryAfter: cfg.RetryAfter, Seed: cfg.Seed,
-		LedgerPath: cfg.LedgerPath, AllowReset: cfg.AllowReset,
+		LedgerPath: cfg.LedgerPath, AllowReset: cfg.AllowReset, RateLimit: cfg.RateLimit,
 	}, log)
 	if err != nil {
 		// Fail closed: never start with a fresh ledger when the durable one
@@ -50,7 +50,7 @@ func run(log *slog.Logger) error {
 		"fault_429_rate", cfg.Fault429Rate, "fault_timeout_rate", cfg.FaultTimeoutRate,
 		"latency_ms", fmt.Sprintf("%d-%d", cfg.LatencyMin.Milliseconds(), cfg.LatencyMax.Milliseconds()),
 		"permanent_fail_suffix_set", cfg.PermanentFailSuffix != "", "seed", cfg.Seed,
-		"ledger_path", cfg.LedgerPath, "admin_reset_enabled", cfg.AllowReset)
+		"ledger_path", cfg.LedgerPath, "admin_reset_enabled", cfg.AllowReset, "rate_limit_per_second", cfg.RateLimit)
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()

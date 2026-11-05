@@ -17,8 +17,11 @@ import (
 
 var schemaTables = []string{
 	"campaign_approvals", "campaign_contents", "campaign_deliveries", "campaigns", "cart_events",
-	"channel_consents", "delivery_attempts", "purchases", "users", "worker_heartbeats",
+	"channel_consents", "channel_pauses", "delivery_attempts", "purchases", "users", "worker_heartbeats",
 }
+
+// latestMigration is the newest embedded migration (000002_channel_pauses, CP17).
+const latestMigration = 2
 
 func publicTables(t *testing.T, pool *pgxpool.Pool) []string {
 	t.Helper()
@@ -71,7 +74,7 @@ func TestMigrateUpDownUp(t *testing.T) {
 	if err := db.MigrateUp(ctx, dbURL); err != nil {
 		t.Fatalf("up: %v", err)
 	}
-	assertVersion(t, dbURL, 1)
+	assertVersion(t, dbURL, latestMigration)
 	if got := publicTables(t, pool); !slices.Equal(got, schemaTables) {
 		t.Fatalf("tables after up = %v, want %v", got, schemaTables)
 	}
@@ -96,7 +99,7 @@ func TestMigrateUpDownUp(t *testing.T) {
 	if err := db.MigrateUp(ctx, dbURL); err != nil {
 		t.Fatalf("up again: %v", err)
 	}
-	assertVersion(t, dbURL, 1)
+	assertVersion(t, dbURL, latestMigration)
 	if got := publicTables(t, pool); !slices.Equal(got, schemaTables) {
 		t.Fatalf("tables after up again = %v, want %v", got, schemaTables)
 	}

@@ -45,8 +45,15 @@ type delEnv struct {
 
 func newDelEnv(t *testing.T) *delEnv {
 	t.Helper()
+	return newDelEnvWith(t, mockprovider.Config{TimeoutStall: 10 * time.Second})
+}
+
+// newDelEnvWith is newDelEnv with a mock provider configuration (e.g. its
+// strict rate limit or a longer Retry-After).
+func newDelEnvWith(t *testing.T, mcfg mockprovider.Config) *delEnv {
+	t.Helper()
 	e := &delEnv{prepEnv: newDecisionEnv(t)}
-	mock, err := mockprovider.New(mockprovider.Config{TimeoutStall: 10 * time.Second}, logging.New(e.logs, slog.LevelDebug),
+	mock, err := mockprovider.New(mcfg, logging.New(e.logs, slog.LevelDebug),
 		mockprovider.WithFaults(func(r mockprovider.Request) mockprovider.Fault {
 			e.faultMu.Lock()
 			f := e.fault
@@ -76,18 +83,36 @@ func (e *delEnv) setFaults(f mockprovider.FaultFunc) {
 	e.faultMu.Unlock()
 }
 
-var testPolicy = delivery.Policy{MaxTransientAttempts: 3, MaxRateLimitedAttempts: 3, RetryDelay: 30 * time.Millisecond,
-	RetryAfterCap: time.Second}
+var testPolicy = delivery.Policy{MaxTransientAttempts: 3, MaxRateLimitedAttempts: 3, BackoffBase: 30 * time.Millisecond,
+	BackoffCap: 60 * time.Millisecond, RetryAfterCap: time.Second}
+
+// Integration gate and limiter settings: generous precheck budgets (a
+// containerized database under -race), the documented ordering
+// MaxPrecheck < MaxSlotToRequest < margin, and short dispatch-lock checks
+// so that a worker dispatches ≈ 1.5 s after it starts (quiet period).
+var (
+	testGate       = delivery.GateConfig{MaxPrecheck: 200 * time.Millisecond, MaxSlotToRequest: 250 * time.Millisecond}
+	testRateWindow = time.Second + 300*time.Millisecond
+)
 
 func (e *delEnv) workerConfig(id string) delivery.Config {
 	return delivery.Config{WorkerID: id, PoolSize: 8, ClaimBatch: 10, Lease: 5 * time.Second,
 		PollInterval: 20 * time.Millisecond, ReaperInterval: 100 * time.Millisecond, CompletionInterval: 100 * time.Millisecond,
-		ShutdownGrace: 5 * time.Second, Policy: testPolicy}
+		ShutdownGrace: 5 * time.Second, Policy: testPolicy, HeartbeatInterval: 100 * time.Millisecond,
+		RatePerSecond: 100, RateWindow: testRateWindow, Gate: testGate,
+		DispatchLockRetry: 50 * time.Millisecond, LockCheckInterval: 100 * time.Millisecond, LockCheckTimeout: 100 * time.Millisecond}
 }
 
 // start runs a worker until the returned stop function is called (also at
 // cleanup); stop waits for Run to return.
 func (e *delEnv) start(cfg delivery.Config) (stop func()) {
+	e.t.Helper()
+	_, stop = e.startWorker(cfg)
+	return stop
+}
+
+// startWorker is start returning the worker as well.
+func (e *delEnv) startWorker(cfg delivery.Config) (w *delivery.Worker, stop func()) {
 	e.t.Helper()
 	w, err := delivery.New(e.repo, e.client, cfg, logging.New(e.logs, slog.LevelDebug))
 	if err != nil {
@@ -111,7 +136,7 @@ func (e *delEnv) start(cfg delivery.Config) (stop func()) {
 		})
 	}
 	e.t.Cleanup(stop)
-	return stop
+	return w, stop
 }
 
 // sending returns a campaign whose approval was consumed by Send.
@@ -773,14 +798,14 @@ func TestWorkerRespectsCancellation(t *testing.T) {
 	}
 	// In flight when cancelled: an accepted message stays sent; a transient
 	// error is not retried.
-	if c0, ok, err := e.repo.Complete(ctxBG, jobs[0], w, pre0, provider.Result{Outcome: provider.OutcomeAccepted, HTTPStatus: 202, MessageID: "m0"}, testPolicy); err != nil || !ok || c0.Status != delivery.StatusSent {
+	if c0, ok, err := e.repo.Complete(ctxBG, jobs[0], w, pre0, provider.Result{Outcome: provider.OutcomeAccepted, HTTPStatus: 202, MessageID: "m0"}, testPolicy, 0.5); err != nil || !ok || c0.Status != delivery.StatusSent {
 		t.Fatalf("complete accepted = %+v %v %v", c0, ok, err)
 	}
-	if c1, ok, err := e.repo.Complete(ctxBG, jobs[1], w, pre1, provider.Result{Outcome: provider.OutcomeTransientError, HTTPStatus: 503, ErrorCode: "unavailable"}, testPolicy); err != nil || !ok || c1.Status != delivery.StatusCancelled {
+	if c1, ok, err := e.repo.Complete(ctxBG, jobs[1], w, pre1, provider.Result{Outcome: provider.OutcomeTransientError, HTTPStatus: 503, ErrorCode: "unavailable"}, testPolicy, 0.5); err != nil || !ok || c1.Status != delivery.StatusCancelled {
 		t.Fatalf("complete transient = %+v %v %v", c1, ok, err)
 	}
 	// Stale completion (fencing): a second Complete for the same precheck is refused.
-	if _, ok, err := e.repo.Complete(ctxBG, jobs[0], w, pre0, provider.Result{Outcome: provider.OutcomeAccepted, MessageID: "m0"}, testPolicy); err != nil || ok {
+	if _, ok, err := e.repo.Complete(ctxBG, jobs[0], w, pre0, provider.Result{Outcome: provider.OutcomeAccepted, MessageID: "m0"}, testPolicy, 0.5); err != nil || ok {
 		t.Errorf("duplicate completion = %v %v", ok, err)
 	}
 	// Remaining sms rows are pending but unclaimable; the campaign stays cancelled.
@@ -816,7 +841,8 @@ func TestCompletionWaitsAndHappensOnce(t *testing.T) {
 		return mockprovider.FaultNone
 	})
 	cfg := e.workerConfig("w1")
-	cfg.Policy.RetryDelay = 9 * time.Minute // the retry stays scheduled
+	cfg.Policy.BackoffBase, cfg.Policy.BackoffCap = 9*time.Minute, 9*time.Minute // the retry stays scheduled
+	cfg.Rand = func() float64 { return 0.99 }
 	stop := e.start(cfg)
 	e.waitFor("four rows sent and one retry scheduled", func() bool {
 		return e.count(`SELECT count(*) FROM campaign_deliveries WHERE approval_id = $1::uuid AND status = 'sent'`, s.ApprovalID.String()) == 4 &&

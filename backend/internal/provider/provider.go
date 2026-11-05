@@ -260,22 +260,38 @@ func (c *Client) RequestTimeout() time.Duration { return c.timeout }
 // request timeout; cancelling ctx aborts it (OutcomeUnknown, since the
 // request may already have reached the provider).
 func (c *Client) Send(ctx context.Context, m Message) Result {
+	r, _ := c.SendGated(ctx, m, nil)
+	return r
+}
+
+// SendGated is Send with a final gate: gate (if not nil) is called after
+// the request has been built — immediately before http.Client.Do, with no
+// other work in between — and if it returns false nothing is sent and sent
+// is false. The delivery worker's slot-deadline check runs here (§10.2
+// step 4), so the time between that check and the request is only the
+// transport's own. A request that could not be built is reported as a
+// permanent error with sent = true (nothing reached the provider, but the
+// attempt is final).
+func (c *Client) SendGated(ctx context.Context, m Message, gate func() bool) (r Result, sent bool) {
 	req, err := c.newRequest(ctx, m)
 	if err != nil {
 		// Our own request could not be built: nothing was sent.
-		return Result{Outcome: OutcomePermanentError, ErrorCode: "invalid_request"}
+		return Result{Outcome: OutcomePermanentError, ErrorCode: "invalid_request"}, true
 	}
 	rctx, cancel := context.WithTimeout(ctx, c.timeout)
 	defer cancel()
 	req = req.WithContext(rctx)
 
+	if gate != nil && !gate() {
+		return Result{}, false
+	}
 	resp, err := c.http.Do(req) // the only network call of a delivery attempt
 	if err != nil {
-		return classifyTransportError(ctx, rctx, err)
+		return classifyTransportError(ctx, rctx, err), true
 	}
 	defer resp.Body.Close()
 	body, rerr := io.ReadAll(io.LimitReader(resp.Body, maxResponseBytes))
-	return c.classifyResponse(rctx, resp, body, rerr)
+	return c.classifyResponse(rctx, resp, body, rerr), true
 }
 
 func (c *Client) newRequest(ctx context.Context, m Message) (*http.Request, error) {
@@ -390,16 +406,22 @@ func validCode(s string) bool {
 }
 
 // ParseRetryAfter parses a Retry-After header (delay-seconds or HTTP-date,
-// RFC 9110 §10.2.3) relative to now. Missing, invalid or non-positive
-// values mean DefaultRetryAfter; the result is capped at limit.
+// RFC 9110 §10.2.3) relative to now. Missing, invalid, non-positive or
+// past values mean DefaultRetryAfter (1 s); the result is at least
+// DefaultRetryAfter and capped at limit (RETRY_AFTER_CAP), so a malformed or
+// hostile value can neither busy-loop the worker nor stall a channel for
+// longer than the cap. A delay-seconds value too large for int64 is the cap.
 func ParseRetryAfter(v string, now time.Time, limit time.Duration) time.Duration {
 	d := DefaultRetryAfter
 	v = strings.TrimSpace(v)
-	if n, err := strconv.ParseInt(v, 10, 64); err == nil {
-		if n > 0 {
-			if n > int64(limit/time.Second)+1 {
-				n = int64(limit/time.Second) + 1
-			}
+	if v != "" && strings.Trim(v, "0123456789") == "" { // delay-seconds = 1*DIGIT
+		n, err := strconv.ParseInt(v, 10, 64)
+		switch {
+		case err != nil: // too large to represent: as long as we allow
+			d = limit
+		case n > int64(limit/time.Second):
+			d = limit
+		case n > 0:
 			d = time.Duration(n) * time.Second
 		}
 	} else if t, err := http.ParseTime(v); err == nil {

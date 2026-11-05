@@ -117,6 +117,12 @@ type Config struct {
 	// AllowReset enables the destructive POST /admin/reset
 	// (MOCK_ADMIN_RESET_ENABLED); otherwise it answers 403.
 	AllowReset bool
+	// RateLimit is the provider's own strict limit per channel
+	// (MOCK_RATE_LIMIT_PER_SECOND): an arrival when RateLimit arrivals of
+	// the channel already happened in the preceding rolling second is
+	// answered 429 rate_limit_exceeded (counted as limit_exceeded, apart
+	// from injected 429s). 0 disables it.
+	RateLimit int
 }
 
 // Validate checks the configuration.
@@ -131,6 +137,9 @@ func (c Config) Validate() error {
 	}
 	if c.LatencyMin < 0 || c.LatencyMax < c.LatencyMin {
 		return errors.New("mockprovider: latency must satisfy 0 <= min <= max")
+	}
+	if c.RateLimit < 0 {
+		return errors.New("mockprovider: rate limit must be >= 0")
 	}
 	if c.TimeoutStall < 0 || c.RetryAfter < 0 {
 		return errors.New("mockprovider: durations must not be negative")
@@ -190,6 +199,13 @@ type ChannelStats struct {
 	StorageFailures int64 `json:"storage_failures"`
 	// MaxArrivalsPerKey is the highest number of requests seen for one key.
 	MaxArrivalsPerKey int `json:"max_arrivals_per_key"`
+	// MaxInAnyRolling1s is the largest number of arrivals (every request,
+	// whatever its answer) in any half-open 1-second interval, measured with
+	// this process's monotonic clock at handler entry (§10.11).
+	MaxInAnyRolling1s int `json:"max_in_any_rolling_1s"`
+	// LimitExceeded counts 429s of the provider's own strict limiter (not
+	// injected faults).
+	LimitExceeded int64 `json:"limit_exceeded"`
 }
 
 // Stats is the body of GET /admin/stats.
@@ -220,8 +236,11 @@ type Server struct {
 	journal  *ledger          // nil: in memory only
 	arrivals map[string]int
 	stats    map[provider.Channel]*ChannelStats
-	seq      int64
-	dupes    int64
+	// window holds, per channel, the arrival times of the last second
+	// (oldest first): the rolling-rate measurement and the strict limiter.
+	window map[provider.Channel][]time.Time
+	seq    int64
+	dupes  int64
 }
 
 // Option configures a Server.
@@ -294,6 +313,7 @@ func (s *Server) resetCounters() {
 	s.rng = rand.New(rand.NewPCG(s.cfg.Seed, s.cfg.Seed^0x9e3779b97f4a7c15))
 	s.arrivals = map[string]int{}
 	s.stats = map[provider.Channel]*ChannelStats{provider.ChannelSMS: {}, provider.ChannelEmail: {}}
+	s.window = map[provider.Channel][]time.Time{}
 	s.dupes = 0
 }
 
@@ -400,10 +420,30 @@ type parsed struct {
 }
 
 func (s *Server) handleSend(w http.ResponseWriter, r *http.Request, ch provider.Channel) {
+	now := time.Now() // monotonic reading: arrival time at handler entry
 	key := r.Header.Get(provider.HeaderIdempotencyKey)
 	s.mu.Lock()
 	st := s.stats[ch]
 	st.Arrivals++
+	// Arrivals in the half-open second (now − 1 s, now], this one included.
+	win := s.window[ch]
+	drop := 0
+	for drop < len(win) && now.Sub(win[drop]) >= time.Second {
+		drop++
+	}
+	win = append(win[drop:], now)
+	s.window[ch] = win
+	if len(win) > st.MaxInAnyRolling1s {
+		st.MaxInAnyRolling1s = len(win)
+	}
+	if s.cfg.RateLimit > 0 && len(win) > s.cfg.RateLimit {
+		st.LimitExceeded++
+		s.mu.Unlock()
+		s.log.Warn("mock provider rate limit exceeded", "channel", ch, "limit_per_second", s.cfg.RateLimit)
+		w.Header().Set(provider.HeaderRetryAfter, "1")
+		writeError(w, http.StatusTooManyRequests, "rate_limit_exceeded", "more than the allowed requests per second")
+		return
+	}
 	arrival := 0
 	if validKey(key) {
 		s.arrivals[key]++

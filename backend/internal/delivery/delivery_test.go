@@ -1,6 +1,7 @@
 package delivery
 
 import (
+	"math/rand/v2"
 	"strings"
 	"testing"
 	"time"
@@ -10,36 +11,49 @@ import (
 	"github.com/fyusufayan/insider-campaign-composer-case/backend/internal/segment"
 )
 
-var testPolicy = Policy{MaxTransientAttempts: 5, MaxRateLimitedAttempts: 10, RetryDelay: 5 * time.Second, RetryAfterCap: 30 * time.Second}
+var testPolicy = Policy{MaxTransientAttempts: 5, MaxRateLimitedAttempts: 10, BackoffBase: time.Second,
+	BackoffCap: 60 * time.Second, RetryAfterCap: 30 * time.Second}
 
 func TestPolicyDecide(t *testing.T) {
 	for _, tc := range []struct {
 		o             provider.Outcome
 		att, rl       int
 		retryAfter    time.Duration
+		u             float64
 		want          Status
-		delay         time.Duration
+		delay, pause  time.Duration
 		incAtt, incRL int
 	}{
-		{provider.OutcomeAccepted, 0, 0, 0, StatusSent, 0, 1, 0},
-		{provider.OutcomeReplayed, 3, 2, 0, StatusSent, 0, 1, 0},
-		{provider.OutcomePermanentError, 0, 0, 0, StatusFailed, 0, 1, 0},
-		{provider.OutcomeTransientError, 0, 0, 0, StatusRetryScheduled, 5 * time.Second, 1, 0},
-		{provider.OutcomeTimeout, 3, 0, 0, StatusRetryScheduled, 5 * time.Second, 1, 0},
-		{provider.OutcomeTimeout, 4, 0, 0, StatusFailed, 0, 1, 0}, // 5th attempt exhausts
-		{provider.OutcomeUnknown, 4, 9, 0, StatusFailed, 0, 1, 0},
-		{provider.OutcomeRateLimited, 0, 0, 2 * time.Second, StatusRetryScheduled, 2 * time.Second, 0, 1},
-		{provider.OutcomeRateLimited, 4, 0, 0, StatusRetryScheduled, time.Second, 0, 1}, // ≥ 1 s; 429s don't burn attempts
-		{provider.OutcomeRateLimited, 0, 0, time.Hour, StatusRetryScheduled, 30 * time.Second, 0, 1},
-		{provider.OutcomeRateLimited, 0, 9, time.Second, StatusFailed, 0, 0, 1},
+		{provider.OutcomeAccepted, 0, 0, 0, 0.5, StatusSent, 0, 0, 1, 0},
+		{provider.OutcomeReplayed, 3, 2, 0, 0.5, StatusSent, 0, 0, 1, 0},
+		{provider.OutcomePermanentError, 0, 0, 0, 0.5, StatusFailed, 0, 0, 1, 0}, // never retried
+		// Full jitter: delay = u · min(cap, base·2^(n−1)) for the n-th attempt.
+		{provider.OutcomeTransientError, 0, 0, 0, 0.5, StatusRetryScheduled, 500 * time.Millisecond, 0, 1, 0},
+		{provider.OutcomeTransientError, 1, 0, 0, 0.5, StatusRetryScheduled, time.Second, 0, 1, 0},
+		{provider.OutcomeTimeout, 2, 0, 0, 0.25, StatusRetryScheduled, time.Second, 0, 1, 0},
+		{provider.OutcomeUnknown, 3, 0, 0, 0, StatusRetryScheduled, 0, 0, 1, 0},
+		{provider.OutcomeTimeout, 4, 0, 0, 0.5, StatusFailed, 0, 0, 1, 0}, // 5th attempt exhausts
+		{provider.OutcomeUnknown, 4, 9, 0, 0.5, StatusFailed, 0, 0, 1, 0},
+		// 429: Retry-After (≥ 1 s, ≤ cap), separate budget, pauses the channel.
+		{provider.OutcomeRateLimited, 0, 0, 2 * time.Second, 0.9, StatusRetryScheduled, 2 * time.Second, 2 * time.Second, 0, 1},
+		{provider.OutcomeRateLimited, 4, 0, 0, 0.9, StatusRetryScheduled, time.Second, time.Second, 0, 1},
+		{provider.OutcomeRateLimited, 0, 0, time.Hour, 0.9, StatusRetryScheduled, 30 * time.Second, 30 * time.Second, 0, 1},
+		// The 10th 429 fails the row but still pauses the channel.
+		{provider.OutcomeRateLimited, 0, 9, time.Second, 0.9, StatusFailed, 0, time.Second, 0, 1},
 	} {
-		d, err := testPolicy.Decide(tc.o, tc.att, tc.rl, tc.retryAfter)
-		if err != nil || d.Status != tc.want || d.Delay != tc.delay || d.AttemptsInc != tc.incAtt || d.RateLimitedInc != tc.incRL {
-			t.Errorf("%s att=%d rl=%d: %+v %v", tc.o, tc.att, tc.rl, d, err)
+		d, err := testPolicy.Decide(tc.o, tc.att, tc.rl, tc.retryAfter, tc.u)
+		if err != nil || d.Status != tc.want || d.Delay != tc.delay || d.Pause != tc.pause ||
+			d.AttemptsInc != tc.incAtt || d.RateLimitedInc != tc.incRL {
+			t.Errorf("%s att=%d rl=%d u=%v: %+v %v", tc.o, tc.att, tc.rl, tc.u, d, err)
 		}
 	}
-	if _, err := testPolicy.Decide("bogus", 0, 0, 0); err == nil {
+	if _, err := testPolicy.Decide("bogus", 0, 0, 0, 0); err == nil {
 		t.Error("unknown outcome accepted")
+	}
+	for _, u := range []float64{-0.1, 1, 2} {
+		if _, err := testPolicy.Decide(provider.OutcomeTimeout, 0, 0, 0, u); err == nil {
+			t.Errorf("jitter sample %v accepted", u)
+		}
 	}
 	// Liveness: any sequence of outcomes reaches a terminal status within the bounds.
 	att, rl, steps := 0, 0, 0
@@ -48,13 +62,47 @@ func TestPolicyDecide(t *testing.T) {
 		if steps%2 == 1 {
 			o = provider.OutcomeRateLimited
 		}
-		d, _ := testPolicy.Decide(o, att, rl, 0)
+		d, _ := testPolicy.Decide(o, att, rl, 0, 0.99)
 		att, rl, steps = att+d.AttemptsInc, rl+d.RateLimitedInc, steps+1
 		if d.Status.Terminal() {
 			break
 		}
-		if steps > 100 {
-			t.Fatal("no terminal status")
+		if steps > testPolicy.MaxTransientAttempts+testPolicy.MaxRateLimitedAttempts {
+			t.Fatal("no terminal status within the attempt budgets")
+		}
+	}
+}
+
+// Backoff ceiling: doubling from the base, capped, without overflow.
+func TestPolicyBackoffProgression(t *testing.T) {
+	want := []time.Duration{time.Second, 2 * time.Second, 4 * time.Second, 8 * time.Second, 16 * time.Second,
+		32 * time.Second, 60 * time.Second, 60 * time.Second}
+	for i, w := range want {
+		if got := testPolicy.Backoff(i + 1); got != w {
+			t.Errorf("Backoff(%d) = %s, want %s", i+1, got, w)
+		}
+	}
+	huge := Policy{BackoffBase: time.Millisecond, BackoffCap: time.Hour}
+	if got := huge.Backoff(10_000); got != time.Hour {
+		t.Errorf("Backoff(10000) = %s (overflow?)", got)
+	}
+	// Full jitter: every delay lies in [0, ceiling); a seeded sweep covers
+	// the whole range (no synchronized retries) and never exceeds the cap.
+	rng := rand.New(rand.NewPCG(7, 11))
+	for n := 0; n < 4; n++ {
+		ceiling := testPolicy.Backoff(n + 1)
+		var lo, hi time.Duration = ceiling, 0
+		seen := map[time.Duration]bool{}
+		for i := 0; i < 2000; i++ {
+			d, err := testPolicy.Decide(provider.OutcomeTransientError, n, 0, 0, rng.Float64())
+			if err != nil || d.Delay < 0 || d.Delay >= ceiling {
+				t.Fatalf("n=%d: delay %s outside [0, %s) %v", n, d.Delay, ceiling, err)
+			}
+			lo, hi = min(lo, d.Delay), max(hi, d.Delay)
+			seen[d.Delay/(ceiling/10)] = true
+		}
+		if lo > ceiling/20 || hi < ceiling*19/20 || len(seen) != 10 {
+			t.Errorf("n=%d: jitter does not spread over [0, %s): lo=%s hi=%s deciles=%d", n, ceiling, lo, hi, len(seen))
 		}
 	}
 }
@@ -63,13 +111,16 @@ func TestPolicyValidateAndHorizon(t *testing.T) {
 	if err := DefaultPolicy.Validate(); err != nil {
 		t.Fatal(err)
 	}
-	for _, p := range []Policy{{}, {MaxTransientAttempts: 5, MaxRateLimitedAttempts: 10, RetryDelay: 0, RetryAfterCap: time.Second}} {
+	for _, p := range []Policy{{},
+		{MaxTransientAttempts: 5, MaxRateLimitedAttempts: 10, BackoffBase: 0, BackoffCap: time.Second, RetryAfterCap: time.Second},
+		{MaxTransientAttempts: 5, MaxRateLimitedAttempts: 10, BackoffBase: 2 * time.Second, BackoffCap: time.Second, RetryAfterCap: time.Second},
+	} {
 		if p.Validate() == nil {
 			t.Errorf("%+v accepted", p)
 		}
 	}
 	h := RetryHorizon(DefaultPolicy, 5*time.Second, 60*time.Second, 10*time.Second)
-	if want := 5*70*time.Second + 4*5*time.Second + 10*30*time.Second; h != want {
+	if want := 5*70*time.Second + (1+2+4+8)*time.Second + 10*30*time.Second; h != want {
 		t.Errorf("horizon = %s, want %s", h, want)
 	}
 	// The mock's durable ledger: conditional on the ledger being retained.

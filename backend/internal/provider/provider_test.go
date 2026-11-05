@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -170,7 +171,9 @@ func TestParseRetryAfter(t *testing.T) {
 	}{
 		{"", time.Second}, {"0", time.Second}, {"-5", time.Second}, {"abc", time.Second},
 		{"1", time.Second}, {"7", 7 * time.Second}, {"30", 30 * time.Second}, {"31", 30 * time.Second},
-		{"99999999999999999999", time.Second}, // overflow → invalid → default
+		{"99999999999999999999", 30 * time.Second}, // overflow → the cap, never a busy loop
+		{" 5 ", 5 * time.Second}, {"+5", time.Second}, {"5s", time.Second}, {"1.5", time.Second}, {"0x10", time.Second},
+		{"Wed, 21 Oct 2015 07:28:00", time.Second}, // malformed date (no zone)
 		{now.Add(10 * time.Second).Format(http.TimeFormat), 10 * time.Second},
 		{now.Add(-10 * time.Second).Format(http.TimeFormat), time.Second},
 		{now.Add(time.Hour).Format(http.TimeFormat), 30 * time.Second},
@@ -201,5 +204,36 @@ func TestMockCapabilities(t *testing.T) {
 	}
 	if caps := c.Capabilities(); !caps.IdempotencyKeys || caps.KeyRetention != RetentionUntilReset || caps.Name != "mock" {
 		t.Errorf("caps = %+v", caps)
+	}
+}
+
+// The final gate runs after the request is built and before anything is
+// written to the network: a closed gate sends nothing.
+func TestSendGatedClosedGateSendsNothing(t *testing.T) {
+	var hits atomic.Int64
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		w.WriteHeader(http.StatusAccepted)
+		_, _ = w.Write([]byte(`{"message_id":"m1","status":"accepted"}`))
+	}))
+	defer srv.Close()
+	c, err := NewClient(ClientConfig{BaseURL: srv.URL, RequestTimeout: time.Second})
+	if err != nil {
+		t.Fatal(err)
+	}
+	gateCalls := 0
+	r, sent := c.SendGated(context.Background(), testMsg, func() bool { gateCalls++; return false })
+	if sent || r != (Result{}) || gateCalls != 1 || hits.Load() != 0 {
+		t.Fatalf("closed gate: %+v sent=%v calls=%d hits=%d", r, sent, gateCalls, hits.Load())
+	}
+	r, sent = c.SendGated(context.Background(), testMsg, func() bool { return true })
+	if !sent || r.Outcome != OutcomeAccepted || hits.Load() != 1 {
+		t.Fatalf("open gate: %+v sent=%v hits=%d", r, sent, hits.Load())
+	}
+	// An unbuildable request never reaches the gate.
+	bad := testMsg
+	bad.To = ""
+	if r, sent := c.SendGated(context.Background(), bad, func() bool { t.Error("gate called"); return true }); !sent || r.Outcome != OutcomePermanentError {
+		t.Errorf("invalid = %+v %v", r, sent)
 	}
 }

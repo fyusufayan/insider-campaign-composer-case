@@ -18,6 +18,7 @@ import (
 //	POST /api/v1/campaigns/{id}/approvals/{aid}/confirm     {expected_version, segment_version, content_version, channels}
 //	POST /api/v1/campaigns/{id}/approvals/{aid}/withdraw    {expected_version}
 //	POST /api/v1/campaigns/{id}/send                        {approval_id, expected_version} (CP16)
+//	POST /api/v1/campaigns/{id}/cancel                      {expected_version} (CP17)
 //
 // Every response is {campaign, approval, server_time}. Responses carry
 // counts, binding metadata, the content review (rendered with fictional
@@ -34,6 +35,65 @@ func (h *approvalHandlers) register(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/v1/campaigns/{id}/approvals/{aid}/confirm", h.confirm)
 	mux.HandleFunc("POST /api/v1/campaigns/{id}/approvals/{aid}/withdraw", h.withdraw)
 	mux.HandleFunc("POST /api/v1/campaigns/{id}/send", h.send)
+	mux.HandleFunc("POST /api/v1/campaigns/{id}/cancel", h.cancel)
+}
+
+// POST /api/v1/campaigns/{id}/cancel {expected_version} (CP17, §5.2, §10.8)
+// → 200 {status: "cancelled", previous_status, …}. Allowed in every
+// non-terminal status. Before sending, the live approval is revoked and its
+// held rows deleted. While sending, queued deliveries are cancelled at
+// once; rows already in flight finish truthfully — in_flight is the upper
+// bound on provider requests that may still happen (at most one per row; a
+// request already on the wire cannot be recalled). Already
+// cancelled or finished → 409 invalid_state (also for a repeat, whatever
+// its version); stale version → 409 version_conflict. Counts only.
+func (h *approvalHandlers) cancel(w http.ResponseWriter, r *http.Request) {
+	id, ok := h.pathID(w, r)
+	if !ok {
+		return
+	}
+	version, ok := h.decodeExpectedVersion(w, r)
+	if !ok {
+		return
+	}
+	out, err := h.svc.Cancel(r.Context(), id, version)
+	if err != nil {
+		h.fail(w, r, err)
+		return
+	}
+	c, err := toCampaignDTO(out.Campaign)
+	if err != nil {
+		h.fail(w, r, err)
+		return
+	}
+	dto := cancelResponseDTO{Status: c.Status, PreviousStatus: string(out.PreviousStatus), ReleasedHeldRows: out.ReleasedHeld,
+		CancelledDeliveries: channelCounts(out.CancelledRows), InFlight: channelCounts(out.InFlight),
+		Campaign: c, ServerTime: time.Now().UTC()}
+	if out.RevokedApprovalID != nil {
+		s := out.RevokedApprovalID.String()
+		dto.RevokedApprovalID = &s
+	}
+	writeJSON(w, http.StatusOK, dto)
+}
+
+// cancelResponseDTO is the response of POST /cancel.
+type cancelResponseDTO struct {
+	Status              string           `json:"status"`
+	PreviousStatus      string           `json:"previous_status"`
+	RevokedApprovalID   *string          `json:"revoked_approval_id"`
+	ReleasedHeldRows    int64            `json:"released_held_rows"`
+	CancelledDeliveries map[string]int64 `json:"cancelled_deliveries"`
+	InFlight            map[string]int64 `json:"in_flight"`
+	Campaign            campaignDTO      `json:"campaign"`
+	ServerTime          time.Time        `json:"server_time"`
+}
+
+func channelCounts(m map[segment.Channel]int64) map[string]int64 {
+	out := make(map[string]int64, len(m))
+	for ch, n := range m {
+		out[string(ch)] = n
+	}
+	return out
 }
 
 // POST /api/v1/campaigns/{id}/send {approval_id, expected_version} (CP16,

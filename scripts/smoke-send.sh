@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# CP16 delivery smoke test of a running Compose stack, through the nginx
+# CP16/CP17 delivery smoke test of a running Compose stack, through the nginx
 # frontend: create → interpret (demo) → save content → prepare → confirm →
 # send, then wait for the worker to deliver through the mock provider and
 # verify the result in PostgreSQL and in the mock provider's counters.
@@ -111,11 +111,20 @@ assert sent <= ledger <= sent + uncertain, (ledger, sent, uncertain)
 print(f"     ledger entries for this campaign: {ledger} (sent rows {sent}, uncertain unsent {uncertain})")
 for ch, s in d["channels"].items():
     print(f"     mockprovider {ch} (this process): arrivals={s['arrivals']} accepted={s['accepted']} replayed={s['replayed']} "
-          f"5xx={s['injected_5xx']} 429={s['injected_429']} timeouts={s['injected_timeouts']} storage_failures={s['storage_failures']}")
+          f"5xx={s['injected_5xx']} 429={s['injected_429']} timeouts={s['injected_timeouts']} storage_failures={s['storage_failures']} "
+          f"max_in_any_rolling_1s={s['max_in_any_rolling_1s']} limit_exceeded={s['limit_exceeded']}")
+    # CP17: the provider-observed rate per channel (since the mock started).
+    assert s["max_in_any_rolling_1s"] <= 100 and s["limit_exceeded"] == 0, (ch, s)
 PY
-ok "mock provider: durable ledger matches this campaign's sent rows; no duplicate accepted keys"
+ok "mock provider: durable ledger matches this campaign's sent rows; no duplicate accepted keys; ≤ 100 requests per rolling second per channel"
+# Logs are captured first: `docker compose logs | grep -q` would let grep's
+# early exit SIGPIPE the producer, which pipefail reports as a failure (and
+# would turn a found match into "no match" inside an if).
+logs="$(docker compose logs --no-color worker mockprovider api 2>/dev/null)"
+grep -q 'dispatch lock acquired' <<<"$logs" || fail "worker never took the dispatch lock"
+ok "worker holds the dispatch lock (single dispatcher)"
 
-if docker compose logs --no-color worker mockprovider api 2>/dev/null | grep -Eq '[A-Za-z0-9._%+-]+@example\.|\+90[0-9]{10}|your cart is waiting'; then
+if grep -Eq '[A-Za-z0-9._%+-]+@example\.|\+90[0-9]{10}|your cart is waiting' <<<"$logs"; then
 	fail "logs contain a contact or message text"
 fi
 ok "no contacts or message text in api/worker/mockprovider logs"

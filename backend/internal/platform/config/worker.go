@@ -30,10 +30,22 @@ type Worker struct {
 	PollInterval           time.Duration
 	MaxTransientAttempts   int
 	MaxRateLimitedAttempts int
-	// RetryDelay is DELIVERY_RETRY_DELAY, the CP16 fixed delay between
-	// transient attempts (CP17: exponential backoff with jitter).
-	RetryDelay    time.Duration
+	// BackoffBase/BackoffCap: transient retries wait a full-jitter delay in
+	// [0, min(BACKOFF_CAP, BACKOFF_BASE·2^(n−1))) after the n-th attempt.
+	BackoffBase   time.Duration
+	BackoffCap    time.Duration
 	RetryAfterCap time.Duration
+	// RateLimitPerSecond is N per channel; the window is 1 s +
+	// RateSafetyMargin (§10.4).
+	RateLimitPerSecond int
+	RateSafetyMargin   time.Duration
+	// DispatchMaxPrecheck < DispatchMaxSlotToRequest < RateSafetyMargin
+	// (§10.2).
+	DispatchMaxPrecheck      time.Duration
+	DispatchMaxSlotToRequest time.Duration
+	// ApprovalSweepInterval is the period of the approval-expiry sweeper
+	// (§5.3, default 30 s).
+	ApprovalSweepInterval time.Duration
 }
 
 // Worker defaults (§16).
@@ -46,8 +58,14 @@ const (
 	DefaultPollInterval           = 500 * time.Millisecond
 	DefaultMaxTransientAttempts   = 5
 	DefaultMaxRateLimitedAttempts = 10
-	DefaultRetryDelay             = 5 * time.Second
+	DefaultBackoffBase            = time.Second
+	DefaultBackoffCap             = 60 * time.Second
 	DefaultRetryAfterCap          = 30 * time.Second
+	DefaultRateLimitPerSecond     = 100
+	DefaultRateSafetyMargin       = 50 * time.Millisecond
+	DefaultDispatchMaxSlot        = 20 * time.Millisecond
+	DefaultDispatchMaxPrecheck    = 15 * time.Millisecond
+	DefaultApprovalSweepInterval  = 30 * time.Second
 	defaultWorkerHealthAddr       = ":9091"
 	defaultWorkerID               = "worker"
 )
@@ -139,8 +157,25 @@ func LoadWorker(getenv func(string) string) (Worker, error) {
 	w.PollInterval = r.duration("WORKER_POLL_INTERVAL", DefaultPollInterval, 10*time.Millisecond, 10*time.Second)
 	w.MaxTransientAttempts = r.integer("MAX_TRANSIENT_ATTEMPTS", DefaultMaxTransientAttempts, 1, 20)
 	w.MaxRateLimitedAttempts = r.integer("MAX_RATE_LIMITED_ATTEMPTS", DefaultMaxRateLimitedAttempts, 1, 50)
-	w.RetryDelay = r.duration("DELIVERY_RETRY_DELAY", DefaultRetryDelay, 10*time.Millisecond, 10*time.Minute)
+	if r.get("DELIVERY_RETRY_DELAY") != "" {
+		r.errs = append(r.errs, errors.New("DELIVERY_RETRY_DELAY (CP16 fixed retry delay) was replaced by BACKOFF_BASE and BACKOFF_CAP; remove it"))
+	}
+	w.BackoffBase = r.duration("BACKOFF_BASE", DefaultBackoffBase, 10*time.Millisecond, 10*time.Minute)
+	w.BackoffCap = r.duration("BACKOFF_CAP", DefaultBackoffCap, 10*time.Millisecond, time.Hour)
+	if w.BackoffCap < w.BackoffBase {
+		r.errs = append(r.errs, fmt.Errorf("BACKOFF_CAP (%s) must be at least BACKOFF_BASE (%s)", w.BackoffCap, w.BackoffBase))
+	}
 	w.RetryAfterCap = r.duration("RETRY_AFTER_CAP", DefaultRetryAfterCap, time.Second, 10*time.Minute)
+	w.RateLimitPerSecond = r.integer("RATE_LIMIT_PER_SECOND", DefaultRateLimitPerSecond, 1, 1000)
+	w.RateSafetyMargin = r.duration("RATE_SAFETY_MARGIN", DefaultRateSafetyMargin, time.Millisecond, time.Second)
+	w.DispatchMaxSlotToRequest = r.duration("DISPATCH_MAX_SLOT_TO_REQUEST", DefaultDispatchMaxSlot, time.Millisecond, time.Second)
+	w.DispatchMaxPrecheck = r.duration("DISPATCH_MAX_PRECHECK", DefaultDispatchMaxPrecheck, time.Millisecond, time.Second)
+	// The margin must cover the enforced slot-to-request bound (§10.4).
+	if !(w.DispatchMaxPrecheck < w.DispatchMaxSlotToRequest && w.DispatchMaxSlotToRequest < w.RateSafetyMargin) {
+		r.errs = append(r.errs, fmt.Errorf("need DISPATCH_MAX_PRECHECK (%s) < DISPATCH_MAX_SLOT_TO_REQUEST (%s) < RATE_SAFETY_MARGIN (%s)",
+			w.DispatchMaxPrecheck, w.DispatchMaxSlotToRequest, w.RateSafetyMargin))
+	}
+	w.ApprovalSweepInterval = r.duration("APPROVAL_SWEEP_INTERVAL", DefaultApprovalSweepInterval, time.Second, 10*time.Minute)
 	// The lease must comfortably exceed a request, so that a live worker's
 	// row is never reaped mid-request (§16).
 	if w.LeaseDuration < 10*w.ProviderRequestTimeout {
@@ -184,6 +219,9 @@ type MockProvider struct {
 	// AllowReset is MOCK_ADMIN_RESET_ENABLED (default false): enables the
 	// destructive POST /admin/reset.
 	AllowReset bool
+	// RateLimit is MOCK_RATE_LIMIT_PER_SECOND (default 100, 0 disables):
+	// the mock's own strict per-channel limit.
+	RateLimit int
 }
 
 // Mock provider defaults (§16).
@@ -226,6 +264,7 @@ func LoadMockProvider(getenv func(string) string) (MockProvider, error) {
 	m.TimeoutStall = r.duration("MOCK_TIMEOUT_STALL", 30*time.Second, 100*time.Millisecond, 10*time.Minute)
 	m.RetryAfter = r.duration("MOCK_RETRY_AFTER", time.Second, time.Second, 60*time.Second)
 	m.Seed = uint64(r.integer("MOCK_RANDOM_SEED", 1, 0, 1<<31-1))
+	m.RateLimit = r.integer("MOCK_RATE_LIMIT_PER_SECOND", 100, 0, 100000)
 	m.LedgerPath = r.get("MOCK_LEDGER_PATH")
 	if m.LedgerPath == "" || !filepath.IsAbs(m.LedgerPath) || filepath.Clean(m.LedgerPath) != m.LedgerPath {
 		r.errs = append(r.errs, errors.New("MOCK_LEDGER_PATH must be a clean absolute file path (the durable idempotency ledger)"))
