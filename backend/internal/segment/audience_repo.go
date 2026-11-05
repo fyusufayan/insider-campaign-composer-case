@@ -25,17 +25,26 @@ const (
 	//
 	// Per channel: 0 = no_contact, 1 = no_consent, 2 = eligible.
 	sqlAudienceStatsHead = `WITH matched AS (`
-	sqlAudienceStatsTail = `),
+	sqlAudienceStatsTail = sqlClassifiedCTE + "\n" + sqlAudienceCells + "\nFROM classified"
+
+	// sqlClassifiedCTE closes matched and classifies every matched user per
+	// channel. It is the single definition of the partition; the eligible
+	// recipients of a frozen audience (CompileEligible) are derived from it.
+	sqlClassifiedCTE = `),
 classified AS (
   SELECT
+    u.id AS user_id,
     CASE WHEN u.phone IS NULL THEN 0 WHEN sc.status = 'opted_in' THEN 2 ELSE 1 END AS sms,
     CASE WHEN u.email IS NULL THEN 0 WHEN ec.status = 'opted_in' THEN 2 ELSE 1 END AS email
   FROM matched AS m
   JOIN users AS u ON u.id = m.id
   LEFT JOIN channel_consents AS sc ON sc.user_id = u.id AND sc.channel = 'sms'
   LEFT JOIN channel_consents AS ec ON ec.user_id = u.id AND ec.channel = 'email'
-)
-SELECT
+)`
+
+	// sqlAudienceCells are the raw partition counts over classified
+	// (audienceCells order).
+	sqlAudienceCells = `SELECT
   count(*),
   count(*) FILTER (WHERE sms = 0),
   count(*) FILTER (WHERE sms = 1),
@@ -47,8 +56,7 @@ SELECT
   count(*) FILTER (WHERE sms = 2 AND email <> 2),
   count(*) FILTER (WHERE sms <> 2 AND email = 2),
   count(*) FILTER (WHERE sms <> 2 AND email <> 2),
-  now()
-FROM classified`
+  now()`
 )
 
 // rollbackTimeout bounds the transaction cleanup that runs after Stats returns.
