@@ -1,0 +1,3055 @@
+ ▐▛███▛█   Claude Code v2.1.318
+▝▜██████▀  Opus 5.5 · Claude Pro
+ ▝▝   ▝▝   ~/Desktop/devel/leet/insider-case/insider-campaign-composer-case
+
+
+❯ We are continuing the Smart Campaign Composer take-home project in a NEW      
+  Claude Code session.                                                          
+  Project status                                                                
+                                                                                
+  * Slice 1a: complete and committed.                                           
+  * Slice 1b: complete and committed, including live Anthropic Haiku 5.5        
+  verification.                                                                 
+  * Slice 2: complete and committed, including strict content validation, AI    
+  generation, true Anthropic streaming, SSE, manual editing and immutable       
+  content versions.                                                             
+  * The user has created the Git tag `slice-2-complete`.                        
+  * The working application supports campaign creation, segmentation, audience  
+  preview, personalized content generation, validation, manual editing and      
+  content-version persistence.                                                  
+  * The local `.env` may contain a real Anthropic API key and may set           
+  `LLM_PROVIDER=anthropic`.                                                     
+                                                                                
+  Begin Slice 3, CP14 — Approval Preparation and Frozen Audience.               
+  This is a focused backend/domain checkpoint. Do not implement approval        
+  confirmation, delivery workers or the entire Slice 3.                         
+  1. Read the design and verify the baseline                                    
+  Read these project documents first:                                           
+                                                                                
+  * `CLAUDE.md`                                                                 
+  * `docs/ROADMAP.md`                                                           
+  * `docs/ARCHITECTURE.md`, especially the approval, delivery, state-machine,   
+  audience and privacy sections                                                 
+  * `DECISIONS.md` and relevant approval/delivery ADRs                          
+  * Existing PostgreSQL migrations for campaigns, approvals, deliveries,        
+  audience-related tables and constraints                                       
+  * `internal/campaign`, including its state machine and optimistic concurrency 
+  conventions                                                                   
+  * `internal/content` and its immutable version contract                       
+  * `internal/segment`, especially audience queries and consent/contact         
+  partitioning                                                                  
+  * Existing HTTP API conventions and integration-test helpers                  
+                                                                                
+  Verify that:                                                                  
+                                                                                
+  * The working tree is clean.                                                  
+  * HEAD represents the completed Slice 2.                                      
+  * The `slice-2-complete` tag exists and points to that baseline.              
+  * Existing tests pass before modifications.                                   
+                                                                                
+  The existing documents and schema are authoritative. Reconcile this CP14      
+  scope against the actual Slice 3 roadmap and report any differences.          
+  2. Objective                                                                  
+  Implement the complete approval preparation domain/service/repository         
+  workflow.                                                                     
+  Given a campaign with a valid persisted segment and current immutable content 
+  version, the system must:                                                     
+                                                                                
+  1. Verify that approval preparation is permitted by the state machine.        
+  2. Recheck the selected channels.                                             
+  3. Reload and validate the current content version.                           
+  4. Verify that content covers the selected channels exactly.                  
+  5. Recheck the content brief and any applicable offer warnings.               
+  6. Determine the actual eligible recipients from PostgreSQL.                  
+  7. Freeze the intended audience an                                            
+  ──── (125 lines hidden) ───────────────────────────────────────────────────── 
+  6. No PII leakage to logs or API review DTOs.                                 
+                                                                                
+  12. PostgreSQL integration tests                                              
+  Using the existing Testcontainers infrastructure, verify:                     
+                                                                                
+  * Real eligibility queries match the existing audience semantics.             
+  * Only eligible channel-recipient pairs produce prepared deliveries.          
+  * The prepared totals reconcile exactly with independent SQL counts.          
+  * SMS and email are independently filtered by consent/contact.                
+  * Frozen variables are correct.                                               
+  * Two concurrent preparation attempts cannot create duplicate active          
+  approvals.                                                                    
+  * A stale campaign version is rejected.                                       
+  * An injected failure causes full rollback or safe cleanup.                   
+  * Approval and delivery rows satisfy all real foreign keys and uniqueness     
+  constraints.                                                                  
+  * No live recipient rows enter LLM calls.                                     
+  * Preparation expiry behavior works deterministically.                        
+                                                                                
+  Reuse the seeded fixtures and avoid introducing live dependencies.            
+  13. Security and privacy                                                      
+                                                                                
+  * No real Anthropic API calls.                                                
+  * No customer PII in LLM prompts or application logs.                         
+  * Do not include recipient contact information or full recipient rows in      
+  approval-review API responses.                                                
+  * Do not use raw user-entered SQL.                                            
+  * Preserve parameterized SQL compilation.                                     
+  * Avoid rendering untrusted content as HTML.                                  
+  * Keep sensitive delivery data accessible only to the trusted backend         
+  pipeline.                                                                     
+  * Never print or commit `.env` or any credentials.                            
+                                                                                
+  14. Verification                                                              
+  Run:                                                                          
+                                                                                
+  * Backend unit tests.                                                         
+  * Backend race tests.                                                         
+  * PostgreSQL integration tests.                                               
+  * Frontend regression tests, typecheck and build if shared API contracts      
+  change.                                                                       
+  * Lint.                                                                       
+  * Docker Compose build and demo smoke only if applicable.                     
+                                                                                
+  Explicitly force demo mode and blank the key for any Compose or smoke tests:  
+  `LLM_PROVIDER=demo ANTHROPIC_API_KEY= ...`                                    
+  If the documented staticcheck TLS issue occurs, use the existing safe         
+  workaround or the exact pinned local binary and report the distinction        
+  accurately.                                                                   
+  Do not run paid provider calls.                                               
+  15. Completion report                                                         
+  Report:                                                                       
+                                                                                
+  1. Files created and modified.                                                
+  2. Implemented state transitions.                                             
+  3. Approval and snapshot schema usage.                                        
+  4. Actual eligibility SQL/data flow.                                          
+  5. Frozen personalization semantics.                                          
+  6. Content-version and segment-version binding.                               
+  7. Offer-review behavior.                                                     
+  8. Expiry and concurrency protections.                                        
+  9. Unit, integration and regression test results.                             
+  10. Any schema/architecture gaps and decisions that require review.           
+                                                                                
+  Do not commit changes.                                                        
+  Do not implement confirmation, delivery workers, mock-provider sends, retry   
+  machinery, rate limiting or delivery SSE.                                     
+  Stop after CP14 for review.                                                   
+
+  Searched for 1 pattern, read 1 file, ran 2 shell commands (ctrl+o to expand)
+
+⏺ Now the campaign package.
+
+  Searched for 1 pattern, read 3 files, listed 1 directory, ran 1 shell command (ctrl+o to expand)
+
+⏺ Reading done on docs/schema; now checking the integration-test helpers and
+  kicking off the baseline test run.
+
+  Ran 3 shell commands (ctrl+o to expand)
+
+⏺ Background command "Run baseline unit tests in background" completed (exit
+code 0)
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ Baseline unit tests pass. Starting the baseline integration run in the
+  background while I design.
+
+  Ran 2 shell commands (ctrl+o to expand)
+
+⏺ Design settled (reasoning recorded for the report). Checking a few remaining
+  signatures before writing code.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ Background command "Run baseline integration tests" completed (exit code 0)
+
+  Read 1 file (ctrl+o to expand)
+
+⏺ Baseline is green (unit + integration, tag slice-2-complete = HEAD 07f6873).
+  Now implementing — starting with the segment eligibility statement.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ Now writing the segment eligibility builder.
+
+⏺ Write(backend/internal/segment/eligible.go)
+  ⎿  Wrote 91 lines to backend/internal/segment/eligible.go
+       1 package segment
+       2 
+       3 import (
+       4   "errors"
+       5   "strconv"
+       6 )
+       7 
+       8 // ErrNoChannels is returned by CompileEligible for an empty cha
+         nnel
+       9 // selection: there is no recipient set to freeze.
+     … +82 lines (ctrl+o to expand)
+
+⏺ Bash(python3 - <<'EOF'
+      p='internal/segment/eligible.go'…)
+  ⎿  Updated backend/internal/segment/eligible.go (+5 -13)
+      3  import (
+      4          "errors"
+      5          "strconv"
+      6 +        "strings"                                               
+      7  )
+      8  
+      9  // ErrNoChannels is returned by CompileEligible for an empty cha
+         nnel
+     ...
+      22  // key), the selected channels are de-duplicated before they ar
+          e bound, and
+      23  // channel_consents has PRIMARY KEY (user_id, channel), so (use
+          r_id, channel)
+      24  // is unique in eligible.
+      25 +// channelsMarker is replaced by the channels placeholder ("$n"
+         +).                                                             
+      26 +const channelsMarker = "%CHANNELS%"                            
+      27 +                                                               
+      28  const sqlEligibleTail = `),
+      29  eligible AS (
+      30    SELECT u.id AS user_id, ch.channel
+     ...
+      76          args = append(args, names)
+      77          placeholder := "$" + strconv.Itoa(len(args))
+      78          return EligibleQuery{
+      75 -                With:      sqlAudienceStatsHead + matchedSQL + 
+         -replacePlaceholder(sqlEligibleTail, placeholder),              
+      79 +                With:      sqlAudienceStatsHead + matchedSQL + 
+         +strings.Replace(sqlEligibleTail, channelsMarker, placeholder, 1
+         +),                                                             
+      80                  Args:      args,
+      81                  NextParam: len(args) + 1,
+      82          }, nil
+      83  }
+      80 -                                                               
+      81 -// replacePlaceholder substitutes the single %CHANNELS% marker 
+         -of a constant                                                  
+      82 -// with a placeholder ("$n"); the result contains only constant
+         - text.                                                         
+      83 -func replacePlaceholder(s, placeholder string) string {        
+      84 -        const marker = "%CHANNELS%"                            
+      85 -        for i := 0; i+len(marker) <= len(s); i++ {             
+      86 -                if s[i:i+len(marker)] == marker {              
+      87 -                        return s[:i] + placeholder + s[i+len(ma
+         -rker):]                                                        
+      88 -                }                                              
+      89 -        }                                                      
+      90 -        return s                                               
+      91 -}                                                              
+
+⏺ Update(backend/internal/segment/eligible.go)
+  ⎿  Removed 3 lines
+      22  // key), the selected channels are de-duplicated before they ar
+          e bound, and
+      23  // channel_consents has PRIMARY KEY (user_id, channel), so (use
+          r_id, channel)
+      24  // is unique in eligible.
+      25 -// channelsMarker is replaced by the channels placeholder ("$n"
+         -).                                                             
+      26 -const channelsMarker = "%CHANNELS%"                            
+      27 -                                                               
+      25  const sqlEligibleTail = `),
+      26  eligible AS (
+      27    SELECT u.id AS user_id, ch.channel
+
+⏺ Update(backend/internal/segment/eligible.go)
+  ⎿  Added 4 lines
+      10  // selection: there is no recipient set to freeze.
+      11  var ErrNoChannels = errors.New("segment: no channel selected")
+      12  
+      13 +// channelsMarker in sqlEligibleTail is replaced by the channel
+         +s placeholder                                                  
+      14 +// ("$n"), so the statement text stays constant apart from plac
+         +eholder numbers.                                               
+      15 +const channelsMarker = "%CHANNELS%"                            
+      16 +                                                               
+      17  // sqlEligibleTail follows the compiled matched-users statement
+          . It defines
+      18  // eligible(user_id, channel): one row per matched user and sel
+          ected channel
+      19  // on which the user is eligible (ARCHITECTURE §6.5), i.e. the 
+          user has a
+
+⏺ Now the campaign-side transitions and transaction helpers.
+
+⏺ Write(backend/internal/campaign/approval.go)
+  ⎿  Wrote 225 lines to backend/internal/campaign/approval.go
+      1 package campaign
+      2 
+      3 import (
+      4   "context"
+      5   "errors"
+      6   "fmt"
+      7   "slices"
+      8 
+      9   "github.com/jackc/pgx/v5"
+     … +216 lines (ctrl+o to expand)
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ Now the approval package: domain types first.
+
+⏺ Write(backend/internal/approval/approval.go)
+  ⎿  Wrote 245 lines to backend/internal/approval/approval.go
+       1 // Package approval owns approval preparation and the frozen aud
+         ience
+       2 // snapshot (ARCHITECTURE §5, §9; ADR-005, ADR-006, ADR-007). It
+          is the only
+       3 // code that inserts campaign_deliveries rows: prepare inserts t
+         hem as
+       4 // `held`, bound to one pending approval, in the same transactio
+         n that locks
+       5 // the campaign row, re-validates content and channels and compu
+         tes the
+     … +240 lines (ctrl+o to expand)
+
+⏺ Bash(python3 - <<'EOF'
+      import re…)
+  ⎿  internal/approval/approval.go
+  ⎿  Updated backend/internal/approval/approval.go (+21 -20)
+       96  // ChannelSnapshot describes the held rows of one channel.
+       97  type ChannelSnapshot struct {
+       98          // Recipients is the number of held rows (= audience e
+           ligible count).
+       99 -        Recipients int64 `json:"recipients"`                  
+       99 +        Recipients int64                                      
+      100          // RenderIssues counts held rows whose frozen values c
+           annot be rendered
+      101          // into this channel's message, by content render code
+            (missing_value,
+      102          // invalid_value, value_too_long, content_too_long). S
+           uch a delivery
+      103          // fails permanently at send time (§8.7); values are n
+           ever truncated or
+      104          // replaced. Never nil.
+      105 -        RenderIssues map[string]int64 `json:"render_issues"`  
+      105 +        RenderIssues map[string]int64                         
+      106  }
+      107  
+      108  // Summary is the reviewable result of a preparation. It never
+            contains
+      109 -// customer data.                                             
+      109 +// customer data. It is a domain type; the HTTP DTO (CP15) is 
+          +defined in                                                    
+      110 +// httpapi.                                                   
+      111  type Summary struct {
+      111 -        ApprovalID     campaign.ID       `json:"approval_id"` 
+      112 -        CampaignID     campaign.ID       `json:"campaign_id"` 
+      113 -        Status         Status            `json:"status"`      
+      114 -        CampaignVersion int              `json:"campaign_versi
+          -on"`                                                          
+      115 -        SegmentVersion int               `json:"segment_versio
+          -n"`                                                           
+      116 -        ContentID      int64             `json:"content_id"`  
+      117 -        ContentVersion int               `json:"content_versio
+          -n"`                                                           
+      118 -        Channels       []segment.Channel `json:"channels"`    
+      112 +        ApprovalID      campaign.ID                           
+      113 +        CampaignID      campaign.ID                           
+      114 +        Status          Status                                
+      115 +        CampaignVersion int                                   
+      116 +        SegmentVersion  int                                   
+      117 +        ContentID       int64                                 
+      118 +        ContentVersion  int                                   
+      119 +        Channels        []segment.Channel                     
+      120          // AudienceStats is the exact partition stored in the 
+           approval row,
+      121          // computed in the transaction that wrote the held row
+           s.
+      121 -        AudienceStats  segment.AudienceStats `json:"audience_s
+          -tats"`                                                        
+      122 -        SnapshotCount  int64                 `json:"snapshot_c
+          -ount"`                                                        
+      123 -        SnapshotDigest string                `json:"snapshot_d
+          -igest"`                                                       
+     … 25 more lines (ctrl+o to expand)
+⏺ Now the repository with the preparation transaction.
+
+⏺ Write(backend/internal/approval/repository.go)
+  ⎿  Wrote 552 lines to backend/internal/approval/repository.go
+       1 package approval
+       2 
+       3 import (
+       4   "bytes"
+       5   "context"
+       6   "encoding/json"
+       7   "errors"
+       8   "fmt"
+       9   "strconv"
+      10   "time"
+     … +542 lines (ctrl+o to expand)
+
+⏺ Bash(python3 - <<'EOF'
+      p='internal/approval/repository.go'…)
+  ⎿  Updated backend/internal/approval/repository.go (+3 -10)
+       7          "errors"
+       8          "fmt"
+       9          "strconv"
+      10 +        "strings"                                              
+      11          "time"
+      12  
+      13          "github.com/jackc/pgx/v5"
+     ...
+      403          approvalID := campaign.ID(approvalUUID.Bytes)
+      404  
+      405          // 8. The held rows.
+      405 -        insertSQL := eq.With + replacePlaceholders(sqlInsertHe
+          -ldTail, map[string]int{"%C": eq.NextParam, "%A": eq.NextParam 
+          -+ 1})                                                         
+      406 +        insertSQL := eq.With + strings.NewReplacer(           
+      407 +                "%C", "$"+strconv.Itoa(eq.NextParam), "%A", "$
+          +"+strconv.Itoa(eq.NextParam+1)).Replace(sqlInsertHeldTail)    
+      408          tag, err := tx.Exec(ctx, insertSQL, append(eq.Args, uu
+           idArg(cur.ID), approvalUUID)...)
+      409          if err != nil {
+      410                  return Summary{}, fmt.Errorf("approval %s: ins
+           ert held rows: %w", approvalID, err)
+     ...
+      542          return v, nil
+      543  }
+      544  
+      543 -// replacePlaceholders substitutes constant markers with "$n" 
+          -placeholders.                                                 
+      544 -func replacePlaceholders(s string, ph map[string]int) string {
+      545 -        out := s                                              
+      546 -        for marker, n := range ph {                           
+      547 -                out = replaceAll(out, marker, "$"+strconv.Itoa
+          -(n))                                                          
+      548 -        }                                                     
+      549 -        return out                                            
+      550 -}                                                             
+      551 -                                                              
+      545  func uuidArg(id campaign.ID) pgtype.UUID { return pgtype.UUID{
+           Bytes: id, Valid: true} }
+
+⏺ Now the thin service.
+
+⏺ Write(backend/internal/approval/service.go)
+  ⎿  Wrote 112 lines to backend/internal/approval/service.go
+       1 package approval
+       2 
+       3 import (
+       4   "context"
+       5   "errors"
+       6   "fmt"
+       7   "log/slog"
+       8   "time"
+       9 
+      10   "github.com/fyusufayan/insider-campaign-composer-case/backend/
+     … +103 lines (~4 KB) (ctrl+o to expand)
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ Core code builds. Now unit tests — first checking existing test helpers in the
+  campaign package.
+
+  Ran 2 shell commands (ctrl+o to expand)
+
+⏺ Write(backend/internal/campaign/approval_test.go)
+  ⎿  Wrote 254 lines to backend/internal/campaign/approval_test.go
+       1 package campaign_test
+       2 
+       3 import (
+       4   "errors"
+       5   "slices"
+       6   "testing"
+       7 
+       8   "github.com/fyusufayan/insider-campaign-composer-case/backend/
+         internal/ai"
+       9   "github.com/fyusufayan/insider-campaign-composer-case/backend/
+     … +246 lines (~9 KB) (ctrl+o to expand)
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ Bash(sed -i '' 's/func(w segment.FieldError) bool { return w == f })/func(w
+      segment.FieldError) bool { return w.Path == f.Path \&\& w.Code == f.Code
+      \&\& w.Message =…)
+  ⎿  --- PASS: TestCheckPrepareApprovalStates (0.00s)
+     --- PASS: TestCheckPrepareAtVersion (0.00s)
+     --- PASS: TestWithPreparedApproval (0.00s)
+     … +4 lines (ctrl+o to expand)
+  ⎿  Updated backend/internal/campaign/approval_test.go (+1 -1)
+      228                          t.Errorf("findings = %s", got)
+      229                  }
+      230                  for _, f := range r.OfferFindings {
+      231 -                        if !slices.ContainsFunc(r.Validation.W
+          -arnings, func(w segment.FieldError) bool { return w == f }) { 
+      231 +                        if !slices.ContainsFunc(r.Validation.W
+          +arnings, func(w segment.FieldError) bool { return w.Path == f.
+          +Path && w.Code == f.Code && w.Message == f.Message }) {       
+      232                                  t.Errorf("finding %v missing f
+           rom warnings", f)
+      233                          }
+      234                  }
+
+⏺ Campaign-side unit tests pass. Now unit tests for the approval package and
+  segment.CompileEligible.
+
+⏺ Write(backend/internal/approval/approval_test.go)
+  ⎿  Wrote 264 lines to backend/internal/approval/approval_test.go
+       1 package approval
+       2 
+       3 import (
+       4   "context"
+       5   "crypto/sha256"
+       6   "encoding/hex"
+       7   "errors"
+       8   "fmt"
+       9   "go/parser"
+      10   "go/token"
+     … +254 lines (ctrl+o to expand)
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ Bash(python3 - <<'EOF'
+      p='internal/approval/approval_test.go'…)
+  ⎿  113:func TestCompileGolden(t *testing.T) {
+     129:func TestCompileGoldenCoversVocabulary(t *testing.T) {
+     170:func TestCompilerDefinitionsMatchRegistry(t *testing.T) {
+     … +7 lines (ctrl+o to expand)
+  ⎿  Updated backend/internal/approval/approval_test.go (+0 -2)
+      20  
+      21          "github.com/jackc/pgx/v5/pgconn"
+      22  
+      23 -        "github.com/fyusufayan/insider-campaign-composer-case/b
+         -ackend/internal/campaign"                                      
+      23          "github.com/fyusufayan/insider-campaign-composer-case/b
+          ackend/internal/content"
+      24          "github.com/fyusufayan/insider-campaign-composer-case/b
+          ackend/internal/segment"
+      25  )
+     ...
+      259                          t.Errorf("%s does not use clock_timest
+           amp()", name)
+      260                  }
+      261          }
+      263 -        _ = campaign.ID{}                                     
+      262  }
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ Write(backend/internal/segment/eligible_test.go)
+  ⎿  Wrote 97 lines to backend/internal/segment/eligible_test.go
+       1 package segment
+       2 
+       3 import (
+       4   "errors"
+       5   "reflect"
+       6   "strings"
+       7   "testing"
+       8 )
+       9 
+      10 func mustParseRule(t *testing.T, js string) Validated {
+     … +87 lines (ctrl+o to expand)
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ Unit tests pass. Now the PostgreSQL integration tests — checking existing
+  helpers for seeding and lock-wait polling first.
+
+  Ran 3 shell commands (ctrl+o to expand)
+
+⏺ Writing the integration test file.
+
+⏺ Write(backend/test/integration/approval_test.go)
+  ⎿  Wrote 1070 lines to backend/test/integration/approval_test.go
+       1 //go:build integration
+       2 
+       3 package integration
+       4 
+       5 import (
+       6   "bytes"
+       7   "context"
+       8   "encoding/json"
+       9   "errors"
+      10   "fmt"
+     … +1060 lines (ctrl+o to expand)
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ Bash(python3 - <<'EOF'
+      p='test/integration/approval_test.go'…)
+  ⎿    Resolved Docker Host: unix:///var/run/docker.sock
+       Resolved Docker Socket Path: /var/run/docker.sock
+       Test SessionID: f19e22c3e4766ffe26fd5a8dd42903a3bfc94db3f0d5b0b1f208
+     … +70 lines (ctrl+o to expand)
+  ⎿  Updated backend/test/integration/approval_test.go (+17 -16)
+      189  
+      190  // approvalRow is a campaign_approvals row.
+      191  type approvalRow struct {
+      192 -        Status, Digest            string                      
+      193 -        RevokeReason              *string                     
+      194 -        SegmentVersion            int                         
+      195 -        ContentID                 int64                       
+      196 -        Channels                  []string                    
+      197 -        Rule, Stats               []byte                      
+      198 -        SnapshotCount             int64                       
+      199 -        PreparedAt, ExpiresAt     time.Time                   
+      200 -        ApprovedAt, ClosedAt      *time.Time                  
+      201 -        ConsumedAt                *time.Time                  
+      202 -        TTLMicros                 int64                       
+      203 -        PreparedAfterCampaignLock bool                        
+      192 +        Status, Digest        string                          
+      193 +        RevokeReason          *string                         
+      194 +        SegmentVersion        int                             
+      195 +        ContentID             int64                           
+      196 +        Channels              []string                        
+      197 +        Rule, Stats           []byte                          
+      198 +        SnapshotCount         int64                           
+      199 +        PreparedAt, ExpiresAt time.Time                       
+      200 +        ApprovedAt, ClosedAt  *time.Time                      
+      201 +        ConsumedAt            *time.Time                      
+      202 +        TTLMicros             int64                           
+      203  }
+      204  
+      205  func (e *prepEnv) approvalRow(id campaign.ID) approvalRow {
+     ...
+      208          err := e.pool.QueryRow(ctxBG, `
+      209  SELECT status, snapshot_digest, revoke_reason, segment_version
+           , content_id, channels::text[], segment_rule, audience_stats,
+      210         snapshot_count, prepared_at, expires_at, approved_at, c
+           losed_at, consumed_at,
+      212 -       (extract(epoch FROM expires_at - prepared_at) * 1000000
+          -)::bigint, true                                               
+      211 +       (extract(epoch FROM expires_at - prepared_at) * 1000000
+          +)::bigint                                                     
+      212  FROM campaign_approvals WHERE id = $1::uuid`, id.String()).Sca
+           n(
+      213                  &r.Status, &r.Digest, &r.RevokeReason, &r.Segm
+           entVersion, &r.ContentID, &r.Channels, &r.Rule, &r.Stats,
+      215 -                &r.SnapshotCount, &r.PreparedAt, &r.ExpiresAt,
+          - &r.ApprovedAt, &r.ClosedAt, &r.ConsumedAt, &r.TTLMicros,     
+      216 -                &r.PreparedAfterCampaignLock)                 
+      214 +                &r.SnapshotCount, &r.PreparedAt, &r.ExpiresAt,
+          + &r.ApprovedAt, &r.ClosedAt, &r.ConsumedAt, &r.TTLMicros)     
+      215          if err != nil {
+     … 13 more lines (ctrl+o to expand)
+
+⏺ The ordering guard caught a real bug: ORDER BY channel resolved to the
+  channel::text output column (alphabetical, email < sms) instead of the enum.
+  Qualifying the column.
+
+⏺ Bash(python3 - <<'EOF'
+      p='internal/approval/repository.go'…)  ⎿  ok
+     github.com/fyusufayan/insider-campaign-composer-case/backend/test/
+     integration     6.813s
+  ⎿  Updated backend/internal/approval/repository.go (+4 -2)
+      90  FROM eligible AS e
+      91  JOIN users AS u ON u.id = e.user_id`
+      92  
+      93 -        sqlReadSnapshot = `SELECT user_id, channel::text, statu
+         -s, destination IS NULL, vars                                   
+      94 -FROM campaign_deliveries WHERE approval_id = $1 ORDER BY user_i
+         -d, channel`                                                    
+      93 +        // Ordered by the enum (d.channel), not the text output
+         + column of the                                                 
+      94 +        // same name: the digest order is sms before email.    
+      95 +        sqlReadSnapshot = `SELECT d.user_id, d.channel::text, d
+         +.status, d.destination IS NULL, d.vars                         
+      96 +FROM campaign_deliveries AS d WHERE d.approval_id = $1 ORDER BY
+         + d.user_id, d.channel`                                         
+      97  )
+      98  
+      99  // Repository runs approval transactions against PostgreSQL.
+  ⎿  Updated backend/test/integration/approval_test.go (+4 -3)
+      232  func (e *prepEnv) deliveries(approvalID campaign.ID) []deliver
+           yRow {
+      233          e.t.Helper()
+      234          rows, err := e.pool.Query(ctxBG, `
+      235 -SELECT user_id, channel::text, status, idempotency_key, vars::
+          -text, destination IS NULL, attempts, rate_limited_attempts,   
+      236 -       outcome_uncertain, lease_until IS NULL AND leased_by IS
+          - NULL, approval_id::text, campaign_id::text                   
+      237 -FROM campaign_deliveries WHERE approval_id = $1::uuid ORDER BY
+          - user_id, channel`, approvalID.String())                      
+      235 +SELECT d.user_id, d.channel::text, d.status, d.idempotency_key
+          +, d.vars::text, d.destination IS NULL, d.attempts,            
+      236 +       d.rate_limited_attempts, d.outcome_uncertain, d.lease_u
+          +ntil IS NULL AND d.leased_by IS NULL,                         
+      237 +       d.approval_id::text, d.campaign_id::text               
+      238 +FROM campaign_deliveries AS d WHERE d.approval_id = $1::uuid O
+          +RDER BY d.user_id, d.channel`, approvalID.String())           
+      239          if err != nil {
+      240                  e.t.Fatal(err)
+      241          }
+
+⏺ All CP14 integration tests pass. Confirming they actually ran, then running
+  the full suites.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ Fixing one muddled test comment, then documenting the CP14 decisions in
+  ARCHITECTURE.
+
+⏺ Update(backend/test/integration/approval_test.go)
+  ⎿  Added 3 lines, removed 4 lines
+      476        t.Errorf("vars contain contact data: %s", d.Vars)
+      477      }
+      478    }
+      479 -  // Render review: user 8's sms exceeds the city maximum; use
+          -r 3's email                                                   
+      480 -  // subject has no fallback for the blank first name. The bla
+          -nk name in                                                    
+      481 -  // the SMS uses its fallback, so the SMS of user 3 … is not 
+          -sent anyway                                                   
+      482 -  // (no sms eligibility) and user 1 renders fine.            
+      479 +  // Render review: user 8's SMS exceeds the {{city}} maximum;
+          + user 3's                                                     
+      480 +  // email subject has no fallback for the blank first name (u
+          +ser 3 is not                                                  
+      481 +  // sms-eligible). Users 1 and 5 render fine on both channels
+          +.                                                             
+      482    if got := s.Snapshot[segment.ChannelSMS].RenderIssues; fmt.S
+           print(got) != fmt.Sprint(map[string]int64{content.RenderValueT
+           ooLong: 1}) {
+      483      t.Errorf("sms render issues = %v", got)
+      484    }
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ Update(docs/ARCHITECTURE.md)
+  ⎿  Added 13 lines
+      578  - **No audience re-evaluation during sending.** New matching u
+           sers are never added. Users who stop matching the rule after p
+           repare (e.g. purchased) are still sent to; staleness is bounde
+           d by the 24 h expiry.
+      579  - **Personalization** values are frozen at prepare (`vars`). *
+           *Destination** is taken from the user's current contact at the
+            **first** dispatch precheck, persisted before the HTTP reques
+           t, and reused verbatim by every retry.
+      580  
+      581 +### 9.1 Preparation as implemented (CP14)                     
+      582 +                                                              
+      583 +CP14 is the backend half of the prepare step: `approval.Servic
+          +e.Prepare` / `ExpireDue`, `approval.Repository`, the campaign-
+          +side transitions (`campaign/approval.go`) and `segment.Compile
+          +Eligible`. Confirm, withdraw, send, the sweeper loop and the H
+          +TTP routes follow in CP15; until `POST /approvals` exists no A
+          +PI path can create an approval, so the "until Slice 3" refusal
+          +s of §7.8/§7.9/§11.1 stay in place.                           
+      584 +                                                              
+      585 +- **Transaction** (§5.5, READ COMMITTED, `lock_timeout` 5 s, `
+          +statement_timeout` 10 s, 30 s context deadline for the whole t
+          +ransaction; no I/O but the database): lock campaign → lazy exp
+          +iry (`expires_at <= clock_timestamp()` after the lock) → versi
+          +on CAS (`expected_version`) + state check → re-read the curren
+          +t content version (re-validated, must be the newest) → `Campai
+          +gn.ReviewForApproval` → revoke a still-live approval (`superse
+          +ded`) and delete its held rows (count must equal its `snapshot
+          +_count`) → partition via `segment.ComputeAudienceStats` → expe
+          +cted snapshot (per-channel counts + digest) via `segment.Compi
+          +leEligible` → insert approval → `INSERT … SELECT` held rows → 
+          +read them back in digest order → campaign `pending_approval`, 
+          +`active_approval_id`, `version+1`. The partition, the expected
+          + snapshot, the insert and the read-back are separate statement
+          +s; any disagreement between them (customer data committed by a
+          +nother session in between) rolls back with `ErrAudienceChanged
+          +` (retryable). Any other failure also rolls back everything, s
+          +o a superseded approval stays live when the new preparation fa
+          +ils, and no approval ever points at an incomplete snapshot.   
+      586 +- **Eligibility** is defined once in `segment.CompileEligible`
+          +: `WITH matched AS (<Compile(rule)>), eligible(user_id, channe
+          +l)` = contact present for the channel and an `opted_in` consen
+          +t row, for the selected channels only (bound as a parameter). 
+          +This is exactly the `eligible` cell of §6.5; preparation asser
+          +ts per channel that both agree. One row per (user, channel) by
+          + construction, plus `UNIQUE (campaign_id, user_id, channel)`. 
+      587 +- **Frozen values**: `vars = {"first_name", "last_name", "city
+          +"}` (the `content.Values` shape) copied verbatim from the user
+          + row inside the `INSERT … SELECT` — no contact data, no normal
+          +ization, no truncation, no fallback substitution; Go never rea
+          +ds them except in the read-back. **Unusable values do not chan
+          +ge eligibility** (the snapshot must equal the partition): the 
+          +read-back trial-renders every row with the deterministic rende
+          +rer and reports per channel the number of rows that would fail
+          + (`render_issues` by code: `missing_value`, `invalid_value`, `
+          +value_too_long`, `content_too_long`). Such a delivery fails pe
+          +rmanently at send time (§8.7). Fallbacks apply as in §8.1 (a b
+          +lank value uses the placeholder's fallback). Counts only; neve
+          +r values.                                                     
+      588 +- **Snapshot digest**: lower-case hex SHA-256 of lines `<user_
+          +id>:<channel>` sorted by user id, then channel in enum order (
+          +sms, email), joined by `\n` (no trailing newline). Computed in
+          + SQL before the insert (stored) and in Go over the read-back r
+          +ows; they must match.                                         
+      589 +- **Content review** (§7.9 requirement): `content.Parse` for t
+          +he selected channels via `ValidateStored` (missing text for a 
+          +selected channel → `422 validation_failed`; text for an unsele
+          +cted channel → warning `channel_not_selected`, it is never fro
+          +zen or sent) and the offer policy against the **current** cont
+          +ent brief. `unauthorized_offer` / `unauthorized_claim` finding
+          +s never block preparation (also not for AI versions, which cou
+          +ld not contain them); they are returned separately as `OfferFi
+          +ndings` for the approval dialog. A stored content brief that d
+          +oes not parse is an internal error (the offer check must not b
+          +e silently skipped). The rendered example uses `content.Exampl
+          +eValues` only.                                                
+      590 +- **Versions**: prepare advances `campaigns.version` (it is a 
+          +write). Expiry does **not**: it is a system transition that ch
+          +anges no authored field, so a marketer whose view predates the
+          + expiry can re-prepare or edit with the version they saw. A re
+          +peated prepare with the same `expected_version` (double submit
+          +) is `409 version_conflict`; it never supersedes the approval 
+          +the first request created. Superseding requires the current ve
+          +rsion — an explicit re-preparation, recorded as `revoke_reason
+          + = superseded`.                                               
+      591 +- **Expiry**: `expires_at = prepared_at + APPROVAL_PENDING_TTL
+          +` from one `clock_timestamp()` value taken after the lock (TTL
+          + is a service parameter, 1 s – 24 h, default 15 min; env wirin
+          +g with CP15). A due approval found by prepare is closed as `ex
+          +pired` (never `superseded`), even when it expired while prepar
+          +e waited for the lock (integration test). `ExpireDue` performs
+          + the §5.5 Expire transaction. Expired and revoked approvals ke
+          +ep their row (binding, stats, count, digest); only their held 
+          +rows are deleted.                                             
+      592 +- **Summary** (`approval.Summary`): approval id, campaign vers
+          +ion, segment version, content id + number, channels, the store
+          +d partition, count, digest, prepared/expires times, per-channe
+          +l held counts with render issues, the content review, and the 
+          +superseded/expired approval ids. It contains no user ids, name
+          +s, cities or contacts. Logs carry ids and counts only.        
+      593 +                                                              
+      594  ---
+      595  
+      596  ## 10. Delivery engine
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ Unit + race green. Now the full integration suite and staticcheck in parallel.
+
+  Listed 1 directory, ran 4 shell commands (ctrl+o to expand)
+
+⏺ The documented TLS proxy issue occurred. Checking for the pinned v0.8.2 in the
+  local module cache (offline, no TLS bypass).
+
+  Ran 2 shell commands (ctrl+o to expand)
+
+⏺ Bash(python3 -c "
+      p='internal/approval/approval_test.go'…)
+  ⎿  90:             {"zero-width name without fallback", strict,
+     segment.ChannelEmail,
+     content.Values{FirstName: "\u200b", LastName: "X"}, content.RenderMiss
+     ingValue},
+     … +3 lines (ctrl+o to expand)
+  ⎿  Updated backend/internal/approval/approval_test.go (+1 -1)
+      87                  {"valid sms", strict, segment.ChannelSMS, ok, "
+          "},
+      88                  {"valid email", strict, segment.ChannelEmail, o
+          k, ""},
+      89                  {"blank name without fallback", strict, segment
+          .ChannelSMS, content.Values{FirstName: "   ", City: "Ankara"}, 
+          content.RenderMissingValue},
+      90 -                {"zero-width name without fallback", strict, se
+         -gment.ChannelEmail, content.Values{FirstName: "", LastName: "X"
+         -}, content.RenderMissingValue},                                
+      90 +                {"zero-width name without fallback", strict, se
+         +gment.ChannelEmail, content.Values{FirstName: "\u200b", LastNam
+         +e: "X"}, content.RenderMissingValue},                          
+      91                  {"blank name with fallback", fallback, segment.
+          ChannelSMS, content.Values{FirstName: "   "}, ""},
+      92                  {"blank last name with fallback", fallback, seg
+          ment.ChannelEmail, content.Values{FirstName: "A", LastName: " "
+          }, ""},
+      93                  {"control character", fallback, segment.Channel
+          SMS, content.Values{FirstName: "A\nB"}, content.RenderInvalidVa
+          lue},
+
+⏺ Lint clean. Frontend contracts are untouched, but running its tests and
+  typecheck as a quick regression check.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ CP14 is done and stops here for your review. Approval preparation now works
+  end to end in the backend: it locks the campaign, rechecks everything, freezes
+  the eligible recipients as held rows bound to a new pending approval, and
+  moves the campaign to pending_approval. All backend, frontend and lint checks
+  pass. Nothing is committed.
+
+  Baseline
+
+  - The working tree was clean, HEAD 07f6873 is slice-2-complete, and all unit
+    and integration tests passed before I changed anything.
+  - Scope vs. ROADMAP Slice 3: CP14 is a subset. These Slice 3 items are not
+    done: confirm, withdraw, the worker expiry sweeper, POST /cancel, lazy
+    ExpireDue on other API calls, and the frontend ApprovalDialog. PUT /content
+    already shipped in CP13.
+
+  1. Files
+
+  - New:
+    - approval.go, repository.go, service.go, approval_test.go
+    - campaign/approval.go and its test
+    - segment/eligible.go and its test
+    - test/integration/approval_test.go
+  - Modified: ARCHITECTURE.md, which gets a new §9.1 recording every decision
+    below. There are no migrations; the existing schema was enough.
+
+  2–8. Behaviour
+
+  - Transitions:
+    - Prepare is allowed from content_ready, pending_approval and approved, and
+      ends in pending_approval.
+    - Expiry goes from pending_approval/approved back to content_ready.
+    - Draft, segmented, sending and terminal campaigns get a state error. No
+      channels selected gives a 422. Content that doesn't cover the selected
+      channels gives a 422 with field errors. A stale version gives a 409.
+  - Schema use: only existing columns are used. prepared_at and expires_at come
+    from a single clock_timestamp() reading taken after the lock, so the
+    15-minute TTL is exact. The idempotency key is campaign:user:channel, and
+    destination stays NULL until sending.
+  - Eligibility: the new segment.CompileEligible is the one definition. It wraps
+    the existing parameterized compiler and keeps a recipient for a channel
+    only if they have the contact and an opted_in consent. Preparation
+    recomputes the audience, writes the held rows in a single INSERT … SELECT,
+    reads them back, and requires the counts and the snapshot digest to match.
+    Any mismatch rolls back with a retryable error.
+  - Frozen values: vars holds exactly first_name, last_name and city, copied
+    verbatim. Unusable values don't remove anyone from the snapshot, because the
+    snapshot must equal the audience counts. Instead, every row is
+    trial-rendered and the review reports how many would fail, by reason. Those
+    deliveries fail permanently at send time, as the architecture specifies.
+  - Binding: the approval records segment version, a frozen copy of the rule,
+    the immutable content id, channels, audience counts, snapshot count and
+    digest. The content version is re-read under the lock and must be the
+    newest.
+  - Offer review: preparation re-runs content validation and the keyword-based
+    offer check against the current content brief. Unauthorized offer or price
+    findings never block preparation; they come back as a separate list for the
+    approval dialog.
+  - Concurrency: lock order is campaign, then approval, then deliveries. Lock,
+    statement and whole-transaction timeouts are set. There is no network I/O
+    inside the transaction and no LLM call anywhere in the package.
+
+  9. Tests
+
+  - Backend unit tests, race tests, the full integration suite with -race and
+    the frontend tests/typecheck all pass.
+  - 15 new integration tests cover your list, including:
+    - eight concurrent prepares, where exactly one succeeds;
+    - an edit racing a prepare waiting on the lock, which is rejected;
+    - an approval expiring during that lock wait, which is closed as expired
+      rather than superseded;
+    - failures injected by database triggers, which roll everything back;
+    - a 5,000-user seeded run reconciled against independent SQL;
+    - checks that no names or contacts appear in logs, summaries or LLM
+      requests.
+  - A guard in the read-back caught a real bug during the work: ORDER BY channel
+    was sorting alphabetically instead of in enum order. It's fixed.
+  - staticcheck: make lint hit the known TLS certificate error. I built the
+    exact pinned v0.8.2 from the local module cache with GOPROXY=off and ran it
+    on the default, integration and live tags; all clean after one fix (an
+    escaped U+200B in a test).
+  - Not run: Docker Compose and smoke tests, since no HTTP route or binary
+    changed. No paid model calls were made.
+
+  10. Decisions for your review
+
+  1. Re-preparing an approved campaign supersedes its approval. §5.2 documents
+     this, which conflicts with your instruction not to auto-revoke approved
+     campaigns. It needs the current version, so a double-submit gets a 409
+     instead. If you want approved refused, it's a one-line change.
+  2. Prepare increments the campaign version; expiry does not, so a marketer can
+     re-prepare with the version they saw before it expired.
+  3. Text for an unselected channel is a warning, not an error, per §7.9. This
+     differs from "covers the selected channels exactly".
+  4. Whether confirm needs an explicit acknowledgement of offer findings is 
+     undocumented. That's a CP15 decision.
+  5. No HTTP endpoints yet. POST /approvals exists in the spec, but without
+     withdraw or lazy expiry the UI would be stuck in pending_approval. The
+     APPROVAL_PENDING_TTL environment variable is also not loaded yet; it gets
+     wired with the service in CP15.
+  6. Read committed plus assertions, rather than one big statement. A concurrent
+     consent change during prepare gives a retryable error instead of an
+     inconsistent snapshot.
+
+❯ CP14 implementation report reviewed. The overall architecture is accepted,    
+  but before committing we need a focused lifecycle and database-invariant      
+  review.                                                                       
+  Do not redesign CP14. Read the exact requirements in ARCHITECTURE §5, §9 and  
+  the approval/delivery ADRs, and check the implemented migrations and code.    
+  1. Approved campaign re-preparation                                           
+  The current implementation allows `approved → pending_approval` and           
+  supersedes the approved snapshot.                                             
+  This appears to follow one part of §5.2 but conflicts with the earlier safety 
+  requirement not to silently revoke an approved campaign.                      
+  Determine precisely what the documented workflow requires.                    
+  Preferred product behavior:                                                   
+                                                                                
+  * A normal approval-preparation operation must not silently invalidate an     
+  approved campaign.                                                            
+  * If explicit re-preparation is a documented user action, it may be supported 
+  only with a clear explicit contract and an atomic transition of the old       
+  approval.                                                                     
+  * If the API does not yet support that distinction, reject normal prepare in  
+  `approved` for CP14 and defer explicit re-preparation to CP15.                
+                                                                                
+  Choose the smallest implementation consistent with the existing architecture. 
+  Explain the decision and add regression tests.                                
+  2. Expiry and optimistic concurrency                                          
+  Review the decision that expiry changes campaign status but does not          
+  increment campaign version.                                                   
+  Verify with actual code and tests that:                                       
+                                                                                
+  * A stale client cannot bypass state checks after expiry.                     
+  * Confirmation of an expired pending approval cannot succeed.                 
+  * The approved and pending TTL policies are correctly distinguished.          
+  * An expired approval cannot become active again.                             
+  * A later prepare cannot accidentally reuse the expired approval's snapshot.  
+  * Concurrent expiry and preparation cannot create two active approvals.       
+                                                                                
+  If no version increment is an explicit documented choice, preserve it and     
+  prove its safety. Otherwise propose the narrowest correction.                 
+  3. Idempotency and snapshot uniqueness                                        
+  The reported delivery idempotency key is `campaign:user:channel`.             
+  Check the actual PostgreSQL unique constraints and all planned worker         
+  idempotency requirements.                                                     
+  Verify that:                                                                  
+                                                                                
+  * Re-preparing the same campaign does not collide with historical held        
+  delivery rows in an invalid way.                                              
+  * The same user/channel can appear in a later approval snapshot when          
+  intended, without being mistaken for the earlier approval.                    
+  * One approval never has duplicate user/channel delivery rows.                
+  * Historical approval and delivery records remain immutable where required.   
+  * Retry idempotency still prevents duplicate sends later.                     
+                                                                                
+  Do not change the key format speculatively. Ground any fix in the real schema 
+  and delivery contract.                                                        
+  4. Audience consistency under concurrent consent changes                      
+  Review the actual SQL transaction isolation and snapshot digest check.        
+  Verify that the frozen rows correspond to a coherent eligible audience and    
+  that changes to consent or contact during preparation cannot create a         
+  silently inconsistent approval.                                               
+  Explain exactly what the current transaction guarantees and what must be      
+  rechecked at send time.                                                       
+  Do not hold locks on all customers unnecessarily or introduce serializable    
+  isolation without a demonstrated need.                                        
+  5. Offer findings and channel-content mismatch                                
+  Confirm that:                                                                 
+                                                                                
+  * Offer/price findings are included in the prepared review summary.           
+  * Their handling is documented as advisory at preparation and requires        
+  visible review at confirmation.                                               
+  * Content for every selected channel is required.                             
+  * Extra valid text for an unselected channel is handled according to the      
+  documented policy.                                                            
+  * Approval always binds the current immutable content ID and segment version. 
+                                                                                
+  6. Verification                                                               
+  Run focused domain and PostgreSQL integration tests for any changes, plus     
+  full backend unit, race, integration and lint checks.                         
+  Do not make paid Anthropic API calls.                                         
+  Use only the documented safe TLS workaround or the exact pinned local         
+  staticcheck binary; report honestly if the literal `make lint` command still  
+  cannot download its dependency.                                               
+  7. Completion                                                                 
+  Report:                                                                       
+                                                                                
+  1. The exact lifecycle decision for approved re-preparation.                  
+  2. Expiry/version safety.                                                     
+  3. Actual idempotency-key uniqueness constraints.                             
+  4. Consent concurrency guarantees and send-time rechecks.                     
+  5. Files changed and tests added.                                             
+  6. Remaining CP14 commit blockers.                                            
+                                                                                
+  Do not commit.                                                                
+  Do not start CP15.                                                            
+  Stop for review.                                                              
+
+⏺ Starting the lifecycle/invariant review. Plan first, then re-reading the exact
+  SQL I'll touch.
+
+  Searched for 1 pattern (ctrl+o to expand)
+
+⏺ The §11.1 spec says every write bumps version, so skipping the bump on expiry
+  was only my own CP14 note, not a documented choice. I'll analyze whether it's
+  provably safe, keep it if so and record it as an explicit exception, then make
+  the segment change that closes the item 4 consistency gap.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ Bash(python3 - <<'EOF'
+      p='internal/segment/audience_repo.go'…)
+  ⎿  Updated backend/internal/segment/audience_repo.go (+13 -5)
+      25          //
+      26          // Per channel: 0 = no_contact, 1 = no_consent, 2 = eli
+          gible.
+      27          sqlAudienceStatsHead = `WITH matched AS (`
+      28 -        sqlAudienceStatsTail = `),                             
+      28 +        sqlAudienceStatsTail = sqlClassifiedCTE + "\n" + sqlAud
+         +ienceCells + "\nFROM classified"                               
+      29 +                                                               
+      30 +        // sqlClassifiedCTE closes matched and classifies every
+         + matched user per                                              
+      31 +        // channel. It is the single definition of the partitio
+         +n; the eligible                                                
+      32 +        // recipients of a frozen audience (CompileEligible) ar
+         +e derived from it.                                             
+      33 +        sqlClassifiedCTE = `),                                 
+      34  classified AS (
+      35    SELECT
+      36 +    u.id AS user_id,                                           
+      37      CASE WHEN u.phone IS NULL THEN 0 WHEN sc.status = 'opted_in
+          ' THEN 2 ELSE 1 END AS sms,
+      38      CASE WHEN u.email IS NULL THEN 0 WHEN ec.status = 'opted_in
+          ' THEN 2 ELSE 1 END AS email
+      39    FROM matched AS m
+      40    JOIN users AS u ON u.id = m.id
+      41    LEFT JOIN channel_consents AS sc ON sc.user_id = u.id AND sc.
+          channel = 'sms'
+      42    LEFT JOIN channel_consents AS ec ON ec.user_id = u.id AND ec.
+          channel = 'email'
+      37 -)                                                              
+      38 -SELECT                                                         
+      43 +)`                                                             
+      44 +                                                               
+      45 +        // sqlAudienceCells are the raw partition counts over c
+         +lassified                                                      
+      46 +        // (audienceCells order).                              
+      47 +        sqlAudienceCells = `SELECT                             
+      48    count(*),
+      49    count(*) FILTER (WHERE sms = 0),
+      50    count(*) FILTER (WHERE sms = 1),
+     ...
+      56    count(*) FILTER (WHERE sms = 2 AND email <> 2),
+      57    count(*) FILTER (WHERE sms <> 2 AND email = 2),
+      58    count(*) FILTER (WHERE sms <> 2 AND email <> 2),
+      50 -  now()                                                        
+      51 -FROM classified`                                               
+      59 +  now()`                                                       
+      60  )
+      61  
+      62  // rollbackTimeout bounds the transaction cleanup that runs aft
+          er Stats returns.
+
+⏺ Now eligible is derived from the same classified CTE, and a new
+  single-statement function returns the partition together with the eligible
+  snapshot.
+
+⏺ Write(backend/internal/segment/eligible.go)
+  ⎿  Added 90 lines, removed 28 lines
+      1  package segment
+      2  
+      3  import (
+      4 +  "context"                                                     
+      5    "errors"
+      6 +  "fmt"                                                         
+      7    "strconv"
+      8    "strings"
+      9  )
+     ...
+      12  // selection: there is no recipient set to freeze.
+      13  var ErrNoChannels = errors.New("segment: no channel selected")
+      14  
+      13 -// channelsMarker in sqlEligibleTail is replaced by the channel
+         -s placeholder                                                  
+      15 +// channelsMarker in sqlEligibleCTE is replaced by the channels
+         + placeholder                                                   
+      16  // ("$n"), so the statement text stays constant apart from plac
+          eholder numbers.
+      17  const channelsMarker = "%CHANNELS%"
+      18  
+      17 -// sqlEligibleTail follows the compiled matched-users statement
+         -. It defines                                                   
+      18 -// eligible(user_id, channel): one row per matched user and sel
+         -ected channel                                                  
+      19 -// on which the user is eligible (ARCHITECTURE §6.5), i.e. the 
+         -user has a                                                     
+      20 -// contact for the channel (phone for sms, email for email) and
+         - an opted_in                                                   
+      21 -// consent row. This is exactly the "eligible" cell of the audi
+         -ence                                                           
+      22 -// partition; a missing consent row or opted_out is no_consent,
+         - a missing                                                     
+      23 -// contact is no_contact, and neither produces a row.          
+      19 +// sqlEligibleCTE follows sqlClassifiedCTE. It defines eligible
+         +(user_id,                                                      
+      20 +// channel): one row per matched user and selected channel whos
+         +e partition                                                    
+      21 +// cell is eligible (code 2: contact present and an opted_in co
+         +nsent row,                                                     
+      22 +// ARCHITECTURE §6.5). It is derived from classified, so the fr
+         +ozen                                                           
+      23 +// recipients are by construction the eligible cell of the part
+         +ition.                                                         
+      24  //
+      25 -// Uniqueness: matched has one row per user (Compile selects th
+         -e primary                                                      
+      26 -// key), the selected channels are de-duplicated before they ar
+         -e bound, and                                                   
+      27 -// channel_consents has PRIMARY KEY (user_id, channel), so (use
+         -r_id, channel)                                                 
+      28 -// is unique in eligible.                                      
+      29 -const sqlEligibleTail = `),                                    
+      25 +// Uniqueness: classified has one row per matched user (matched
+         + selects the                                                   
+      26 +// primary key; each LEFT JOIN matches at most one consent row 
+         +by PRIMARY KEY                                                 
+      27 +// (user_id, channel)), and the selected channels are de-duplic
+         +ated before                                                    
+      28 +// they are bound, so (user_id, channel) is unique in eligible.
+      29 +const sqlEligibleCTE = `,                                      
+      30  eligible AS (
+      31 -  SELECT u.id AS user_id, ch.channel                           
+      32 -  FROM matched AS m                                            
+      33 -  JOIN users AS u ON u.id = m.id                               
+      31 +  SELECT c.user_id, ch.channel                                 
+      32 +  FROM classified AS c                                         
+      33    CROSS JOIN unnest(%CHANNELS%::text[]::channel[]) AS ch(channe
+          l)
+      35 -  JOIN channel_consents AS cc                                  
+      36 -    ON cc.user_id = u.id AND cc.channel = ch.channel AND cc.sta
+         -tus = 'opted_in'                                               
+      37 -  WHERE (CASE ch.channel WHEN 'sms' THEN u.phone WHEN 'email' T
+         -HEN u.email END) IS NOT NULL                                   
+      34 +  WHERE (CASE ch.channel WHEN 'sms' THEN c.sms WHEN 'email' THE
+         +N c.email END) = 2                                             
+      35  )
+      36  `
+      37  
+      41 -// EligibleQuery is a WITH clause defining the CTEs matched(id)
+         - and                                                           
+      42 -// eligible(user_id, channel) for a rule and a channel selectio
+         -n. The caller                                                  
+      43 -// appends one statement that reads eligible (SELECT, or INSERT
+         - … SELECT) and                                                 
+      44 -// binds its own values starting at placeholder NextParam.     
+      38 +// sqlSnapshotDigest is the snapshot digest over eligible: lowe
+         +r-case hex                                                     
+      39 +// SHA-256 of the lines "<user_id>:<channel>" ordered by user_i
+         +d, then                                                        
+      40 +// channel in enum order (sms, email), joined by "\n" without a
+         + trailing                                                      
+      41 +// newline (the empty set hashes ""). approval.Digest computes 
+         +the same value                                                 
+      42 +// in Go.                                                      
+      43 +const sqlSnapshotDigest = `encode(sha256(convert_to(COALESCE(  
+      44 +  string_agg(user_id::text || ':' || channel::text, E'\n' ORDER
+         + BY user_id, channel), ''), 'UTF8')), 'hex')`                  
+      45 +                                                               
+      46 +// sqlSnapshotAudienceTail follows EligibleQuery.With: the part
+         +ition cells                                                    
+      47 +// and, in the same statement (one snapshot), the eligible coun
+         +ts and digest.                                                 
+      48 +const sqlSnapshotAudienceTail = sqlAudienceCells + `,          
+      49 +  (SELECT count(*) FROM eligible WHERE channel = 'sms'),       
+      50 +  (SELECT count(*) FROM eligible WHERE channel = 'email'),     
+      51 +  (SELECT ` + sqlSnapshotDigest + ` FROM eligible)             
+      52 +FROM classified`                                               
+      53 +                                                               
+      54 +// EligibleQuery is a WITH clause defining the CTEs matched(id)
+         +,                                                              
+      55 +// classified(user_id, sms, email) and eligible(user_id, channe
+         +l) for a rule                                                  
+      56 +// and a channel selection. The caller appends one statement th
+         +at reads                                                       
+      57 +// eligible (SELECT, or INSERT … SELECT) and binds its own valu
+         +es starting                                                    
+      58 +// at placeholder NextParam.                                   
+      59  type EligibleQuery struct {
+      60    // With starts with "WITH matched AS (" and ends after the el
+          igible CTE.
+      61    With string
+     ...
+      68  // CompileEligible builds the eligible-recipient query of rule 
+          for the
+      69  // selected channels. Like Compile, every byte of SQL text is a
+           constant of
+      70  // this package; the rule's values and the channels are bind pa
+          rameters. It
+      57 -// is the single definition of channel eligibility for frozen a
+         -udiences                                                       
+      58 -// (approval preparation); the audience statistics use the same
+      59 -// classification (sqlAudienceStatsTail), and approval preparat
+         -ion asserts in                                                 
+      60 -// its transaction that both agree.                            
+      71 +// is the single definition of the recipients of a frozen audie
+         +nce                                                            
+      72 +// (approval preparation).                                     
+      73  func CompileEligible(rule Validated, channels []Channel) (Eligi
+          bleQuery, error) {
+      74    matchedSQL, args, err := Compile(rule)
+      75    if err != nil {
+     ...
+       89    args = append(args, names)
+       90    placeholder := "$" + strconv.Itoa(len(args))
+       91    return EligibleQuery{
+       80 -    With:      sqlAudienceStatsHead + matchedSQL + strings.Rep
+          -lace(sqlEligibleTail, channelsMarker, placeholder, 1),        
+       92 +    With:      sqlAudienceStatsHead + matchedSQL + sqlClassifi
+          +edCTE + strings.Replace(sqlEligibleCTE, channelsMarker, placeh
+          +older, 1),                                                    
+       93      Args:      args,
+       94      NextParam: len(args) + 1,
+       95    }, nil
+       96  }
+       97 +                                                              
+       98 +// EligibleSnapshot summarizes the eligible recipients of a se
+          +lection.                                                      
+       99 +type EligibleSnapshot struct {                                
+      100 +  SMS, Email int64                                            
+      101 +  // Digest is the snapshot digest (see sqlSnapshotDigest).   
+      102 +  Digest string                                               
+      103 +}                                                             
+      104 +                                                              
+      105 +// ComputeSnapshotAudience computes, in ONE statement and ther
+          +efore from one                                                
+      106 +// database snapshot, the audience partition of rule for the s
+          +elected                                                       
+      107 +// channels and the per-channel counts and digest of its eligi
+          +ble recipients.                                               
+      108 +// The partition shown to the marketer and the recipient set a
+          +n approval                                                    
+      109 +// freezes thus describe the same instant; the caller verifies
+          + that the rows                                                
+      110 +// it inserts afterwards (another statement) have the same dig
+          +est.                                                          
+      111 +func ComputeSnapshotAudience(ctx context.Context, q Querier, r
+          +ule Validated, channels []Channel) (AudienceStats, EligibleSna
+          +pshot, error) {                                               
+      112 +  eq, err := CompileEligible(rule, channels)                  
+      113 +  if err != nil {                                             
+      114 +    return AudienceStats{}, EligibleSnapshot{}, err           
+      115 +  }                                                           
+      116 +  sel, _ := NormalizeChannels(channels) // validated by Compil
+          +eEligible                                                     
+      117 +  var (                                                       
+      118 +    c    audienceCells                                        
+      119 +    snap EligibleSnapshot                                     
+      120 +  )                                                           
+      121 +  err = q.QueryRow(ctx, eq.With+sqlSnapshotAudienceTail, eq.Ar
+          +gs...).Scan(                                                  
+      122 +    &c.matched,                                               
+      123 +    &c.smsNoContact, &c.smsNoConsent, &c.smsElig,             
+      124 +    &c.emailNoContact, &c.emailNoConsent, &c.emElig,          
+      125 +    &c.bothElig, &c.smsOnlyElig, &c.emailOnlyElig, &c.neitherE
+          +lig,                                                          
+      126 +    &c.computedAt,                                            
+      127 +    &snap.SMS, &snap.Email, &snap.Digest,                     
+      128 +  )                                                           
+      129 +  if err != nil {                                             
+      130 +    if ctxErr := ctx.Err(); ctxErr != nil && !errors.Is(err, c
+          +txErr) {                                                      
+      131 +      err = fmt.Errorf("%w (%w)", ctxErr, err)                
+      132 +    }                                                         
+      133 +    return AudienceStats{}, EligibleSnapshot{}, fmt.Errorf("se
+          +gment: snapshot audience query: %w", err)                     
+      134 +  }                                                           
+      135 +  c.computedAt = c.computedAt.UTC()                           
+      136 +  stats, err := c.project(sel)                                
+      137 +  if err != nil {                                             
+      138 +    return AudienceStats{}, EligibleSnapshot{}, err           
+      139 +  }                                                           
+      140 +  // Same statement, same snapshot: a mismatch is a bug, never
+          + a race.                                                      
+      141 +  if snap.SMS != stats.ByChannel[ChannelSMS].Eligible || snap.
+          +Email != stats.ByChannel[ChannelEmail].Eligible {             
+      142 +    return AudienceStats{}, EligibleSnapshot{}, fmt.Errorf("%w
+          +: eligible recipients (sms %d, email %d) differ from the parti
+          +tion",                                                        
+      143 +      ErrPartitionViolation, snap.SMS, snap.Email)            
+      144 +  }                                                           
+      145 +  return stats, snap, nil                                     
+      146 +}                                                             
+
+⏺ Updating the approval transaction to use the single-statement snapshot, and
+  refusing approved.
+
+⏺ Bash(python3 - <<'EOF'
+      p='internal/approval/repository.go'…)
+  ⎿  internal/approval/approval.go:158:// sqlDigest computes the same value
+      in PostgreSQL; preparation computes it
+  ⎿  Updated backend/internal/approval/repository.go (+7 -26)
+      59  
+      60          sqlCountApprovalRows = `SELECT count(*) FROM campaign_d
+          eliveries WHERE approval_id = $1`
+      61  
+      62 -        // sqlDigest is the snapshot digest of approval.go over
+         - a relation with                                               
+      63 -        // columns user_id and channel (enum order sms < email)
+         -.                                                              
+      64 -        sqlDigest = `encode(sha256(convert_to(COALESCE(        
+      65 -  string_agg(user_id::text || ':' || channel::text, E'\n' ORDER
+         - BY user_id, channel), ''), 'UTF8')), 'hex')`                  
+      66 -                                                               
+      67 -        sqlExpectedSnapshot = `SELECT count(*) FILTER (WHERE ch
+         -annel = 'sms'), count(*) FILTER (WHERE channel = 'email'), ` + 
+      68 -                sqlDigest + ` FROM eligible`                   
+      69 -                                                               
+      62          // prepared_at and expires_at derive from one clock_tim
+          estamp() value
+      63          // taken after the campaign lock, so expires_at - prepa
+          red_at = TTL exactly.
+      64          sqlInsertApproval = `INSERT INTO campaign_approvals
+     ...
+      347                  superseded = &id
+      348          }
+      349  
+      358 -        // 5. Partition, recomputed now (preview counts are ne
+          -ver reused).                                                  
+      359 -        stats, err := segment.ComputeAudienceStats(ctx, tx, cu
+          -r.Segment, cur.Channels)                                      
+      350 +        // 5–6. Partition and expected snapshot in ONE stateme
+          +nt (one database                                              
+      351 +        // snapshot), recomputed now: preview counts are never
+          + reused.                                                      
+      352 +        stats, want, err := segment.ComputeSnapshotAudience(ct
+          +x, tx, cur.Segment, cur.Channels)                             
+      353          if err != nil {
+      354                  return Summary{}, fmt.Errorf("campaign %s: aud
+           ience: %w", cur.ID, err)
+      355          }
+      356          if stats.Messages == 0 {
+      357                  return Summary{}, &EmptyAudienceError{Stats: s
+           tats}
+      358          }
+      366 -                                                              
+      367 -        // 6. Expected snapshot from the eligibility query.   
+      359          eq, err := segment.CompileEligible(cur.Segment, cur.Ch
+           annels)
+      360          if err != nil {
+      361                  return Summary{}, fmt.Errorf("campaign %s: com
+           pile eligible: %w", cur.ID, err)
+      362          }
+      372 -        var wantSMS, wantEmail int64                          
+      373 -        var wantDigest string                                 
+      374 -        if err := tx.QueryRow(ctx, eq.With+sqlExpectedSnapshot
+          -, eq.Args...).Scan(&wantSMS, &wantEmail, &wantDigest); err != 
+          -nil {                                                         
+      375 -                return Summary{}, fmt.Errorf("campaign %s: exp
+          -ected snapshot: %w", cur.ID, err)                             
+      376 -        }                                                     
+      377 -        if wantSMS != stats.ByChannel[segment.ChannelSMS].Elig
+          -ible ||                                                       
+     … 33 more lines (ctrl+o to expand)
+
+⏺ Bash(sed -i '' 's|^// sqlDigest computes the same value in PostgreSQL;
+      preparation computes it|// segment.ComputeSnapshotAudience computes the
+      same value in PostgreS…)  ⎿  // ---- Snapshot digest ----
+
+     // The snapshot digest (campaign_approvals.snapshot_digest) is the low
+     … +22 lines (ctrl+o to expand)
+  ⎿  Updated backend/internal/approval/approval.go (+2 -1)
+      155  // "<user_id>:<channel>", sorted by user_id ascending and then
+            channel in
+      156  // canonical order (sms, email — the channel enum order), join
+           ed by "\n"
+      157  // without a trailing newline. The empty snapshot hashes the e
+           mpty string.
+      158 -// sqlDigest computes the same value in PostgreSQL; preparatio
+          -n computes it                                                 
+      158 +// segment.ComputeSnapshotAudience computes the same value in 
+          +PostgreSQL;                                                   
+      159 +// preparation computes it                                    
+      160  // both ways and requires them to agree.
+      161  
+      162  // digester accumulates the digest of recipients added in snap
+           shot order and
+
+⏺ Bash(python3 - <<'EOF'
+      p='internal/approval/approval.go'…)
+  ⎿  type PrepareParams struct {
+             CampaignID campaign.ID
+             // ExpectedVersion is the campaign version the marketer
+     reviewed.
+     … +33 lines (ctrl+o to expand)
+  ⎿  Updated backend/internal/approval/approval.go (+1 -2)
+      156  // canonical order (sms, email — the channel enum order), join
+           ed by "\n"
+      157  // without a trailing newline. The empty snapshot hashes the e
+           mpty string.
+      158  // segment.ComputeSnapshotAudience computes the same value in 
+           PostgreSQL;
+      159 -// preparation computes it                                    
+      160 -// both ways and requires them to agree.                      
+      159 +// preparation computes it both ways and requires them to agre
+          +e.                                                            
+      160  
+      161  // digester accumulates the digest of recipients added in snap
+           shot order and
+      162  // rejects out-of-order or duplicate entries.
+  ⎿  Updated backend/internal/approval/repository.go (+17 -16)
+      111  //  3. check the version (CAS) and the state machine, re-read 
+           and
+      112  //     re-validate the current content version for the selecte
+           d channels
+      113  //     against the current content brief (incl. offer findings
+           );
+      114 -//  4. revoke a still-live approval (superseded) and delete it
+          -s held rows;                                                  
+      115 -//  5. compute the audience partition (segment.ComputeAudience
+          -Stats);                                                       
+      116 -//     no eligible recipient ⇒ *EmptyAudienceError, rollback; 
+      117 -//  6. compute the expected snapshot (per-channel counts and d
+          -igest) from                                                   
+      118 -//     segment.CompileEligible and require it to equal the par
+          -tition;                                                       
+      119 -//  7. insert the pending approval (binding segment version + 
+          -frozen rule,                                                  
+      114 +//  4. revoke a still-live pending approval (superseded) and d
+          +elete its                                                     
+      115 +//     held rows (an approved campaign is refused in step 3); 
+      116 +//  5. compute, in ONE statement (segment.ComputeSnapshotAudie
+          +nce), the                                                     
+      117 +//     audience partition and the expected snapshot (per-chann
+          +el eligible                                                   
+      118 +//     counts and digest); no eligible recipient ⇒ *EmptyAudie
+          +nceError;                                                     
+      119 +//  6. insert the pending approval (binding segment version + 
+          +frozen rule,                                                  
+      120  //     content id, channels, partition, count, digest, prepare
+           d_at and
+      121  //     expires_at from clock_timestamp());
+      122 -//  8. INSERT … SELECT the held rows (frozen vars, idempotency
+          - keys);                                                       
+      123 -//  9. read the held rows back in order: counts and digest mus
+          -t equal step                                                  
+      124 -//     6 (else ErrAudienceChanged, rollback); trial-render eac
+          -h frozen value                                                
+      125 -//     set for the review;                                    
+      126 -//  10. campaign → pending_approval, active_approval_id, versi
+          -on +1; commit.                                                
+      122 +//  7. INSERT … SELECT the held rows (frozen vars, idempotency
+          + keys) from                                                   
+      123 +//     the same eligible definition;                          
+      124 +//  8. read the held rows back in order: counts and digest mus
+          +t equal step                                                  
+      125 +//     5 (else ErrAudienceChanged: customer data committed bet
+          +ween the two                                                  
+      126 +//     statements; rollback); trial-render each frozen value s
+          +et;                                                           
+      127 +//  9. campaign → pending_approval, active_approval_id, versio
+          +n +1; commit.                                                 
+      128  //
+      129  // Every failure rolls back the whole transaction, so no appro
+           val ever
+      130  // points at an incomplete snapshot and a superseded approval 
+           stays live
+     ...
+      348                  superseded = &id
+      349          }
+      350  
+      350 -        // 5–6. Partition and expected snapshot in ONE stateme
+          -nt (one database                                              
+      351 +        // 5. Partition and expected snapshot in ONE statement
+          + (one database                                                
+      352          // snapshot), recomputed now: preview counts are never
+            reused.
+      353          stats, want, err := segment.ComputeSnapshotAudience(ct
+           x, tx, cur.Segment, cur.Channels)
+      354          if err != nil {
+     ...
+      362                  return Summary{}, fmt.Errorf("campaign %s: com
+           pile eligible: %w", cur.ID, err)
+     … 31 more lines (ctrl+o to expand)
+
+⏺ Bash(python3 - <<'EOF'
+      p='internal/campaign/approval.go'…)
+  ⎿  --- FAIL: TestCheckPrepareApprovalStates (0.00s)
+         approval_test.go:73: approved: campaign: prepare_approval is not a
+     llowed in status approved: the campaign is approved; withdraw the appr
+     … +13 lines (ctrl+o to expand)
+  ⎿  Updated backend/internal/approval/repository.go (+5 -0)
+      341          }
+      342          var superseded *campaign.ID
+      343          if live != nil {
+      344 +                // Only a pending approval is ever superseded;
+          + an approved one was                                          
+      345 +                // refused by the state check (defence in dept
+          +h).                                                           
+      346 +                if live.status != StatusPending {             
+      347 +                        return Summary{}, fmt.Errorf("%w: refu
+          +sing to supersede %s approval %s", ErrInconsistent, live.statu
+          +s, live.id)                                                   
+      348 +                }                                             
+      349                  if err := closeApproval(ctx, tx, cur, live, sq
+           lRevokeApproval, string(RevokeSuperseded)); err != nil {
+      350                          return Summary{}, err
+      351                  }
+  ⎿  Updated backend/internal/campaign/approval.go (+19 -6)
+      22  // OpPrepareApproval is the prepare operation (§5.2).
+      23  const OpPrepareApproval Operation = "prepare_approval"
+      24  
+      25 +// reasonApproved explains why prepare refuses an approved camp
+         +aign.                                                          
+      26 +const reasonApproved = "the campaign is approved; withdraw the 
+         +approval before preparing a new one"                           
+      27 +                                                               
+      28  // CheckPrepareApproval reports whether an approval may be prep
+          ared now
+      26 -// (§5.5): status content_ready, pending_approval or approved (
+         -a live                                                         
+      27 -// approval in the latter two is superseded by the caller), a s
+         -tored rule,                                                    
+      28 -// a stored content brief, a current content version and at lea
+         -st one                                                         
+      29 -// selected channel. It does not look at the content text; see 
+      30 -// ReviewForApproval.                                          
+      29 +// (§5.5): status content_ready or pending_approval (the pendin
+         +g approval is                                                  
+      30 +// superseded by the caller), a stored rule, a stored content b
+         +rief, a                                                        
+      31 +// current content version and at least one selected channel. I
+         +t does not                                                     
+      32 +// look at the content text; see ReviewForApproval.            
+      33 +//                                                             
+      34 +// approved is refused (CP14 decision, ARCHITECTURE §9.1): §5.2
+         + lists                                                         
+      35 +// approved → prepare → pending_approval, but the prepare reque
+         +st has no way                                                  
+      36 +// to say "replace the confirmed approval", so a plain prepare 
+         +(e.g. a stale                                                  
+      37 +// "Review & approve" click) would silently revoke what the mar
+         +keter                                                          
+      38 +// confirmed. Until an explicit contract exists (withdraw, CP15
+         +), the                                                         
+      39 +// marketer must withdraw first. An approved approval that has 
+         +expired is                                                     
+      40 +// closed by lazy expiry before this check, so the campaign is 
+         +content_ready                                                  
+      41 +// again and may be prepared.                                  
+      42  func (c Campaign) CheckPrepareApproval() error {
+      43          switch c.Status {
+      44          case StatusContentReady:
+      45                  if c.ActiveApprovalID != nil { // impossible fo
+          r a consistent row
+      46                          return fmt.Errorf("campaign %s: content
+          _ready with an active approval", c.ID)
+      47                  }
+      37 -        case StatusPendingApproval, StatusApproved:            
+      48 +        case StatusPendingApproval:                            
+      49                  if c.ActiveApprovalID == nil { // impossible fo
+          r a consistent row
+      50                          return fmt.Errorf("campaign %s: %s with
+          out an active approval", c.ID, c.Status)
+      51                  }
+      52 +        case StatusApproved:                                   
+      53 +                return &StateError{Op: OpPrepareApproval, Statu
+         +s: c.Status, Reason: reasonApproved}                           
+      54          case StatusDraft:
+      55                  return &StateError{Op: OpPrepareApproval, Statu
+          s: c.Status, Reason: "interpret the brief first"}
+     … 1 more lines (ctrl+o to expand)
+
+⏺ Expected failures — updating those unit tests to the new rule.
+
+⏺ Bash(python3 - <<'EOF'
+      p='internal/campaign/approval_test.go'…)
+  ⎿  ok
+     github.com/fyusufayan/insider-campaign-composer-case/backend/inter
+     nal/campaign    0.295s
+  ⎿  Updated backend/internal/campaign/approval_test.go (+15 -10)
+      57                  {campaign.StatusSegmented, nil, true, false},
+      58                  {campaign.StatusContentReady, nil, false, true}
+          ,
+      59                  {campaign.StatusPendingApproval, &live, false, 
+          true},
+      60 -                {campaign.StatusApproved, &live, false, true}, 
+      60 +                // approved is refused (CP14, §9.1): withdraw f
+         +irst, never a silent supersede.                                
+      61 +                {campaign.StatusApproved, &live, true, false}, 
+      62                  {campaign.StatusSending, &live, true, false},
+      63                  {campaign.StatusCompleted, &live, true, false},
+      64                  {campaign.StatusCompletedWithFailures, &live, t
+          rue, false},
+     ...
+      141          if c.Status != campaign.StatusContentReady || c.Active
+           ApprovalID != nil {
+      142                  t.Error("receiver modified")
+      143          }
+      143 -        // Superseding a pending or approved approval is the d
+          -ocumented prepare                                             
+      144 -        // transition (§5.2): the active approval is replaced.
+      145 -        for _, st := range []campaign.Status{campaign.StatusPe
+          -ndingApproval, campaign.StatusApproved} {                     
+      146 -                cur := next                                   
+      147 -                cur.Status = st                               
+      148 -                again, err := cur.WithPreparedApproval(cur.Ver
+          -sion, approvalID(8))                                          
+      149 -                if err != nil || *again.ActiveApprovalID != ap
+          -provalID(8) || again.Status != campaign.StatusPendingApproval 
+          -{                                                             
+      150 -                        t.Errorf("%s: %+v %v", st, again, err)
+      151 -                }                                             
+      144 +        // Superseding a pending approval is the documented pr
+          +epare transition                                              
+      145 +        // (§5.2): the active approval is replaced.           
+      146 +        again, err := next.WithPreparedApproval(next.Version, 
+          +approvalID(8))                                                
+      147 +        if err != nil || *again.ActiveApprovalID != approvalID
+          +(8) || again.Status != campaign.StatusPendingApproval {       
+      148 +                t.Errorf("pending: %+v %v", again, err)       
+      149 +        }                                                     
+      150 +        // An approved campaign is never re-prepared by a plai
+          +n prepare.                                                    
+      151 +        approved := next                                      
+      152 +        approved.Status = campaign.StatusApproved             
+      153 +        var se *campaign.StateError                           
+      154 +        if _, err := approved.WithPreparedApproval(approved.Ve
+          +rsion, approvalID(9)); !errors.As(err, &se) ||                
+      155 +                se.Status != campaign.StatusApproved {        
+      156 +                t.Errorf("approved: %v", err)                 
+      157          }
+      158          if _, err := c.WithPreparedApproval(c.Version+1, a); !
+           errors.Is(err, campaign.ErrVersionConflict) {
+      159                  t.Errorf("stale: %v", err)
+
+⏺ Now the segment unit test for the new CTE shape, plus an approval static check
+  that no statement can reactivate an approval.
+
+⏺ Bash(python3 - <<'EOF'
+      p='internal/segment/eligible_test.go'…)
+  ⎿  ok
+     github.com/fyusufayan/insider-campaign-composer-case/backend/inter
+     nal/segment     0.252s
+     ok
+     github.com/fyusufayan/insider-campaign-composer-case/backend/inter
+     nal/approval    0.247s
+  ⎿  Updated backend/internal/approval/approval_test.go (+32 -0)
+      260                  }
+      261          }
+      262  }
+      263 +                                                              
+      264 +// Approval statuses only move forward: no statement of this p
+          +ackage sets                                                   
+      265 +// an approval back to pending or approved, so an expired or r
+          +evoked                                                        
+      266 +// approval can never become live again. The only statement th
+          +at creates a                                                  
+      267 +// pending approval is the INSERT of a new row (a new id).    
+      268 +func TestNoStatementReactivatesAnApproval(t *testing.T) {     
+      269 +        stmts := map[string]string{                           
+      270 +                "lock": sqlLockApproval, "expire": sqlExpireAp
+          +proval, "revoke": sqlRevokeApproval,                          
+      271 +                "delete": sqlDeleteHeld, "count": sqlCountAppr
+          +ovalRows, "insert approval": sqlInsertApproval,               
+      272 +                "insert held": sqlInsertHeldTail, "read": sqlR
+          +eadSnapshot,                                                  
+      273 +        }                                                     
+      274 +        for name, stmt := range stmts {                       
+      275 +                low := strings.ToLower(stmt)                  
+      276 +                for _, bad := range []string{"status = 'pendin
+          +g'", "status = 'approved'", "status='pending'", "status='appro
+          +ved'"} {                                                      
+      277 +                        if strings.Contains(low, "update") && 
+          +strings.Contains(low, "set "+bad) {                           
+      278 +                                t.Errorf("%s sets %s", name, b
+          +ad)                                                           
+      279 +                        }                                     
+      280 +                }                                             
+      281 +                if strings.HasPrefix(strings.TrimSpace(low), "
+          +delete") && !strings.Contains(low, "status = 'held'") {       
+      282 +                        t.Errorf("%s deletes non-held rows", n
+          +ame)                                                          
+      283 +                }                                             
+      284 +        }                                                     
+      285 +        // Closing statements only act on live approvals.     
+      286 +        for _, stmt := range []string{sqlExpireApproval, sqlRe
+          +vokeApproval} {                                               
+      287 +                if !strings.Contains(stmt, "status IN ('pendin
+          +g', 'approved')") {                                           
+      288 +                        t.Errorf("closing statement is not res
+          +tricted to live approvals: %s", stmt)                         
+      289 +                }                                             
+      290 +        }                                                     
+      291 +        if !strings.Contains(sqlInsertApproval, "'pending'") {
+      292 +                t.Error("new approvals must start pending")   
+      293 +        }                                                     
+      294 +}                                                             
+  ⎿  Updated backend/internal/segment/eligible_test.go (+14 -9)
+      37          if !reflect.DeepEqual(q.Args[n], []string{"sms", "email
+          "}) {
+      38                  t.Errorf("channels arg = %#v", q.Args[n])
+      39          }
+      40 -        wantPrefix := "WITH matched AS (" + matched + "),\nelig
+         -ible AS ("                                                     
+      40 +        wantPrefix := "WITH matched AS (" + matched + sqlClassi
+         +fiedCTE + ",\neligible AS ("                                   
+      41          if !strings.HasPrefix(q.With, wantPrefix) {
+      42                  t.Errorf("With does not start with the compiled
+           rule:\n%s", q.With)
+      43          }
+      44          if !strings.Contains(q.With, "unnest($3::text[]::channe
+          l[])") || strings.Contains(q.With, channelsMarker) {
+      45                  t.Errorf("channels placeholder not substituted:
+          \n%s", q.With)
+      46          }
+      47 -        // The eligibility predicate is the eligible cell of th
+         -e partition.                                                   
+      48 -        for _, frag := range []string{                         
+      49 -                "cc.status = 'opted_in'",                      
+      50 -                "WHEN 'sms' THEN u.phone WHEN 'email' THEN u.em
+         -ail END) IS NOT NULL",                                         
+      51 -        } {                                                    
+      52 -                if !strings.Contains(q.With, frag) {           
+      53 -                        t.Errorf("missing %q", frag)           
+      54 -                }                                              
+      47 +        // Eligibility is the eligible cell (code 2) of the sam
+         +e classified CTE                                               
+      48 +        // that the audience statistics count.                 
+      49 +        if !strings.Contains(q.With, "FROM classified AS c") ||
+      50 +                !strings.Contains(q.With, "WHEN 'sms' THEN c.sm
+         +s WHEN 'email' THEN c.email END) = 2") {                       
+      51 +                t.Errorf("eligible is not derived from classifi
+         +ed:\n%s", q.With)                                              
+      52 +        }                                                      
+      53 +        if !strings.HasPrefix(sqlAudienceStatsTail, sqlClassifi
+         +edCTE) {                                                       
+      54 +                t.Error("audience statistics do not use the sha
+         +red classified CTE")                                           
+      55 +        }                                                      
+      56 +        // The snapshot statement reads the partition cells and
+         + the eligible                                                  
+      57 +        // summary in one SELECT.                              
+      58 +        if !strings.HasPrefix(sqlSnapshotAudienceTail, sqlAudie
+         +nceCells) || !strings.Contains(sqlSnapshotAudienceTail, "FROM e
+         +ligible") {                                                    
+      59 +                t.Error("snapshot statement does not combine ce
+         +lls and eligible")                                             
+      60          }
+      61  
+      62          // Deterministic.
+
+⏺ Now the integration tests: rewriting the approved part of the supersede test
+  and adding the new lifecycle/invariant tests.
+
+⏺ Bash(python3 - <<'EOF'
+      p='test/integration/approval_test.go'…)
+  ⎿  --- PASS: TestPrepareChannelSelections (0.40s)
+         --- PASS: TestPrepareChannelSelections/sms_and_email (0.15s)
+         --- PASS: TestPrepareChannelSelections/sms_only (0.12s)
+     … +29 lines (ctrl+o to expand)
+  ⎿  Updated backend/test/integration/approval_test.go (+307 -10)
+      16          "time"
+      17  
+      18          "github.com/jackc/pgx/v5"
+      19 +        "github.com/jackc/pgx/v5/pgconn"                       
+      20          "github.com/jackc/pgx/v5/pgxpool"
+      21  
+      22          "github.com/fyusufayan/insider-campaign-composer-case/b
+          ackend/internal/ai"
+     ...
+      663                  t.Errorf("delivery rows = %d", n)
+      664          }
+      665  
+      665 -        // From approved (set directly: confirm is CP15), prep
+          -are also supersedes.                                          
+      666 +        if n := e.count(`SELECT count(*) FROM campaign_approva
+          +ls WHERE campaign_id = $1::uuid`, c.ID.String()); n != 2 {    
+      667 +                t.Errorf("approval history = %d rows", n)     
+      668 +        }                                                     
+      669 +}                                                             
+      670 +                                                              
+      671 +// markApproved simulates a confirmed approval (confirm is CP1
+          +5): approved                                                  
+      672 +// with the 24 h approved TTL, campaign approved.             
+      673 +func (e *prepEnv) markApproved(c campaign.Campaign, id campaig
+          +n.ID) campaign.Campaign {                                     
+      674 +        e.t.Helper()                                          
+      675          e.exec(`UPDATE campaign_approvals SET status = 'approv
+           ed', approved_at = clock_timestamp(), approved_by = 'test',
+      667 -                expires_at = clock_timestamp() + interval '24 
+          -hours' WHERE id = $1::uuid`, second.ApprovalID.String())      
+      676 +                expires_at = clock_timestamp() + interval '24 
+          +hours' WHERE id = $1::uuid`, id.String())                     
+      677          e.exec(`UPDATE campaigns SET status = 'approved' WHERE
+            id = $1::uuid`, c.ID.String())
+      669 -        approved := e.get(c.ID)                               
+      670 -        third := e.prepare(approved)                          
+      671 -        if third.Superseded == nil || *third.Superseded != sec
+          -ond.ApprovalID {                                              
+      672 -                t.Errorf("third superseded = %v", third.Supers
+          -eded)                                                         
+      678 +        return e.get(c.ID)                                    
+      679 +}                                                             
+      680 +                                                              
+      681 +// A plain prepare never invalidates a confirmed approval (CP1
+          +4 decision,                                                   
+      682 +// §9.1): approved → 409 invalid_state, nothing changes. Once 
+          +the approved                                                  
+      683 +// approval has expired (its own 24 h TTL, not the pending TTL
+          +), lazy expiry                                                
+      684 +// closes it and preparation proceeds.                        
+      685 +func TestPrepareRefusesApprovedCampaign(t *testing.T) {       
+      686 +        e := newPrepEnv(t)                                    
+      687 +        c := e.ready(replyIstanbul, draftOf(prepSMS, prepSubje
+          +ct, prepBody))                                                
+      688 +        first := e.prepare(c)                                 
+      689 +        approved := e.markApproved(c, first.ApprovalID)       
+     … 296 more lines (ctrl+o to expand)
+
+⏺ The new uniqueness test exposed a bug: the lazy-expiry path treats the
+  consumed approval still referenced by a sending campaign as an inconsistency,
+  so it errors instead of no-op'ing. I'm restricting that inspection to
+  pending_approval and approved campaigns.
+
+⏺ Bash(python3 - <<'EOF'
+      p='internal/approval/repository.go'…)
+  ⎿  ok
+     github.com/fyusufayan/insider-campaign-composer-case/backend/test/
+     integration     7.121s
+  ⎿  Updated backend/internal/approval/repository.go (+11 -4)
+      228          due           bool
+      229  }
+      230  
+      231 -// lockActiveApproval locks and reads the campaign's active ap
+          -proval. It must                                               
+      232 -// be live: a campaign in pending_approval/approved points at 
+          -a pending or                                                  
+      233 -// approved approval, nothing else.                           
+      231 +// lockActiveApproval locks and reads the campaign's live appr
+          +oval. Only a                                                  
+      232 +// campaign in pending_approval/approved has one, and it must 
+          +be pending or                                                 
+      233 +// approved respectively. In every other status there is nothi
+          +ng live to                                                    
+      234 +// expire or supersede: a sending or finished campaign keeps p
+          +ointing at its                                                
+      235 +// consumed approval (§4: active_approval_id is "set while an 
+          +approval is                                                   
+      236 +// pending/approved/consumed"), which consumed approvals never
+          + leave (§5.3);                                                
+      237 +// it is left untouched and the state check rejects preparatio
+          +n.                                                            
+      238  func lockActiveApproval(ctx context.Context, tx pgx.Tx, cur ca
+           mpaign.Campaign) (*liveApproval, error) {
+      235 -        if cur.ActiveApprovalID == nil {                      
+      239 +        if cur.Status != campaign.StatusPendingApproval && cur
+          +.Status != campaign.StatusApproved {                          
+      240                  return nil, nil
+      241          }
+      242 +        if cur.ActiveApprovalID == nil {                      
+      243 +                return nil, fmt.Errorf("%w: campaign %s is %s 
+          +without an active approval", ErrInconsistent, cur.ID, cur.Stat
+          +us)                                                           
+      244 +        }                                                     
+      245          a := liveApproval{id: *cur.ActiveApprovalID}
+      246          var (
+      247                  status string
+
+⏺ Fixed. Now updating ARCHITECTURE: §5.2 row note, §11 route note, §11.1 version
+  exception, and the §9.1 bullets.
+
+⏺ Bash(cd /Users/bilgem/Desktop/devel/leet/insider-case/insider-campaign-compose
+      r-case && python3 - <<'EOF'
+      p='docs/ARCHITECTURE.md'…)
+  ⎿  Updated docs/ARCHITECTURE.md (+13 -7)
+      282  | draft, segmented, content_ready, pending_approval, approved 
+           | interpret succeeds | `segmented` (no content) / `content_rea
+           dy` (has content) | `segment_version+1`; live approval → revok
+           ed(`edited`) + delete held rows |
+      283  | segmented, content_ready, pending_approval, approved | set c
+           hannels | same base status as above | live approval → revoked(
+           `edited`) + delete held rows |
+      284  | segmented, content_ready, pending_approval, approved | new c
+           ontent version (generate or edit) | `content_ready` | live app
+           roval → revoked(`edited`) + delete held rows |
+      285 -| content_ready, pending_approval, approved | prepare | `pendi
+          -ng_approval` | live approval → revoked(`superseded`) + delete 
+          -its held rows; insert new approval + held rows |              
+      285 +| content_ready, pending_approval, approved¹ | prepare | `pend
+          +ing_approval` | live approval → revoked(`superseded`) + delete
+          + its held rows; insert new approval + held rows |             
+      286  | pending_approval | confirm | `approved` | approval pending →
+            approved |
+      287  | pending_approval, approved | withdraw | `content_ready` | ap
+           proval → revoked(`withdrawn`) + delete held rows |
+      288  | pending_approval, approved | expiry | `content_ready` | appr
+           oval → expired + delete held rows |
+     ...
+      293  | sending | cancel | `cancelled` | pending/retry_scheduled → c
+           ancelled; in_flight rows finish (§10.8) |
+      294  | completed*, cancelled | anything | — | `409 invalid_state` |
+      295  
+      296 +¹ **CP14:** prepare in `approved` is refused (`409 invalid_sta
+          +te`, "withdraw the approval first") until an explicit re-prepa
+          +ration contract exists (§9.1); an *expired* approved approval 
+          +is closed by lazy expiry first, after which prepare proceeds f
+          +rom `content_ready`.                                          
+      297 +                                                              
+      298  "Base status" after an invalidating edit = `content_ready` if 
+           `current_content_id` is set, else `segmented` (or `draft` if n
+           o rule). `active_approval_id` is cleared whenever the approval
+            becomes revoked/expired and set on prepare.
+      299  
+      300  `completed_with_failures` ⇔ at least one `failed` row. Skipped
+            and cancelled rows are not failures.
+     ...
+      584  
+      585  CP14 is the backend half of the prepare step: `approval.Servic
+           e.Prepare` / `ExpireDue`, `approval.Repository`, the campaign-
+           side transitions (`campaign/approval.go`) and `segment.Compile
+           Eligible`. Confirm, withdraw, send, the sweeper loop and the H
+           TTP routes follow in CP15; until `POST /approvals` exists no A
+           PI path can create an approval, so the "until Slice 3" refusal
+           s of §7.8/§7.9/§11.1 stay in place.
+      586  
+      585 -- **Transaction** (§5.5, READ COMMITTED, `lock_timeout` 5 s, `
+          -statement_timeout` 10 s, 30 s context deadline for the whole t
+          -ransaction; no I/O but the database): lock campaign → lazy exp
+          -iry (`expires_at <= clock_timestamp()` after the lock) → versi
+          -on CAS (`expected_version`) + state check → re-read the curren
+          -t content version (re-validated, must be the newest) → `Campai
+          -gn.ReviewForApproval` → revoke a still-live approval (`superse
+          -ded`) and delete its held rows (count must equal its `snapshot
+          -_count`) → partition via `segment.ComputeAudienceStats` → expe
+          -cted snapshot (per-channel counts + digest) via `segment.Compi
+          -leEligible` → insert approval → `INSERT … SELECT` held rows → 
+          -read them back in digest order → campaign `pending_approval`, 
+          -`active_approval_id`, `version+1`. The partition, the expected
+          - snapshot, the insert and the read-back are separate statement
+          -s; any disagreement between them (customer data committed by a
+          -nother session in between) rolls back with `ErrAudienceChanged
+          -` (retryable). Any other failure also rolls back everything, s
+          -o a superseded approval stays live when the new preparation fa
+          -ils, and no approval ever points at an incomplete snapshot.   
+      586 -- **Eligibility** is defined once in `segment.CompileEligible`
+          -: `WITH matched AS (<Compile(rule)>), eligible(user_id, channe
+          -l)` = contact present for the channel and an `opted_in` consen
+          -t row, for the selected channels only (bound as a parameter). 
+          -This is exactly the `eligible` cell of §6.5; preparation asser
+          -ts per channel that both agree. One row per (user, channel) by
+          - construction, plus `UNIQUE (campaign_id, user_id, channel)`. 
+      587 +- **Transaction** (§5.5, READ COMMITTED, `lock_timeout` 5 s, `
+          +statement_timeout` 10 s, 30 s context deadline for the whole t
+          +ransaction; no I/O but the database): lock campaign → lazy exp
+          +iry (`expires_at <= clock_timestamp()` after the lock) → versi
+          +on CAS (`expected_version`) + state check → re-read the curren
+          +t content version (re-validated, must be the newest) → `Campai
+          +gn.ReviewForApproval` → revoke a still-live **pending** approv
+          +al (`superseded`) and delete its held rows (count must equal i
+          +ts `snapshot_count`) → `segment.ComputeSnapshotAudience`: part
+          +ition **and** expected snapshot (per-channel eligible counts +
+          + digest) in one statement → insert approval → `INSERT … SELECT
+          +` held rows (same `eligible` definition) → read them back in d
+          +igest order and compare counts + digest → campaign `pending_ap
+          +proval`, `active_approval_id`, `version+1`. Any failure rolls 
+          +back everything, so a superseded approval stays live when the 
+          +new preparation fails, and no approval ever points at an incom
+          +plete snapshot.                                               
+      588 +- **Consistency under concurrent customer changes** (no custom
+          +er row is locked; no isolation upgrade). The partition shown t
+          +o the marketer and the expected recipient set come from **one 
+          +statement**, i.e. one database snapshot, so the stored `audien
+          +ce_stats` is exactly the partition whose `eligible` cell is th
+          +e expected set. The held rows are inserted by a second stateme
+          +nt; if any consent, contact or rule-relevant data committed in
+          + between changes the eligible set (even with equal counts), th
+          +e read-back digest differs and preparation rolls back with `Er
+          +rAudienceChanged` (retryable). Hence a committed approval's he
+          +ld rows are exactly the eligible cell of its stored partition 
+          +at one instant. Changes committed **after** that instant are n
+          +ot reflected (snapshot semantics, ADR-007); they are handled a
+          +t send time: consent is re-checked in the precheck of **every*
+          +* attempt, the destination is resolved from the **current** co
+          +ntact at the first precheck (no contact → `skipped_no_contact`
+          +), membership is never re-evaluated, and `vars` stay frozen (§
+          +10.3).                                                        
+      589 +- **Approved campaigns** (CP14 decision, review of §5.2): a pl
+          +ain prepare never invalidates a confirmed approval. §5.2 allow
+          +s `approved → prepare`, but the prepare request carries only `
+          +expected_version`, so it cannot express "replace my confirmed 
+          +approval" — a stale "Review & approve" would silently revoke i
+          +t. Prepare in `approved` is therefore `409 invalid_state` (and
+          + the supersede step refuses anything but a pending approval, d
+          +efence in depth). The marketer withdraws first (CP15), or the 
+          +approval expires (its own `expires_at`, 24 h after confirm), i
+          +n which case lazy expiry closes it as `expired` and preparatio
+          +n proceeds. Superseding a **pending** approval stays as docume
+          +nted: it requires the current version (a double submit is `409
+          + version_conflict`) and is recorded as `revoke_reason = supers
+          +eded`. An explicit re-preparation of an approved campaign, if 
+          +wanted, needs its own contract in CP15.                       
+      590 +- **Campaigns without a live approval**: only `pending_approva
+          +l` / `approved` campaigns have a live approval to expire or su
+          +persede. `sending` and finished campaigns keep `active_approva
+          +l_id` on their consumed approval (§4), which lazy expiry leave
+          +s untouched; prepare then fails the state check.              
+      591 +- **Eligibility** is defined once: `segment.CompileEligible` =
+          + `WITH matched AS (<Compile(rule)>), classified AS (…), eligib
+          +le(user_id, channel)`, where `classified` is the same CTE the 
+          +audience statistics count (no_contact 0 / no_consent 1 / eligi
+          +ble 2) and `eligible` keeps code 2 for the selected channels (
+          +bound as a parameter). One row per (user, channel) by construc
+          +tion.                                                         
+      592 +- **Uniqueness and idempotency** (actual schema): `UNIQUE (cam
+          +paign_id, user_id, channel)` and `UNIQUE (idempotency_key)` wi
+          +th key `<campaign_id>:<user_id>:<channel>` span **all approval
+          +s of a campaign**, not one approval. A later approval may free
+          +ze the same recipient with the same key because the earlier ap
+          +proval's held rows are deleted in the same transaction that cl
+          +oses it (invariant 6), before the new rows are inserted; the n
+          +ew rows carry the new `approval_id`, so they cannot be mistake
+          +n for the earlier snapshot. At most one approval per campaign 
+          +is ever consumed (`approvals_one_consumed`) and a sending/fini
+          +shed campaign cannot be prepared, so a released row is never d
+          +eleted or re-frozen and its key is never reused by another sna
+          +pshot; every retry of a delivery reuses its one key (§10.6). R
+          +evoked/expired approval rows are kept unchanged after closing 
+          +(binding, stats, count, digest — no statement reopens them); t
+          +heir held rows are not history and are deleted by design (ADR-
+          +005).                                                         
+      593  - **Frozen values**: `vars = {"first_name", "last_name", "city
+           "}` (the `content.Values` shape) copied verbatim from the user
+            row inside the `INSERT … SELECT` — no contact data, no normal
+           ization, no truncation, no fallback substitution; Go never rea
+           ds them except in the read-back. **Unusable values do not chan
+           ge eligibility** (the snapshot must equal the partition): the 
+           read-back trial-renders every row with the deterministic rende
+           rer and reports per channel the number of rows that would fail
+            (`render_issues` by code: `missing_value`, `invalid_value`, `
+           value_too_long`, `content_too_long`). Such a delivery fails pe
+           rmanently at send time (§8.7). Fallbacks apply as in §8.1 (a b
+           lank value uses the placeholder's fallback). Counts only; neve
+           r values.
+      594  - **Snapshot digest**: lower-case hex SHA-256 of lines `<user_
+           id>:<channel>` sorted by user id, then channel in enum order (
+           sms, email), joined by `\n` (no trailing newline). Computed in
+            SQL before the insert (stored) and in Go over the read-back r
+           ows; they must match.
+      589 -- **Content review** (§7.9 requirement): `content.Parse` for t
+          -he selected channels via `ValidateStored` (missing text for a 
+          -selected channel → `422 validation_failed`; text for an unsele
+          -cted channel → warning `channel_not_selected`, it is never fro
+          -zen or sent) and the offer policy against the **current** cont
+          -ent brief. `unauthorized_offer` / `unauthorized_claim` finding
+          -s never block preparation (also not for AI versions, which cou
+          -ld not contain them); they are returned separately as `OfferFi
+          -ndings` for the approval dialog. A stored content brief that d
+          -oes not parse is an internal error (the offer check must not b
+          -e silently skipped). The rendered example uses `content.Exampl
+          -eValues` only.                                                
+      590 -- **Versions**: prepare advances `campaigns.version` (it is a 
+          -write). Expiry does **not**: it is a system transition that ch
+          -anges no authored field, so a marketer whose view predates the
+          - expiry can re-prepare or edit with the version they saw. A re
+          -peated prepare with the same `expected_version` (double submit
+          -) is `409 version_conflict`; it never supersedes the approval 
+          -the first request created. Superseding requires the current ve
+          -rsion — an explicit re-preparation, recorded as `revoke_reason
+          - = superseded`.                                               
+      595 +- **Content review** (§7.9 requirement; returned in `Summary.R
+          +eview`): `content.Parse` for the selected channels via `Valida
+          +teStored` (missing text for a selected channel → `422 validati
+          +on_failed`; text for an unselected channel → warning `channel_
+          +not_selected`, it is never frozen or sent) and the offer polic
+          +y against the **current** content brief. `unauthorized_offer` 
+          +/ `unauthorized_claim` findings never block preparation (also 
+          +not for AI versions, which could not contain them); they are r
+          +eturned separately as `OfferFindings` for the approval dialog.
+          + **CP15 requirement:** the prepare response and the approval d
+          +ialog must show these findings before the Confirm action (§7.9
+          +); whether confirm additionally needs an explicit acknowledgem
+          +ent is a CP15 product decision, not implied by preparation. A 
+          +stored content brief that does not parse is an internal error 
+          +(the offer check must not be silently skipped). The rendered e
+          +xample uses `content.ExampleValues` only.                     
+      596 +- **Versions**: prepare advances `campaigns.version` (it is a 
+          +write). Expiry does **not** (explicit exception to §11.1): it 
+          +is a system transition that changes no authored field, and the
+          + sweeper/lazy expiry must not turn the marketer's next request
+          + into a spurious `409`. This is safe because (a) every state c
+          +heck runs on the locked row, never on the client's view; (b) a
+          +n expired approval has no held rows left and no statement ever
+          + reopens an approval (a new preparation always inserts a new i
+          +d with new rows); (c) a stale client's request after expiry ha
+          +s the same effect it would have had on the live approval (an e
+          +dit invalidates it; a prepare re-reviews the current state), a
+          +nd its first write advances the version, so the rest of its st
+          +ale view is rejected; (d) confirm/send (CP15) bind to the appr
+          +oval id and CAS on `status` and `expires_at > clock_timestamp(
+          +)` (§5.5), so they cannot succeed on an expired approval whate
+          +ver version the client sends. A repeated prepare with the same
+          + `expected_version` (double submit) is `409 version_conflict`;
+          + it never supersedes the approval the first request created. S
+          +uperseding requires the current version — an explicit re-prepa
+          +ration, recorded as `revoke_reason = superseded`.             
+      597  - **Expiry**: `expires_at = prepared_at + APPROVAL_PENDING_TTL
+           ` from one `clock_timestamp()` value taken after the lock (TTL
+            is a service parameter, 1 s – 24 h, default 15 min; env wirin
+           g with CP15). A due approval found by prepare is closed as `ex
+           pired` (never `superseded`), even when it expired while prepar
+           e waited for the lock (integration test). `ExpireDue` performs
+            the §5.5 Expire transaction. Expired and revoked approvals ke
+           ep their row (binding, stats, count, digest); only their held 
+           rows are deleted.
+      598  - **Summary** (`approval.Summary`): approval id, campaign vers
+           ion, segment version, content id + number, channels, the store
+           d partition, count, digest, prepared/expires times, per-channe
+           l held counts with render issues, the content review, and the 
+           superseded/expired approval ids. It contains no user ids, name
+           s, cities or contacts. Logs carry ids and counts only.
+      599  
+     ...
+      748  | `POST /campaigns/{id}/content/generations` | segmented … app
+           roved | **SSE** response: `meta`, `status`, `delta`*, `validat
+           ed` \| `error` |
+      749  | `POST /campaigns/{id}/content/validate` | segmented … approv
+           ed | validate without saving (debounced editor) |
+      750  | `PUT /campaigns/{id}/content` | segmented … approved | save 
+           edited version `{sms_body, email_subject, email_body, expected
+           _version}` |
+      745 -| `POST /campaigns/{id}/approvals` | content_ready, pending_ap
+          -proval, approved | **prepare**: returns `{approval_id, expires
+          -_at, segment_version, content_version, channels, audience_stat
+          -s, rendered_content}` |                                       
+     … 12 more lines (ctrl+o to expand)
+
+⏺ Docs updated. Running the full verification suite.
+
+  Ran 2 shell commands (ctrl+o to expand)
+
+⏺ The review is done and I've stopped before CP15. I changed the
+  approved-campaign behaviour as you preferred, and the new tests turned up two
+  real defects, both now fixed. Unit, race, integration and the pinned
+  staticcheck all pass. Nothing is committed.
+
+  1. Approved re-preparation
+
+  §5.2 does list approved → prepare → pending_approval. But the prepare request
+  only carries expected_version, so it has no way to say "replace my confirmed
+  approval".
+
+  - Decision: prepare on an approved campaign now returns 409 invalid_state with
+    "withdraw the approval first". The approval, its held rows and the campaign
+    version stay untouched.
+  - Defence in depth: the supersede step itself refuses anything but a pending
+    approval.
+  - Expired approved approval: lazy expiry closes it as expired (never
+    superseded), and then a new prepare goes ahead.
+  - Pending approvals: superseding still works as documented. It needs the
+    current version, so a double submit gets a 409.
+  - Docs: §5.2 and §11 carry a CP14 note, and §9.1 explains why. Explicit
+    re-preparation of an approved campaign, if you want it, needs its own
+    contract in CP15.
+
+  2. Expiry and version
+
+  "No version bump on expiry" was only my own CP14 note, and §11.1 says every
+  write bumps the version. I kept it, recorded it as an explicit exception in
+  §11.1, and tested why it's safe:
+
+  - Stale client: a client holding the pre-expiry version can't get around any
+    state check, because every check runs on the locked database row, not the
+    client's view.
+  - Expired approvals stay dead: no statement ever sets an approval back to
+    pending or approved (a static test covers this), and a later prepare always
+    creates a new approval id with new rows.
+  - Nothing to reuse: an expired approval has no held rows left.
+  - Stale requests are harmless: after expiry, a stale edit does what it would
+    have done to the live approval (invalidates it). That edit bumps the
+    version, so the rest of the stale view then gets a 409.
+  - Confirmation can't succeed on an expired approval: confirm doesn't exist
+    yet. The guarantee is structural: the approval is closed and has no rows,
+    and the documented CP15 check requires status = 'pending' AND expires_at > 
+    clock_timestamp().
+  - TTLs are distinct: prepare sets the pending 15 minutes. Lazy expiry honours
+    each approval's own expires_at, so an approved approval's 24 hours is
+    respected; a test shows it isn't expired early.
+  - Concurrent expiry and prepare: in a test running six of each, the due
+    approval was expired exactly once, one prepare succeeded, and there was only
+    ever one live approval.
+
+  3. Idempotency-key uniqueness (actual schema)
+
+  - UNIQUE (campaign_id, user_id, channel) and UNIQUE (idempotency_key) cover
+    every approval of a campaign, not just one. approvals_one_live and
+    approvals_one_consumed are partial unique indexes.
+  - Re-preparing reuses the identical keys. This works because the old
+    approval's held rows are deleted in the same transaction before the new rows
+    go in, and the new rows carry the new approval id.
+  - The tests show inserting a duplicate is rejected by each of these
+    constraints.
+  - Once a snapshot has been released for sending, the campaign can't be
+    prepared again, so its rows are permanent and each key belongs to exactly
+    one sent snapshot. The key format is unchanged.
+  - Defect found and fixed: a sending campaign keeps active_approval_id pointing
+    at its consumed approval (§4). Lazy expiry treated that as an
+    inconsistency, so ExpireDue or prepare on a sending campaign returned an
+    internal error. Now it's a no-op for ExpireDue and a clean state error for
+    prepare.
+
+  4. Consent changes during preparation
+
+  - Defect found and fixed: the partition shown to the marketer and the expected
+    recipient set were computed by two separate statements, so the non-eligible
+    counts could describe a slightly different moment from the frozen rows.
+  - Fix: the new segment.ComputeSnapshotAudience returns the partition plus the
+    eligible counts and digest from one statement, so one database snapshot.
+    Eligibility is now derived from the same classification CTE that the
+    statistics count.
+  - Guarantee: the committed held rows are exactly the eligible cell of the
+    stored partition at one instant. Any change committed between that statement
+    and the insert alters the digest (even when counts match) and rolls
+    everything back with a retryable error. A trigger-injected test covers three
+    cases.
+  - No customer rows are locked and the isolation level is unchanged.
+  - Rechecked at send time: consent on every attempt, and the current contact at
+    the first attempt. Membership is never re-evaluated and vars stay frozen.
+
+  5. Offer findings and channel content
+
+  - Offer and price findings are in Summary.Review.OfferFindings. They're
+    advisory at prepare, and §9.1 now states the CP15 requirement that the
+    dialog shows them before Confirm.
+  - Every selected channel must have content, or prepare returns 422.
+  - Text for an unselected channel is a channel_not_selected warning and is
+    never frozen.
+  - The approval binds the current, newest content id and segment version under
+    the lock (tested).
+
+  Files changed and tests added
+
+  - Changed:
+    - audience_repo.go: the shared classification CTE.
+    - eligible.go: ComputeSnapshotAudience.
+    - repository.go: single-statement snapshot, the sending-campaign fix,
+      supersede guard.
+    - campaign/approval.go: the approved refusal.
+    - ARCHITECTURE.md: the notes above.
+  - Unit tests: updated state-machine tests, the no-reactivation static test,
+    and the CTE-shape tests.
+  - Integration tests:
+    - TestPrepareRefusesApprovedCampaign
+    - TestPrepareConcurrentWithExpiry
+    - TestStaleClientAfterExpiry
+    - TestApprovalUniquenessConstraints
+    - TestPrepareDetectsAudienceChangeBetweenStatements
+
+  Verification
+
+  - staticcheck: the literal make lint still fails to download staticcheck (the
+    same TLS certificate error). Every other part of lint passes. I ran the
+    exact pinned v0.8.2, built offline from the local module cache, and it's
+    clean.
+  - Frontend: not re-run, since nothing it uses changed.
+  - No paid model calls.
+
+  Remaining CP14 commit blockers
+
+  None that I know of. Before you commit, please agree to two documented
+  deviations:
+  - the approved refusal, versus §5.2;
+  - expiry not bumping the version, versus §11.1.
+
+❯ CP14 final review is complete. I approve the lifecycle decision that normal   
+  Prepare refuses an approved campaign with 409 until an explicit withdrawal    
+  occurs.                                                                       
+  I also approve the single-statement audience snapshot correction,             
+  sending-state lazy-expiry fix, and the verified idempotency-key behavior.     
+  However, I do NOT approve the exception that approval expiry changes campaign 
+  state without incrementing the campaign's optimistic version.                 
+  Required final correction                                                     
+  Keep the existing documented invariant from ARCHITECTURE §11.1:               
+  Every persisted campaign state mutation increments the campaign version       
+  exactly once.                                                                 
+  Approval expiry that changes pending_approval or approved to content_ready,   
+  clears or changes the active approval pointer, or otherwise mutates campaign  
+  state must advance campaigns.version by one in the same database transaction. 
+  Requirements                                                                  
+                                                                                
+  1. Review every existing CP14 expiry path, including lazy expiry, concurrent  
+  preparation and the sending-campaign no-op case.                              
+  2. Ensure one real expiry transition increments campaign version exactly      
+  once.                                                                         
+  3. Ensure repeated expiry attempts do not increment it again when nothing     
+  changes.                                                                      
+  4. Update any affected optimistic concurrency expectations and conflict       
+  handling.                                                                     
+  5. Expiry must remain atomic with the approval status update and cleanup of   
+  held rows.                                                                    
+  6. Preserve the approved-vs-pending expiry TTL distinction.                   
+  7. Preserve the prohibition on normal re-preparation of a still-approved      
+  campaign.                                                                     
+  8. Do not modify an already sending or terminal campaign merely because its   
+  consumed approval has reached its old expiry timestamp.                       
+  9. Preserve the newly fixed one-statement audience snapshot and digest        
+  verification.                                                                 
+                                                                                
+  Tests                                                                         
+  Add or adjust tests proving:                                                  
+                                                                                
+  - A successful pending approval expiry increases campaign version by exactly  
+  one.                                                                          
+  - A successful approved approval expiry increases campaign version by exactly 
+  one.                                                                          
+  - A repeated expiry check is a no-op and does not bump version.               
+  - A request using the old pre-expiry campaign version gets a 409 when it      
+  attempts a version-guarded mutation.                                          
+  - A client can explicitly reload the new campaign version and proceed through 
+  valid state transitions.                                                      
+  - Concurrent expire/prepare operations preserve a single active approval and  
+  consistent version increments.                                                
+  - Sending campaigns with consumed approvals are not modified by lazy expiry.  
+  - Existing rollback and uniqueness guarantees still hold.                     
+                                                                                
+  Review the relevant transaction SQL rather than patching only the pure domain 
+  state machine.                                                                
+  Documentation                                                                 
+  Remove the special no-version-bump exception from ARCHITECTURE §11.1 and      
+  §9.1.                                                                         
+  Document the approved-campaign Prepare refusal as the deliberate product-safe 
+  deviation from the earlier §5.2 transition table.                             
+  Verification                                                                  
+  Run backend unit tests, race tests, the complete PostgreSQL integration       
+  suite, and lint.                                                              
+  Do not make live Anthropic calls. Do not start CP15.                          
+  If all tests pass and the resulting diff contains only intended CP14 changes, 
+  stage and commit CP14 with:                                                   
+  feat: add atomic approval preparation and frozen audience snapshots           
+  Report the commit hash, final working-tree status and verification results.   
+  Stop after the commit.                                                        
+
+⏺ Approved items noted; now making expiry a real version-bumping write. Key
+  design point I need to handle first: if lazy expiry bumps the version inside
+  the prepare transaction and the stale client's CAS then fails, the rollback
+  would also undo the expiry, so a stale client could loop forever on an expired
+  approval. So Service.Prepare will run ExpireDue as its own committed
+  transaction first, and only then the prepare transaction.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ Bash(python3 - <<'EOF'
+      import re…)
+  ⎿  --- FAIL: TestWithApprovalClosed (0.00s)
+         approval_test.go:179: pending_approval: closed = {ID:4b1e86e1-dc13
+     -e13b-9b41-62e7a3553b1b Name:Cart recovery Brief:Send a short and frie
+     … +19 lines (ctrl+o to expand)
+  ⎿  Updated backend/internal/approval/approval.go (+5 -5)
+      129          // Review is the content re-validation for the selecte
+           d channels against
+      130          // the current content brief, including offer findings
+           .
+      131          Review campaign.ApprovalReview
+      132 -        // Superseded is the live approval this preparation re
+          -placed                                                        
+      133 -        // (revoked with reason superseded), if any.          
+      132 +        // Superseded is the pending approval this preparation
+          + replaced                                                     
+      133 +        // (revoked with reason superseded), if any. A due app
+          +roval is never                                                
+      134 +        // superseded: it is expired first (Service.Prepare), 
+          +which advances the                                            
+      135 +        // campaign version, so a preparation based on the pre
+          +-expiry version is                                            
+      136 +        // a version conflict.                                
+      137          Superseded *campaign.ID
+      135 -        // Expired is a live approval that was found expired a
+          -nd closed by this                                             
+      136 -        // preparation before the new one was created, if any.
+      137 -        Expired *campaign.ID                                  
+      138  }
+      139  
+      140  // RenderIssueCount is the total number of held rows with a re
+           nder issue.
+  ⎿  Updated backend/internal/approval/repository.go (+13 -8)
+      107  // Prepare runs the preparation transaction (ARCHITECTURE §5.5
+            "Prepare"):
+      108  //
+      109  //  1. lock the campaign row; set lock and statement timeouts;
+      110 -//  2. lazily expire a live approval that is due (clock_timest
+          -amp());                                                       
+      110 +//  2. expire a live approval that is due (clock_timestamp());
+          + this                                                         
+      111 +//     advances the version, so step 3 then fails with a versi
+          +on conflict                                                   
+      112 +//     and everything is rolled back (Service.Prepare commits 
+          +lazy expiry                                                   
+      113 +//     in its own transaction first, so this only happens when
+          + the approval                                                 
+      114 +//     became due between the two transactions);              
+      115  //  3. check the version (CAS) and the state machine, re-read 
+           and
+      116  //     re-validate the current content version for the selecte
+           d channels
+      117  //     against the current content brief (incl. offer findings
+           );
+     ...
+      298          return nil
+      299  }
+      300  
+      297 -// expireIfDue expires the active approval if it is due and re
+          -turns the                                                     
+      298 -// updated campaign (content_ready, no active approval, versio
+          -n unchanged)                                                  
+      299 -// and the expired approval's id.                             
+      301 +// expireIfDue expires the live approval if it is due and retu
+          +rns the                                                       
+      302 +// updated campaign (content_ready, no active approval, versio
+          +n + 1) and the                                                
+      303 +// expired approval's id. Nothing is written when nothing is d
+          +ue, and a                                                     
+      304 +// campaign without a live approval (incl. sending/finished ca
+          +mpaigns with a                                                
+      305 +// consumed approval) is never touched.                       
+      306  func expireIfDue(ctx context.Context, tx pgx.Tx, cur campaign.
+           Campaign) (campaign.Campaign, *campaign.ID, error) {
+      307          a, err := lockActiveApproval(ctx, tx, cur)
+      308          if err != nil || a == nil || !a.due {
+     ...
+      324  }
+      325  
+      326  func prepareTx(ctx context.Context, tx pgx.Tx, cur campaign.Ca
+           mpaign, p PrepareParams) (Summary, error) {
+      321 -        // 2. Lazy expiry: an expired approval is closed as ex
+          -pired, never                                                  
+      322 -        // superseded, and can never be confirmed or consumed.
+      323 -        cur, expired, err := expireIfDue(ctx, tx, cur)        
+      327 +        // 2. A due approval is never superseded: expiring it 
+          +advances the                                                  
+      328 +        // version, so the version check below rejects this pr
+          +eparation.                                                    
+      329 +        cur, _, err := expireIfDue(ctx, tx, cur)              
+      330          if err != nil {
+      331                  return Summary{}, err
+      332          }
+     ...
+      457                  Snapshot:        snap,
+      458                  Review:          review,
+     … 5 more lines (ctrl+o to expand)
+  ⎿  Updated backend/internal/approval/service.go (+15 -4)
+      47  }
+      48  
+      49  // Prepare freezes the audience of the campaign as reviewed at
+      50 -// expectedVersion into a pending approval (see Repository.Prep
+         -are). Errors:                                                  
+      50 +// expectedVersion into a pending approval.                    
+      51 +//                                                             
+      52 +// It first performs lazy expiry (§5.3) in its own committed tr
+         +ansaction:                                                     
+      53 +// expiry is a campaign state change that advances the version,
+         + so when the                                                   
+      54 +// marketer's view predates it the preparation below fails with
+         + a version                                                     
+      55 +// conflict — and the expiry must already be committed, otherwi
+         +se the                                                         
+      56 +// rollback would undo it and the client could never observe th
+         +e new state.                                                   
+      57 +// The preparation transaction (Repository.Prepare) re-checks e
+         +xpiry after                                                    
+      58 +// its own lock; an approval that became due in between makes i
+         +t a conflict                                                   
+      59 +// as well (rolled back; the next request's lazy expiry commits
+         + it).                                                          
+      60 +//                                                             
+      61 +// Errors:                                                     
+      62  // campaign.ErrNotFound, *campaign.ConflictError (stale version
+          , including a
+      63  // concurrent preparation that committed first), *campaign.Stat
+          eError,
+      64  // *campaign.ValidationError (no channel, content not valid for
+           the
+     ...
+      66  // (retryable, nothing written).
+      67  func (s *Service) Prepare(ctx context.Context, campaignID campa
+          ign.ID, expectedVersion int) (Summary, error) {
+      68          start := time.Now()
+      69 +        if _, err := s.ExpireDue(ctx, campaignID); err != nil {
+      70 +                return Summary{}, err                          
+      71 +        }                                                      
+      72          sum, err := s.repo.Prepare(ctx, PrepareParams{
+      73                  CampaignID: campaignID, ExpectedVersion: expect
+          edVersion, PendingTTL: s.cfg.PendingTTL,
+      74          })
+     ...
+      92          if sum.Superseded != nil {
+      93                  attrs = append(attrs, "superseded_approval_id",
+           sum.Superseded.String())
+      94          }
+      81 -        if sum.Expired != nil {                                
+      82 -                attrs = append(attrs, "expired_approval_id", su
+         -m.Expired.String())                                            
+      83 -        }                                                      
+      95          s.log.InfoContext(ctx, "approval prepared", attrs...)
+      96          return sum, nil
+      97  }
+  ⎿  Updated backend/internal/campaign/approval.go (+9 -9)
+      158  // expiry or revocation without a new one (§5.2: expiry / with
+           draw →
+      159  // content_ready, active_approval_id cleared). It is pure.
+      160  //
+      161 -// The version is not advanced: version is the optimistic-conc
+          -urrency token                                                 
+      162 -// of marketer edits, and an expiry is a system event that cha
+          -nges no                                                       
+      163 -// authored field. A marketer whose view predates the expiry c
+          -an therefore                                                  
+      164 -// re-prepare (or edit) with the version they saw. (A supersed
+          -e inside                                                      
+      165 -// prepare needs no separate transition: WithPreparedApproval 
+          -replaces the                                                  
+      166 -// active approval and advances the version once.)            
+      161 +// Like every persisted campaign state change (§11.1) it advan
+          +ces the                                                       
+      162 +// version by exactly one, so a request based on the pre-expir
+          +y state is a                                                  
+      163 +// version conflict. (A supersede inside prepare needs no sepa
+          +rate                                                          
+      164 +// transition: WithPreparedApproval replaces the active approv
+          +al and                                                        
+      165 +// advances the version once.)                                
+      166  func (c Campaign) WithApprovalClosed(approvalID ID) (Campaign,
+            error) {
+      167          if c.Status != StatusPendingApproval && c.Status != St
+           atusApproved {
+      168                  return Campaign{}, fmt.Errorf("campaign %s: ca
+           nnot close an approval in status %s", c.ID, c.Status)
+     ...
+      173          next := c.clone()
+      174          next.ActiveApprovalID = nil
+      175          next.Status = next.baseStatus()
+      176 +        next.Version++                                        
+      177          return next, nil
+      178  }
+      179  
+     ...
+      209  
+      210  // WriteApprovalStateTx writes the result of an approval trans
+           ition (status,
+      211  // active_approval_id, version) of the locked campaign cur. ne
+           xt must differ
+      212 -// from cur only in those fields.                             
+      212 +// from cur only in those fields and advance the version by ex
+          +actly one.                                                    
+      213  func WriteApprovalStateTx(ctx context.Context, tx pgx.Tx, cur,
+            next Campaign) (Campaign, error) {
+      214          switch {
+      215          case next.ID != cur.ID:
+      216                  return Campaign{}, fmt.Errorf("campaign %s: ap
+           proval transition changed the id", cur.ID)
+      217          case !next.Status.Valid():
+      218                  return Campaign{}, fmt.Errorf("campaign %s: in
+           valid status %q", cur.ID, next.Status)
+      219 -        case next.Version != cur.Version && next.Version != cu
+          -r.Version+1:                                                  
+      220 -                return Campaign{}, fmt.Errorf("campaign %s: ap
+          -proval transition must keep or advance the version by one", cu
+          -r.ID)                                                         
+      219 +        case next.Version != cur.Version+1:                   
+      220 +                return Campaign{}, fmt.Errorf("campaign %s: ap
+          +proval transition must advance the version by one", cur.ID)   
+      221          case !slices.Equal(next.Channels, cur.Channels) || nex
+           t.SegmentVersion != cur.SegmentVersion ||
+     … 2 more lines (ctrl+o to expand)
+
+⏺ Expected unit failure. Updating it, and tidying the doc-comment line break.
+
+⏺ Bash(python3 - <<'EOF'
+      p='internal/approval/service.go'…)
+  ⎿  done
+  ⎿  Updated backend/internal/approval/service.go (+1 -2)
+      58  // its own lock; an approval that became due in between makes i
+          t a conflict
+      59  // as well (rolled back; the next request's lazy expiry commits
+           it).
+      60  //
+      61 -// Errors:                                                     
+      62 -// campaign.ErrNotFound, *campaign.ConflictError (stale version
+         -, including a                                                  
+      61 +// Errors: campaign.ErrNotFound, *campaign.ConflictError (stale
+         + version, including a                                          
+      62  // concurrent preparation that committed first), *campaign.Stat
+          eError,
+      63  // *campaign.ValidationError (no channel, content not valid for
+           the
+      64  // selection), *EmptyAudienceError, ErrAudienceChanged and ErrB
+          usy
+  ⎿  Updated backend/internal/campaign/approval_test.go (+2 -2)
+      174                  if err != nil {
+      175                          t.Fatal(err)
+      176                  }
+      177 -                // Expiry is a system event: the version does 
+          -not move.                                                     
+      178 -                if closed.Status != campaign.StatusContentRead
+          -y || closed.ActiveApprovalID != nil || closed.Version != cur.V
+          -ersion {                                                      
+      177 +                // Expiry is a persisted state change: the ver
+          +sion advances by one.                                         
+      178 +                if closed.Status != campaign.StatusContentRead
+          +y || closed.ActiveApprovalID != nil || closed.Version != cur.V
+          +ersion+1 {                                                    
+      179                          t.Errorf("%s: closed = %+v", st, close
+           d)
+      180                  }
+      181          }
+
+⏺ Now the integration tests. Rewriting the expiry-dependent tests to the new
+  semantics.
+
+  Ran 4 shell commands (ctrl+o to expand)
+⏺ Bash(python3 - <<'EOF'
+      p='test/integration/approval_test.go'…)
+  ⎿  --- PASS: TestPrepareChannelSelections (0.41s)
+     --- PASS: TestPrepareFrozenPersonalization (0.12s)
+     --- PASS: TestPrepareEmptyAudience (0.11s)
+     … +20 lines (ctrl+o to expand)
+  ⎿  Updated backend/test/integration/approval_test.go (+2 -2)
+      644          // (§5.2): revoked(superseded), its held rows deleted,
+            history kept.
+      645          pending := e.get(c.ID)
+      646          second := e.prepare(pending)
+      647 -        if second.Superseded == nil || *second.Superseded != f
+          -irst.ApprovalID || second.Expired != nil {                    
+      648 -                t.Errorf("superseded = %v, expired = %v", seco
+          -nd.Superseded, second.Expired)                                
+      647 +        if second.Superseded == nil || *second.Superseded != f
+          +irst.ApprovalID {                                             
+      648 +                t.Errorf("superseded = %v", second.Superseded)
+      649          }
+      650          old := e.approvalRow(first.ApprovalID)
+      651          if old.Status != "revoked" || old.RevokeReason == nil 
+           || *old.RevokeReason != "superseded" || old.ClosedAt == nil ||
+
+⏺ All 21 approval integration tests pass. Now the documentation: removing the
+  no-bump exception and describing the committed lazy-expiry step.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ Bash(python3 - <<'EOF'
+      p='docs/ARCHITECTURE.md'…)
+  ⎿  542:- **Manual edits** (`Service.EditContent`, `Campaign.WithEditedCon
+     tent`, pure, under the campaign row lock in the CP12 `SaveContent` tra
+     nsaction): version CAS first (`409 version_conflict`), then the state
+     … +17 lines (ctrl+o to expand)
+  ⎿  Updated docs/ARCHITECTURE.md (+10 -9)
+      285  | content_ready, pending_approval, approved¹ | prepare | `pend
+           ing_approval` | live approval → revoked(`superseded`) + delete
+            its held rows; insert new approval + held rows |
+      286  | pending_approval | confirm | `approved` | approval pending →
+            approved |
+      287  | pending_approval, approved | withdraw | `content_ready` | ap
+           proval → revoked(`withdrawn`) + delete held rows |
+      288 -| pending_approval, approved | expiry | `content_ready` | appr
+          -oval → expired + delete held rows |                           
+      288 +| pending_approval, approved | expiry | `content_ready` | appr
+          +oval → expired + delete held rows; `version+1` |              
+      289  | approved | send | `sending` | approval approved → consumed; 
+           held → pending |
+      290  | sending | completion (worker) | `completed` / `completed_wit
+           h_failures` | none |
+      291  | draft, segmented, content_ready | cancel | `cancelled` | non
+           e |
+     ...
+      293  | sending | cancel | `cancelled` | pending/retry_scheduled → c
+           ancelled; in_flight rows finish (§10.8) |
+      294  | completed*, cancelled | anything | — | `409 invalid_state` |
+      295  
+      296 -¹ **CP14:** prepare in `approved` is refused (`409 invalid_sta
+          -te`, "withdraw the approval first") until an explicit re-prepa
+          -ration contract exists (§9.1); an *expired* approved approval 
+          -is closed by lazy expiry first, after which prepare proceeds f
+          -rom `content_ready`.                                          
+      296 +¹ **Deliberate product-safe deviation (CP14, approved in revie
+          +w):** prepare in `approved` is refused (`409 invalid_state`, "
+          +withdraw the approval first"), so a plain prepare can never si
+          +lently invalidate a confirmed approval; an explicit re-prepara
+          +tion contract, if wanted, belongs to CP15 (§9.1). An *expired*
+          + approved approval is closed by lazy expiry (version + 1); aft
+          +er a reload the marketer prepares from `content_ready`.       
+      297  
+      298  "Base status" after an invalidating edit = `content_ready` if 
+           `current_content_id` is set, else `segmented` (or `draft` if n
+           o rule). `active_approval_id` is cleared whenever the approval
+            becomes revoked/expired and set on prepare.
+      299  
+     ...
+      347  | **Prepare** | lock campaign; `ExpireDue`; require status ∈ {
+           content_ready, pending_approval, approved}, segment present, ≥
+           1 channel, current content **valid for the selected channels**
+           ; revoke live approval (`superseded`) + delete its held rows; 
+           run compiled audience query; `INSERT … SELECT` held rows (vars
+            frozen, idempotency keys); compute stats + digest; assert row
+            count = stats eligible sum, else rollback; `snapshot_count = 
+           0` ⇒ rollback + `422 empty_audience`; insert approval (pending
+           , `prepared_at = clock_timestamp()`, `expires_at = clock_times
+           tamp() + $pending_ttl`, evaluated after the lock); campaign → 
+           pending_approval, `active_approval_id` set |
+      348  | **Confirm** | lock campaign; `ExpireDue`; `UPDATE campaign_a
+           pprovals SET status='approved', approved_at=clock_timestamp(),
+            approved_by=$u, expires_at=clock_timestamp()+$approved_ttl WH
+           ERE id=$a AND campaign_id=$c AND status='pending' AND expires_
+           at > clock_timestamp() AND segment_version=$sv AND content_id=
+           $cid AND channels=$ch` → 0 rows ⇒ 409 (`approval_expired` / `a
+           pproval_mismatch` / `invalid_state`, determined by re-read); c
+           ampaign → approved |
+      349  | **Withdraw** | lock campaign; approval → revoked(`withdrawn`
+           ); delete held rows; campaign → content_ready |
+      350 -| **Expire** | lock campaign; approval → expired WHERE status 
+          -IN (pending, approved) AND expires_at ≤ clock_timestamp(); del
+          -ete held rows; campaign → content_ready; clear `active_approva
+          -l_id` |                                                       
+      350 +| **Expire** | lock campaign; approval → expired WHERE status 
+          +IN (pending, approved) AND expires_at ≤ clock_timestamp(); del
+          +ete held rows; campaign → content_ready; clear `active_approva
+          +l_id`; `version+1` (nothing written when nothing is due) |    
+      351  | **Send** | lock campaign; `ExpireDue`; require campaign appr
+           oved and `active_approval_id = $a`; `UPDATE campaign_approvals
+            SET status='consumed', consumed_at=clock_timestamp() WHERE id
+           =$a AND status='approved' AND expires_at > clock_timestamp()` 
+           → 0 rows ⇒ 409; `UPDATE campaign_deliveries SET status='pendin
+           g' WHERE approval_id=$a AND status='held'` → count must equal 
+           `snapshot_count`, else rollback; campaign → sending, `send_sta
+           rted_at=now()`. Repeat call on a sending campaign with the sam
+           e approval id ⇒ `200` current state (idempotent) |
+      352  | **Cancel** | lock campaign; per §5.2 |
+      353  | **Claim** (worker) | single statement: `UPDATE … SET status=
+           'in_flight', lease_until=now()+lease, leased_by=$w WHERE id IN
+            (SELECT d.id … JOIN approvals/campaigns … FOR UPDATE OF d SKI
+           P LOCKED LIMIT $n) RETURNING …` |
+     ...
+      584  
+      585  CP14 is the backend half of the prepare step: `approval.Servic
+           e.Prepare` / `ExpireDue`, `approval.Repository`, the campaign-
+           side transitions (`campaign/approval.go`) and `segment.Compile
+           Eligible`. Confirm, withdraw, send, the sweeper loop and the H
+           TTP routes follow in CP15; until `POST /approvals` exists no A
+           PI path can create an approval, so the "until Slice 3" refusal
+           s of §7.8/§7.9/§11.1 stay in place.
+      586  
+      587 -- **Transaction** (§5.5, READ COMMITTED, `lock_timeout` 5 s, `
+          -statement_timeout` 10 s, 30 s context deadline for the whole t
+          -ransaction; no I/O but the database): lock campaign → lazy exp
+          -iry (`expires_at <= clock_timestamp()` after the lock) → versi
+          -on CAS (`expected_version`) + state check → re-read the curren
+          -t content version (re-validated, must be the newest) → `Campai
+          -gn.ReviewForApproval` → revoke a still-live **pending** approv
+          -al (`superseded`) and delete its held rows (count must equal i
+          -ts `snapshot_count`) → `segment.ComputeSnapshotAudience`: part
+          -ition **and** expected snapshot (per-channel eligible counts +
+          - digest) in one statement → insert approval → `INSERT … SELECT
+          -` held rows (same `eligible` definition) → read them back in d
+          -igest order and compare counts + digest → campaign `pending_ap
+          -proval`, `active_approval_id`, `version+1`. Any failure rolls 
+          -back everything, so a superseded approval stays live when the 
+          -new preparation fails, and no approval ever points at an incom
+          -plete snapshot.                                               
+      587 +- **Lazy expiry first, in its own transaction.** `Service.Prep
+          +are` runs `ExpireDue` (the §5.5 Expire transaction) and commit
+          +s it before the preparation transaction. Expiry advances the v
+          +ersion, so a request based on the pre-expiry view then fails t
+          +he version CAS with `409 version_conflict` — and because the e
+          +xpiry is already committed, that rollback cannot undo it; the 
+          +client reloads (content_ready, version + 1) and prepares again
+          +.                                                             
+      588 +- **Transaction** (§5.5, READ COMMITTED, `lock_timeout` 5 s, `
+          +statement_timeout` 10 s, 30 s context deadline for the whole t
+          +ransaction; no I/O but the database): lock campaign → expiry r
+          +e-check after the lock (an approval that became due since the 
+          +lazy expiry is expired, never superseded; the version advance 
+          +makes the CAS fail and the transaction roll back) → version CA
+          +S (`expected_version`) + state check → re-read the current con
+          +tent version (re-validated, must be the newest) → `Campaign.Re
+          +viewForApproval` → revoke a still-live **pending** approval (`
+          +superseded`) and delete its held rows (count must equal its `s
+          +napshot_count`) → `segment.ComputeSnapshotAudience`: partition
+          + **and** expected snapshot (per-channel eligible counts + dige
+          +st) in one statement → insert approval → `INSERT … SELECT` hel
+          +d rows (same `eligible` definition) → read them back in digest
+          + order and compare counts + digest → campaign `pending_approva
+          +l`, `active_approval_id`, `version+1`. Any failure rolls back 
+          +everything, so a superseded approval stays live when the new p
+          +reparation fails, and no approval ever points at an incomplete
+          + snapshot.                                                    
+      589  - **Consistency under concurrent customer changes** (no custom
+           er row is locked; no isolation upgrade). The partition shown t
+           o the marketer and the expected recipient set come from **one 
+           statement**, i.e. one database snapshot, so the stored `audien
+           ce_stats` is exactly the partition whose `eligible` cell is th
+           e expected set. The held rows are inserted by a second stateme
+           nt; if any consent, contact or rule-relevant data committed in
+            between changes the eligible set (even with equal counts), th
+           e read-back digest differs and preparation rolls back with `Er
+           rAudienceChanged` (retryable). Hence a committed approval's he
+           ld rows are exactly the eligible cell of its stored partition 
+           at one instant. Changes committed **after** that instant are n
+           ot reflected (snapshot semantics, ADR-007); they are handled a
+           t send time: consent is re-checked in the precheck of **every*
+           * attempt, the destination is resolved from the **current** co
+           ntact at the first precheck (no contact → `skipped_no_contact`
+           ), membership is never re-evaluated, and `vars` stay frozen (§
+           10.3).
+      589 -- **Approved campaigns** (CP14 decision, review of §5.2): a pl
+          -ain prepare never invalidates a confirmed approval. §5.2 allow
+          -s `approved → prepare`, but the prepare request carries only `
+          -expected_version`, so it cannot express "replace my confirmed 
+          -approval" — a stale "Review & approve" would silently revoke i
+          -t. Prepare in `approved` is therefore `409 invalid_state` (and
+          - the supersede step refuses anything but a pending approval, d
+          -efence in depth). The marketer withdraws first (CP15), or the 
+          -approval expires (its own `expires_at`, 24 h after confirm), i
+          -n which case lazy expiry closes it as `expired` and preparatio
+          -n proceeds. Superseding a **pending** approval stays as docume
+          -nted: it requires the current version (a double submit is `409
+          - version_conflict`) and is recorded as `revoke_reason = supers
+          -eded`. An explicit re-preparation of an approved campaign, if 
+          -wanted, needs its own contract in CP15.                       
+      590 -- **Campaigns without a live approval**: only `pending_approva
+          -l` / `approved` campaigns have a live approval to expire or su
+          -persede. `sending` and finished campaigns keep `active_approva
+          -l_id` on their consumed approval (§4), which lazy expiry leave
+          -s untouched; prepare then fails the state check.              
+      590 +- **Approved campaigns** (CP14 decision, review of §5.2): a pl
+          +ain prepare never invalidates a confirmed approval. §5.2 allow
+          +s `approved → prepare`, but the prepare request carries only `
+          +expected_version`, so it cannot express "replace my confirmed 
+          +approval" — a stale "Review & approve" would silently revoke i
+          +t. Prepare in `approved` is therefore `409 invalid_state` (and
+          + the supersede step refuses anything but a pending approval, d
+          +efence in depth). This is the deliberate product-safe deviatio
+          +n from the §5.2 table (approved in the CP14 review). The marke
+          +ter withdraws first (CP15), or the approval expires (its own `
+          +expires_at`, 24 h after confirm — the pending 15 min TTL never
+          + applies to it), in which case lazy expiry closes it as `expir
+          +ed` (version + 1) and, after a reload, preparation proceeds fr
+          +om `content_ready`. Superseding a **pending** approval stays a
+          +s documented: it requires the current version (a double submit
+          + is `409 version_conflict`) and is recorded as `revoke_reason 
+          += superseded`. An explicit re-preparation of an approved campa
+          +ign, if wanted, needs its own contract in CP15.               
+      591 +- **Campaigns without a live approval**: only `pending_approva
+          +l` / `approved` campaigns have a live approval to expire or su
+          +persede. `sending` and finished campaigns keep `active_approva
+          +l_id` on their consumed approval (§4), which lazy expiry leave
+          +s untouched even when its old `expires_at` has passed (no writ
+          +e, no version change); prepare then fails the state check.    
+      592  - **Eligibility** is defined once: `segment.CompileEligible` =
+            `WITH matched AS (<Compile(rule)>), classified AS (…), eligib
+           le(user_id, channel)`, where `classified` is the same CTE the 
+           audience statistics count (no_contact 0 / no_consent 1 / eligi
+           ble 2) and `eligible` keeps code 2 for the selected channels (
+           bound as a parameter). One row per (user, channel) by construc
+           tion.
+      593  - **Uniqueness and idempotency** (actual schema): `UNIQUE (cam
+           paign_id, user_id, channel)` and `UNIQUE (idempotency_key)` wi
+           th key `<campaign_id>:<user_id>:<channel>` span **all approval
+           s of a campaign**, not one approval. A later approval may free
+           ze the same recipient with the same key because the earlier ap
+           proval's held rows are deleted in the same transaction that cl
+           oses it (invariant 6), before the new rows are inserted; the n
+           ew rows carry the new `approval_id`, so they cannot be mistake
+           n for the earlier snapshot. At most one approval per campaign 
+           is ever consumed (`approvals_one_consumed`) and a sending/fini
+           shed campaign cannot be prepared, so a released row is never d
+           eleted or re-frozen and its key is never reused by another sna
+           pshot; every retry of a delivery reuses its one key (§10.6). R
+           evoked/expired approval rows are kept unchanged after closing 
+           (binding, stats, count, digest — no statement reopens them); t
+           heir held rows are not history and are deleted by design (ADR-
+           005).
+      594  - **Frozen values**: `vars = {"first_name", "last_name", "city
+           "}` (the `content.Values` shape) copied verbatim from the user
+            row inside the `INSERT … SELECT` — no contact data, no normal
+           ization, no truncation, no fallback substitution; Go never rea
+           ds them except in the read-back. **Unusable values do not chan
+           ge eligibility** (the snapshot must equal the partition): the 
+           read-back trial-renders every row with the deterministic rende
+           rer and reports per channel the number of rows that would fail
+            (`render_issues` by code: `missing_value`, `invalid_value`, `
+           value_too_long`, `content_too_long`). Such a delivery fails pe
+           rmanently at send time (§8.7). Fallbacks apply as in §8.1 (a b
+           lank value uses the placeholder's fallback). Counts only; neve
+           r values.
+      595  - **Snapshot digest**: lower-case hex SHA-256 of lines `<user_
+           id>:<channel>` sorted by user id, then channel in enum order (
+           sms, email), joined by `\n` (no trailing newline). Computed in
+            SQL before the insert (stored) and in Go over the read-back r
+           ows; they must match.
+      596  - **Content review** (§7.9 requirement; returned in `Summary.R
+           eview`): `content.Parse` for the selected channels via `Valida
+           teStored` (missing text for a selected channel → `422 validati
+           on_failed`; text for an unselected channel → warning `channel_
+           not_selected`, it is never frozen or sent) and the offer polic
+           y against the **current** content brief. `unauthorized_offer` 
+           / `unauthorized_claim` findings never block preparation (also 
+           not for AI versions, which could not contain them); they are r
+           eturned separately as `OfferFindings` for the approval dialog.
+            **CP15 requirement:** the prepare response and the approval d
+           ialog must show these findings before the Confirm action (§7.9
+           ); whether confirm additionally needs an explicit acknowledgem
+           ent is a CP15 product decision, not implied by preparation. A 
+           stored content brief that does not parse is an internal error 
+           (the offer check must not be silently skipped). The rendered e
+           xample uses `content.ExampleValues` only.
+     … 15 more lines (ctrl+o to expand)
+
+⏺ Docs consistent. Full verification run.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ Everything passes. Reviewing the diff scope before committing.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ Diff contains only the intended CP14 files; no secrets or .env. Committing.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ CP14 is committed as dc1a486 (feat: add atomic approval preparation and frozen
+  audience snapshots), and the working tree is clean. Approval expiry now
+  increments the campaign version exactly once, as §11.1 requires. I've stopped
+  before CP15.
+
+  The correction
+
+  - Same transaction: expiry moves the approval to expired, deletes its held
+    rows, sets the campaign to content_ready, clears the active approval pointer
+    and bumps the version by one, all together. The campaign-update helper now
+    refuses any approval transition that doesn't bump by exactly one.
+  - No-ops write nothing: an expiry check with nothing due doesn't touch the
+    row, so neither the version nor updated_at changes.
+  - Sending and finished campaigns are skipped, even when the consumed
+    approval's old expires_at has passed. Only pending_approval and approved
+    campaigns have a live approval to expire.
+  - Lazy expiry is now committed first, in its own transaction, before the
+    prepare transaction runs. The new bump made this necessary:
+    - If expiry and its bump happened inside the prepare transaction, a stale
+      client's version check would fail and roll the expiry back with it.
+    - The client could then retry forever against an approval that stays expired
+      but is never closed.
+    - Now a prepare using the pre-expiry version gets a 409 while the expiry
+      stays committed; the client reloads and proceeds.
+    - If an approval becomes due between the two transactions, the prepare
+      transaction expires it, gets a 409, and rolls back. It never supersedes
+      it.
+  - Kept as before: the approved-vs-pending TTL distinction, the refusal to
+    re-prepare a still-approved campaign, and the single-statement audience
+    snapshot with digest check.
+  - Docs: the no-bump exception is removed from §11.1 and §9.1, and expiry is
+    shown as a version+1 write in §5.2 and §5.5. The approved refusal is
+    documented as the deliberate product-safe deviation from the §5.2 table.
+
+  Tests added or adjusted
+
+  - Pending approval expiry: version goes up by exactly one; repeated checks
+    leave the version and updated_at unchanged.
+  - Approved approval expiry:
+    - it isn't expired early by the pending TTL;
+    - once it reaches its own expires_at, it is expired with a one-step version
+      bump;
+    - a stale prepare gets a 409, and after reloading the prepare succeeds.
+  - Stale client: edit, set-channels and prepare with the pre-expiry version all
+    return 409. After an explicit reload, edit then prepare succeed.
+  - Concurrent expiry and prepare:
+    - with stale versions, every prepare gets a 409 and the version rises by
+      exactly one;
+    - with the reloaded version, exactly one prepare succeeds, one more bump,
+      one live approval.
+  - New test (TestPrepareTransactionNeverSupersedesADueApproval): the prepare
+    transaction alone, given a due approval, returns 409 and rolls back fully.
+  - Lock-wait expiry: the expiry transaction started before the approval
+    expired, waited on the lock, and expired it after the lock; the stale
+    prepare then got a 409.
+  - Sending campaign: with the consumed approval past its old expiry, the
+    campaign and the consumed approval are untouched.
+  - Rollback, uniqueness, audience-change-detection and privacy tests still
+    pass.
+
+  Verification
+
+  - gofmt, go vet (all build tags), unit tests, unit tests with -race, the full
+    PostgreSQL integration suite with -race, and the unit-test isolation check
+    all pass.
+  - staticcheck: the pinned v0.8.2, built offline from the local module cache,
+    is clean on the default, integration and live tags. The literal make lint
+    still fails only at downloading staticcheck (x509: certificate signed by 
+    unknown authority); everything before that step passes.
+  - No Anthropic calls were made, and no .env or credentials are in the commit.

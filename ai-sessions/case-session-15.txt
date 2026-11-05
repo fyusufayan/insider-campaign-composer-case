@@ -1,0 +1,3261 @@
+ ▐▛███▛█   Claude Code v2.1.318
+▝▜██████▀  Opus 5.5 · Claude Pro
+ ▝▝   ▝▝   ~/Desktop/devel/leet/insider-case/insider-campaign-composer-case
+
+
+❯ We are continuing Smart Campaign Composer.                                    
+  CP14 is reviewed, approved and committed:                                     
+  `dc1a486` — `feat: add atomic approval preparation and frozen audience        
+  snapshots`                                                                    
+  The working tree is clean.                                                    
+  Begin Slice 3, CP15 — Approval Confirmation, Withdrawal, HTTP API and Vue     
+  Approval Review.                                                              
+  The objective is to make the CP14 approval preparation workflow usable from   
+  the browser, safely confirm or withdraw an approval, and handle expiry        
+  consistently.                                                                 
+  Do not implement delivery sending or workers in this checkpoint.              
+  1. Read the established contracts                                             
+  Before changing code, read:                                                   
+                                                                                
+  * `CLAUDE.md`                                                                 
+  * `docs/ROADMAP.md`                                                           
+  * `docs/ARCHITECTURE.md`, especially §§4–5, 8–11 and the CP14 notes           
+  * `DECISIONS.md` and approval/content/delivery ADRs                           
+  * The actual PostgreSQL migrations, indexes and constraints for approvals and 
+  held deliveries                                                               
+  * `internal/approval`                                                         
+  * `internal/campaign`, including current status transitions and optimistic    
+  locking                                                                       
+  * `internal/content`                                                          
+  * The deterministic offer-review policy                                       
+  * Existing HTTP error and DTO contracts                                       
+  * The existing Vue content editor, Pinia campaign store and typed API client  
+  * Existing Testcontainers and fake-backend test helpers                       
+                                                                                
+  Confirm CP14 is committed and the working tree is clean.                      
+  Reconcile the required implementation with the actual documented routes and   
+  state machine before coding. Preserve the specific CP14 safety decisions even 
+  where older prose in §5.2 differs.                                            
+  2. Required user workflow                                                     
+  Implement this flow end to end:                                               
+                                                                                
+  1. User opens a campaign with valid generated or edited content.              
+  2. User clicks Prepare Approval.                                              
+  3. Backend uses the CP14 preparation service to freeze eligible deliveries    
+  and their allowed personalization values.                                     
+  4. Frontend displays the frozen audience summary, channel totals, excluded    
+  counts, content version and review findings.                                  
+  5. User explicitly confirms the prepared approval or withdraws it.            
+  6. The backend enforces pending TTL, version checks and immutable snapshot    
+  binding.                                                                      
+  7. The confirmed campaign moves to `approved`.                                
+  8. The frontend refreshes to show its persisted approved state.               
+                                                                                
+  No messages are sent.                                                         
+  3. HTTP API contracts                                                         
+  Implement the documented approval-related routes, preserving the existing     
+  `/api/v1/campaigns/{id}` conventions.                                         
+  Support:                                                                      
+                                                                                
+  * Approval preparation.                                                       
+  * Reading the current approval summary.                                       
+  * Explicit confirmation.                                                      
+  * Explicit withdrawal or revocation, as supported by the documented state     
+  machine.                                                                      
+  * Lazy expiry integration on relevant requests.                               
+                                                                                
+  Use the exact documented route names and payload                              
+  ──── (149 lines hidden) ───────────────────────────────────────────────────── 
+  ts for:                                                                       
+                                                                                
+  1. Successful preparation endpoint.                                           
+  2. Approval summary read.                                                     
+  3. Confirmation before expiry.                                                
+  4. Confirmation exactly at or after expiry rejected.                          
+  5. Confirmation with stale expected_version.                                  
+  6. Concurrent confirmations, one winner.                                      
+  7. Missing or mismatched frozen content/segment binding.                      
+  8. Pending withdrawal.                                                        
+  9. Approved withdrawal.                                                       
+  10. Invalid withdrawal from sending/final states.                             
+  11. Approval expiry and lazy expiry behavior.                                 
+  12. Offer findings available to reviewers.                                    
+  13. Strict JSON decoding and sanitized errors.                                
+  14. No recipient PII in approval DTOs or logs.                                
+                                                                                
+  Add PostgreSQL integration tests for transaction correctness, version         
+  increments, uniqueness, expiry under lock contention, rollback and release of 
+  held rows.                                                                    
+  Add frontend tests for:                                                       
+                                                                                
+  * Preparing and showing the frozen summary.                                   
+  * Confirmation and withdrawal.                                                
+  * Warnings and offer-review visibility.                                       
+  * Expiry and conflict states.                                                 
+  * Navigation races.                                                           
+  * Strict API response decoding.                                               
+  * Refresh persistence.                                                        
+  * Mobile layout where practical.                                              
+                                                                                
+  12. Full browser verification                                                 
+  Use Docker Compose in explicit demo mode:                                     
+  `LLM_PROVIDER=demo ANTHROPIC_API_KEY= docker compose up --build`              
+  Exercise the real browser workflow through nginx:                             
+  Create campaign → Interpret → Generate Content → Prepare Approval → Review →  
+  Confirm → Refresh.                                                            
+  Verify the state persists and that no sending occurs.                         
+  Also test withdrawal on a separate campaign or supported approval state.      
+  Never make paid Anthropic API requests.                                       
+  13. Verification                                                              
+  Run:                                                                          
+                                                                                
+  * Backend unit tests.                                                         
+  * `go test -race ./...`.                                                      
+  * Full PostgreSQL integration tests with race detection.                      
+  * Frontend Vitest, typecheck and production build.                            
+  * `make lint`, or the same pinned staticcheck version offline with an honest  
+  report if the known TLS download issue occurs.                                
+  * Docker build.                                                               
+  * Demo-mode HTTP and browser smoke.                                           
+                                                                                
+  Do not disable TLS verification or Go module checksum validation.             
+  14. Completion report                                                         
+  Report:                                                                       
+                                                                                
+  1. Routes and request/response contracts.                                     
+  2. Exact confirmation and withdrawal transactions.                            
+  3. State transitions and version behavior.                                    
+  4. Pending/approved TTL behavior.                                             
+  5. Offer findings and acknowledgment behavior.                                
+  6. Frontend approval dialog.                                                  
+  7. Concurrent operations and error handling.                                  
+  8. Unit, integration and frontend test results.                               
+  9. Docker/browser smoke results.                                              
+  10. Limitations and deliberate decisions.                                     
+                                                                                
+  Do not commit anything.                                                       
+  Do not implement the delivery worker, provider integration, sending queue,    
+  retries, rate limiting or delivery SSE.                                       
+  Stop after CP15 for review.                                                   
+
+  Searched for 1 pattern, listed 1 directory, ran 3 shell commands (ctrl+o to expand)
+
+⏺ Still reading the architecture contracts before implementing CP15.
+
+  Read 1 file, ran 2 shell commands (ctrl+o to expand)
+
+⏺ Now the CP14 code.
+
+  Read 2 files, ran 5 shell commands (ctrl+o to expand)
+
+⏺ Reading the campaign service, API wiring and config next.
+
+  Listed 2 directories, ran 4 shell commands (ctrl+o to expand)
+
+⏺ Still in the reading phase — checking the content repository and frontend
+  before designing the confirm/withdraw transactions.
+
+  Read 1 file, listed 2 directories, ran 2 shell commands (ctrl+o to expand)
+
+⏺ Finishing the frontend read (ContentPanel, types), then I'll start writing the
+  backend confirm/withdraw code.
+
+  Searched for 2 patterns, ran 4 shell commands (ctrl+o to expand)
+
+⏺ Context gathered. Now writing the backend: campaign-side transitions first.
+
+  Searched for 1 pattern (ctrl+o to expand)
+
+⏺ Now the campaign-side confirm/withdraw transitions.
+
+⏺ Bash(python3 - <<'EOF'
+      p='internal/campaign/approval.go'…)
+  ⎿  Updated backend/internal/campaign/approval.go (+92 -0)
+      177          return next, nil
+      178  }
+      179  
+      180 +// ---- Confirmation and withdrawal (CP15, §5.2, §5.5) ----   
+      181 +                                                              
+      182 +// Operations of the approval decisions.                      
+      183 +const (                                                       
+      184 +        OpConfirmApproval  Operation = "confirm_approval"     
+      185 +        OpWithdrawApproval Operation = "withdraw_approval"    
+      186 +)                                                             
+      187 +                                                              
+      188 +// CheckConfirmAt reports whether the approval approvalID may 
+          +be confirmed                                                  
+      189 +// on top of expectedVersion (§5.2 pending_approval → confirm 
+          +→ approved):                                                  
+      190 +// the version matches (optimistic concurrency) and the campai
+          +gn is                                                         
+      191 +// pending_approval with approvalID as its active approval. Th
+          +e approval                                                    
+      192 +// row's own state, expiry and binding are checked by the appr
+          +oval                                                          
+      193 +// transaction under the same lock.                           
+      194 +func (c Campaign) CheckConfirmAt(expectedVersion int, approval
+          +ID ID) error {                                                
+      195 +        if c.Version != expectedVersion {                     
+      196 +                return &ConflictError{Expected: expectedVersio
+          +n, Current: c.Version}                                        
+      197 +        }                                                     
+      198 +        active := c.ActiveApprovalID != nil && *c.ActiveApprov
+          +alID == approvalID                                            
+      199 +        switch {                                              
+      200 +        case c.Status == StatusPendingApproval && active:     
+      201 +                return nil                                    
+      202 +        case c.Status == StatusApproved && active:            
+      203 +                return &StateError{Op: OpConfirmApproval, Stat
+          +us: c.Status, Reason: "the approval is already confirmed"}    
+      204 +        case c.Status == StatusPendingApproval || c.Status == 
+          +StatusApproved:                                               
+      205 +                return &StateError{Op: OpConfirmApproval, Stat
+          +us: c.Status, Reason: "this is not the campaign's current appr
+          +oval; reload the campaign"}                                   
+      206 +        case c.Status == StatusContentReady || c.Status == Sta
+          +tusSegmented || c.Status == StatusDraft:                      
+      207 +                return &StateError{Op: OpConfirmApproval, Stat
+          +us: c.Status, Reason: "no approval is pending; prepare a new o
+          +ne"}                                                          
+      208 +        default:                                              
+      209 +                return &StateError{Op: OpConfirmApproval, Stat
+          +us: c.Status, Reason: "the campaign can no longer be approved"
+          +}                                                             
+      210 +        }                                                     
+      211 +}                                                             
+      212 +                                                              
+      213 +// WithConfirmedApproval applies a successful confirmation (§5
+          +.2 confirm):                                                  
+      214 +// status → approved, version +1; the active approval is uncha
+          +nged. The                                                     
+      215 +// checks of CheckConfirmAt are repeated. It is pure.         
+      216 +func (c Campaign) WithConfirmedApproval(expectedVersion int, a
+          +pprovalID ID) (Campaign, error) {                             
+     … 64 more lines (ctrl+o to expand)
+
+⏺ Now lazy expiry wiring in the campaign service.
+
+⏺ Bash(python3 - <<'EOF'
+      p='internal/campaign/service.go'…)
+  ⎿  internal/campaign/service.go:97:        c, err := s.store.Get(ctx, id)
+     internal/campaign/service.go:108:       return s.store.Get(ctx, id)
+     internal/campaign/content_service.go:245:       v, err :=
+     s.store.GetContent(
+     ctx, id, *c.CurrentContentID)
+  ⎿  Updated backend/internal/campaign/content_service.go (+6 -3)
+       96          if observe == nil {
+       97                  observe = func(GenerationEvent) error { return
+            nil }
+       98          }
+       99 -        observed, err := s.store.Get(ctx, id)                 
+       99 +        observed, err := s.load(ctx, id)                      
+      100          if err != nil {
+      101                  return ContentResult{}, err
+      102          }
+     ...
+      188  // without saving anything (debounced editor validation). Cont
+           ent problems
+      189  // are part of the result, not an error.
+      190  func (s *Service) ValidateContent(ctx context.Context, id ID, 
+           d content.Draft) (DraftValidation, error) {
+      191 -        c, err := s.store.Get(ctx, id)                        
+      191 +        c, err := s.load(ctx, id)                             
+      192          if err != nil {
+      193                  return DraftValidation{}, err
+      194          }
+     ...
+      209  // content a *ValidationError. No approval is touched (pending
+           _approval and
+      210  // approved are refused until Slice 3).
+      211  func (s *Service) EditContent(ctx context.Context, id ID, d co
+           ntent.Draft, expectedVersion int) (ContentResult, error) {
+      212 +        if _, err := s.load(ctx, id); err != nil { // lazy exp
+          +iry first (committed)                                         
+      213 +                return ContentResult{}, err                   
+      214 +        }                                                     
+      215          created := false
+      216          saved, v, err := s.store.SaveContent(ctx, id, func(cur
+            Campaign, current *content.Version) (Campaign, content.Versio
+           n, bool, error) {
+      217                  next, v, ok, err := cur.WithEditedContent(expe
+           ctedVersion, current, d)
+     ...
+      235  // if it has none). The version is read after the campaign; ve
+           rsions are
+      236  // immutable, so it is exactly the version the campaign pointe
+           d at.
+      237  func (s *Service) CurrentContent(ctx context.Context, id ID) (
+           Campaign, *content.Version, error) {
+      235 -        c, err := s.store.Get(ctx, id)                        
+      238 +        c, err := s.load(ctx, id)                             
+      239          if err != nil {
+      240                  return Campaign{}, nil, err
+      241          }
+  ⎿  Updated backend/internal/campaign/service.go (+57 -6)
+      35          Stats(ctx context.Context, rule segment.Validated, chan
+          nels []segment.Channel) (segment.AudienceStats, error)
+      36  }
+      37  
+      38 +// ApprovalExpirer performs lazy approval expiry (ARCHITECTURE 
+         +§5.3 (b)):                                                     
+      39 +// if the campaign's live approval is due it is expired in its 
+         +own committed                                                  
+      40 +// transaction (campaign row lock, clock_timestamp(), held rows
+         + deleted,                                                      
+      41 +// version + 1) and its id returned; otherwise nothing is writt
+         +en.                                                            
+      42 +// *approval.Service implements it.                            
+      43 +type ApprovalExpirer interface {                               
+      44 +        ExpireDue(ctx context.Context, id ID) (*ID, error)     
+      45 +}                                                              
+      46 +                                                               
+      47 +// Option configures optional service dependencies.            
+      48 +type Option func(*Service)                                     
+      49 +                                                               
+      50 +// WithApprovalExpirer makes every API operation on a campaign 
+         +with a live                                                    
+      51 +// approval run lazy expiry first (§5.3), so the API never pres
+         +ents or                                                        
+      52 +// mutates a stale approval state. Without it (unit tests of ea
+         +rlier                                                          
+      53 +// slices) no expiry runs.                                     
+      54 +func WithApprovalExpirer(e ApprovalExpirer) Option {           
+      55 +        return func(s *Service) { s.expirer = e }              
+      56 +}                                                              
+      57 +                                                               
+      58  // Service implements the campaign authoring use cases.
+      59  type Service struct {
+      60          store       Store
+      61          audience    AudienceCounter
+      62          interpreter *ai.Interpreter
+      63          generator   *ai.Generator
+      64 +        expirer     ApprovalExpirer                            
+      65          log         *slog.Logger
+      66  }
+      67  
+      68  // NewService wires the service.
+      48 -func NewService(store Store, audience AudienceCounter, interpre
+         -ter *ai.Interpreter, generator *ai.Generator, log *slog.Logger)
+         - (*Service, error) {                                           
+      69 +func NewService(store Store, audience AudienceCounter, interpre
+         +ter *ai.Interpreter, generator *ai.Generator, log *slog.Logger,
+         + opts ...Option) (*Service, error) {                           
+      70          switch {
+      71          case store == nil:
+      72                  return nil, errors.New("campaign: nil store")
+     ...
+       79          case log == nil:
+     … 69 more lines (ctrl+o to expand)
+
+⏺ Now the approval package: errors, TTL constants and summary fields.
+
+⏺ Bash(python3 - <<'EOF'
+      p='internal/approval/approval.go'…)
+  ⎿  Updated backend/internal/approval/approval.go (+67 -10)
+       5  // the campaign row, re-validates content and channels and comp
+          utes the
+       6  // audience partition.
+       7  //
+       8 -// CP14 implements preparation and expiry. Confirmation, withdr
+         -awal, sending                                                  
+       9 -// and the HTTP surface follow in later checkpoints.           
+       8 +// CP14 implements preparation and expiry; CP15 adds confirmati
+         +on,                                                            
+       9 +// withdrawal and the reviewable summary read. Sending follows 
+         +in Slice 4.                                                    
+      10  //
+      11  // Privacy boundary: recipient rows (user ids, names, cities) a
+          re read only
+      12  // inside the preparation transaction and written only to campa
+          ign_deliveries.
+     ...
+      47  // RevokeReason is campaign_approvals.revoke_reason.
+      48  type RevokeReason string
+      49  
+      50 -// Revoke reasons used by preparation.                         
+      50 +// Revoke reasons used by preparation and withdrawal.          
+      51  const (
+      52          RevokeSuperseded RevokeReason = "superseded"
+      53 +        RevokeWithdrawn  RevokeReason = "withdrawn"            
+      54  )
+      55  
+      56  // Pending TTL bounds. The default is ARCHITECTURE §16's APPROV
+          AL_PENDING_TTL.
+     ...
+      63          MinPendingTTL = time.Second
+      64  )
+      65  
+      66 +// Approved TTL bounds. The default is ARCHITECTURE §16's      
+      67 +// APPROVAL_APPROVED_TTL: a confirmed approval may be consumed 
+         +until                                                          
+      68 +// approved_at + TTL (§5.3), both from one clock_timestamp() va
+         +lue taken                                                      
+      69 +// after the campaign lock.                                    
+      70 +const (                                                        
+      71 +        DefaultApprovedTTL = 24 * time.Hour                    
+      72 +        MinApprovedTTL     = time.Second                       
+      73 +        MaxApprovedTTL     = 7 * 24 * time.Hour                
+      74 +)                                                              
+      75 +                                                               
+      76 +// MaxApproverRunes bounds campaign_approvals.approved_by (APPR
+         +OVER_NAME).                                                    
+      77 +const MaxApproverRunes = 100                                   
+      78 +                                                               
+      79  var (
+      80          // ErrEmptyAudience: no selected channel has an eligibl
+          e recipient
+      81          // (422 empty_audience). Nothing is written; a live app
+          roval stays live.
+     … 84 more lines (ctrl+o to expand)
+
+⏺ Now the confirm/withdraw/read transactions in a new file.
+
+⏺ Write(backend/internal/approval/decision.go)
+  ⎿  Wrote 528 lines to backend/internal/approval/decision.go
+       1 package approval
+       2 
+       3 import (
+       4   "context"
+       5   "encoding/json"
+       6   "errors"
+       7   "fmt"
+       8   "slices"
+       9   "strings"
+      10   "time"
+     … +518 lines (ctrl+o to expand)
+
+⏺ Updating Prepare to return the committed campaign too, and the service.
+
+⏺ Bash(python3 - <<'EOF'
+      p='internal/approval/repository.go'…)
+  ⎿  Updated backend/internal/approval/repository.go (+48 -46)
+      134  // points at an incomplete snapshot and a superseded approval 
+           stays live
+      135  // when preparation fails. No network I/O other than the datab
+           ase happens
+      136  // while the transaction is open.
+      137 -func (r *Repository) Prepare(ctx context.Context, p PreparePar
+          -ams) (Summary, error) {                                       
+      137 +func (r *Repository) Prepare(ctx context.Context, p PreparePar
+          +ams) (Outcome, error) {                                       
+      138          if p.PendingTTL < MinPendingTTL || p.PendingTTL > MaxP
+           endingTTL {
+      139 -                return Summary{}, fmt.Errorf("approval: pendin
+          -g TTL %s out of range", p.PendingTTL)                         
+      139 +                return Outcome{}, fmt.Errorf("approval: pendin
+          +g TTL %s out of range", p.PendingTTL)                         
+      140          }
+      141 -        var out Summary                                       
+      141 +        var out Outcome                                       
+      142          err := r.inLockedTx(ctx, p.CampaignID, func(ctx contex
+           t.Context, tx pgx.Tx, cur campaign.Campaign) error {
+      143 -                s, err := prepareTx(ctx, tx, cur, p)          
+      144 -                out = s                                       
+      143 +                o, err := prepareTx(ctx, tx, cur, p)          
+      144 +                out = o                                       
+      145                  return err
+      146          })
+      147          if err != nil {
+      148 -                return Summary{}, err                         
+      148 +                return Outcome{}, err                         
+      149          }
+      150          return out, nil
+      151  }
+     ...
+      323          return saved, &id, nil
+      324  }
+      325  
+      326 -func prepareTx(ctx context.Context, tx pgx.Tx, cur campaign.Ca
+          -mpaign, p PrepareParams) (Summary, error) {                   
+      326 +func prepareTx(ctx context.Context, tx pgx.Tx, cur campaign.Ca
+          +mpaign, p PrepareParams) (Outcome, error) {                   
+      327          // 2. A due approval is never superseded: expiring it 
+           advances the
+      328          // version, so the version check below rejects this pr
+           eparation.
+      329          cur, _, err := expireIfDue(ctx, tx, cur)
+      330          if err != nil {
+      331 -                return Summary{}, err                         
+      331 +                return Outcome{}, err                         
+      332          }
+      333  
+      334          // 3. Version, state machine, content.
+      335          if err := cur.CheckPrepareAt(p.ExpectedVersion); err !
+           = nil {
+      336 -                return Summary{}, err                         
+     … 152 more lines (ctrl+o to expand)
+
+⏺ Now the service layer.
+
+⏺ Bash(python3 - <<'EOF'
+      p='internal/approval/service.go'…)
+  ⎿  Updated backend/internal/approval/service.go (+120 -8)
+       8          "time"
+       9  
+      10          "github.com/fyusufayan/insider-campaign-composer-case/b
+          ackend/internal/campaign"
+      11 +        "github.com/fyusufayan/insider-campaign-composer-case/b
+         +ackend/internal/segment"                                       
+      12  )
+      13  
+      14 +// DefaultApprover is APPROVER_NAME's default (§16; no authenti
+         +cation).                                                       
+      15 +const DefaultApprover = "marketer@demo"                        
+      16 +                                                               
+      17  // Config configures the approval service.
+      18  type Config struct {
+      19          // PendingTTL is how long a prepared approval may be co
+          nfirmed
+      20          // (APPROVAL_PENDING_TTL, default 15 min, ADR-006).
+      21          PendingTTL time.Duration
+      22 +        // ApprovedTTL is how long a confirmed approval may be 
+         +consumed, counted                                              
+      23 +        // from approved_at (APPROVAL_APPROVED_TTL, default 24 
+         +h, §5.3). Zero                                                 
+      24 +        // means DefaultApprovedTTL.                           
+      25 +        ApprovedTTL time.Duration                              
+      26 +        // ApprovedBy is recorded as campaign_approvals.approve
+         +d_by                                                           
+      27 +        // (APPROVER_NAME). Empty means DefaultApprover.       
+      28 +        ApprovedBy string                                      
+      29 +}                                                              
+      30 +                                                               
+      31 +// withDefaults fills the zero optional fields.                
+      32 +func (c Config) withDefaults() Config {                        
+      33 +        if c.ApprovedTTL == 0 {                                
+      34 +                c.ApprovedTTL = DefaultApprovedTTL             
+      35 +        }                                                      
+      36 +        if c.ApprovedBy == "" {                                
+      37 +                c.ApprovedBy = DefaultApprover                 
+      38 +        }                                                      
+      39 +        return c                                               
+      40  }
+      41  
+      20 -// Validate checks the configuration.                          
+      42 +// Validate checks the configuration (after defaults).         
+      43  func (c Config) Validate() error {
+      44 +        c = c.withDefaults()                                   
+      45          if c.PendingTTL < MinPendingTTL || c.PendingTTL > MaxPe
+          ndingTTL {
+      46                  return fmt.Errorf("approval: pending TTL must b
+          e in [%s, %s] (got %s)", MinPendingTTL, MaxPendingTTL, c.Pendin
+          gTTL)
+     … 134 more lines (ctrl+o to expand)
+
+⏺ Backend domain builds. Now config + wiring.
+
+⏺ Bash(python3 - <<'EOF'
+      p='internal/platform/config/config.go'…)
+  ⎿  Updated backend/cmd/api/main.go (+14 -3)
+      12          "time"
+      13  
+      14          "github.com/fyusufayan/insider-campaign-composer-case/b
+          ackend/internal/ai"
+      15 +        "github.com/fyusufayan/insider-campaign-composer-case/b
+         +ackend/internal/approval"                                      
+      16          "github.com/fyusufayan/insider-campaign-composer-case/b
+          ackend/internal/campaign"
+      17          "github.com/fyusufayan/insider-campaign-composer-case/b
+          ackend/internal/httpapi"
+      18          "github.com/fyusufayan/insider-campaign-composer-case/b
+          ackend/internal/llm"
+     ...
+      76                  "segment_timeout", cfg.Segment.Timeout.String()
+          , "segment_max_tokens", cfg.Segment.MaxTokens,
+      77                  "segment_prompt_version", ai.SegmentPromptVersi
+          on, "content_model", cfg.Content.Model,
+      78                  "content_effort", cfg.Content.Effort, "content_
+          timeout", cfg.Content.Timeout.String(),
+      78 -                "content_max_tokens", cfg.Content.MaxTokens, "c
+         -ontent_prompt_version", ai.ContentPromptVersion)               
+      79 +                "content_max_tokens", cfg.Content.MaxTokens, "c
+         +ontent_prompt_version", ai.ContentPromptVersion,               
+      80 +                "approval_pending_ttl", cfg.Approval.PendingTTL
+         +.String(), "approval_approved_ttl", cfg.Approval.ApprovedTTL.St
+         +ring())                                                        
+      81  
+      82          ctx, stop := signal.NotifyContext(context.Background(),
+           syscall.SIGINT, syscall.SIGTERM)
+      83          defer stop()
+     ...
+       88          }
+       89          defer pool.Close()
+       90  
+       89 -        campaigns, err := campaign.NewService(campaign.NewRepo
+          -sitory(pool), segment.NewAudienceRepository(pool), interpreter
+          -, generator, log)                                             
+       91 +        approvals, err := approval.NewService(approval.NewRepo
+          +sitory(pool), approval.Config{                                
+       92 +                PendingTTL: cfg.Approval.PendingTTL, ApprovedT
+          +TL: cfg.Approval.ApprovedTTL, ApprovedBy: cfg.Approval.Approve
+          +rName,                                                        
+       93 +        }, log)                                               
+       94 +        if err != nil {                                       
+       95 +                return err                                    
+       96 +        }                                                     
+       97 +        // Lazy approval expiry (§5.3) on every campaign read/
+          +mutation of a                                                 
+       98 +        // campaign with a live approval.                     
+       99 +        campaigns, err := campaign.NewService(campaign.NewRepo
+          +sitory(pool), segment.NewAudienceRepository(pool), interpreter
+          +, generator, log,                                             
+      100 +                campaign.WithApprovalExpirer(approvals))      
+      101          if err != nil {
+      102                  return err
+      103          }
+     ...
+      114  
+      115          srv := &http.Server{
+      116                  Addr:              cfg.HTTPAddr,
+      106 -                Handler:           httpapi.NewRouter(log, http
+          -api.Deps{Campaigns: campaigns, Readiness: readiness}),        
+      117 +                Handler:           httpapi.NewRouter(log, http
+          +api.Deps{Campaigns: campaigns, Approvals: approvals, Readiness
+          +: readiness}),                                                
+      118                  ReadHeaderTimeout: readHeaderTimeout,
+      119                  IdleTimeout:       idleTimeout,
+     … 1 more lines (ctrl+o to expand)
+  ⎿  Updated backend/internal/platform/config/config.go (+61 -0)
+      11          "strconv"
+      12          "strings"
+      13          "time"
+      14 +        "unicode"                                              
+      15 +        "unicode/utf8"                                         
+      16  )
+      17  
+      18  // LLMProvider is the LLM implementation selected once at start
+          up.
+     ...
+       98          maxLLMMaxRetries     = 5
+       99  )
+      100  
+      101 +// Approval configures the approval workflow (ARCHITECTURE §5.
+          +3, §16;                                                       
+      102 +// ADR-006). The bounds mirror internal/approval's (asserted b
+          +y a test).                                                    
+      103 +type Approval struct {                                        
+      104 +        // PendingTTL is APPROVAL_PENDING_TTL: a prepared appr
+          +oval may be                                                   
+      105 +        // confirmed until prepared_at + PendingTTL.          
+      106 +        PendingTTL time.Duration                              
+      107 +        // ApprovedTTL is APPROVAL_APPROVED_TTL: a confirmed a
+          +pproval may be                                                
+      108 +        // consumed until approved_at + ApprovedTTL.          
+      109 +        ApprovedTTL time.Duration                             
+      110 +        // ApproverName is APPROVER_NAME, recorded as approved
+          +_by (no auth).                                                
+      111 +        ApproverName string                                   
+      112 +}                                                             
+      113 +                                                              
+      114 +// Approval defaults and bounds.                              
+      115 +const (                                                       
+      116 +        DefaultApprovalPendingTTL  = 15 * time.Minute         
+      117 +        DefaultApprovalApprovedTTL = 24 * time.Hour           
+      118 +        DefaultApproverName        = "marketer@demo"          
+      119 +        MinApprovalTTL             = time.Second              
+      120 +        MaxApprovalPendingTTL      = 24 * time.Hour           
+      121 +        MaxApprovalApprovedTTL     = 7 * 24 * time.Hour       
+      122 +        MaxApproverNameRunes       = 100                      
+      123 +)                                                             
+      124 +                                                              
+      125  // Config is the validated configuration of the api process.
+      126  type Config struct {
+      127          DatabaseURL Secret // may contain credentials
+     ...
+      131          Segment AITask
+      132          // Content configures content generation (CLAUDE_CONTE
+           NT_*).
+     … 51 more lines (ctrl+o to expand)
+
+⏺ Now the HTTP layer: routes, DTOs and error mapping.
+⏺ Write(backend/internal/httpapi/approvals.go)
+  ⎿  Wrote 290 lines to backend/internal/httpapi/approvals.go
+       1 package httpapi
+       2 
+       3 import (
+       4   "net/http"
+       5   "strconv"
+       6   "time"
+       7 
+       8   "github.com/fyusufayan/insider-campaign-composer-case/backend/
+         internal/approval"
+       9   "github.com/fyusufayan/insider-campaign-composer-case/backend/
+     … +282 lines (~11 KB) (ctrl+o to expand)
+
+⏺ Bash(python3 - <<'EOF'
+      p='internal/httpapi/approvals.go'…)
+  ⎿  ok
+     github.com/fyusufayan/insider-campaign-composer-case/backend/inter
+     nal/ai  (cached)
+     ok
+     github.com/fyusufayan/insider-campaign-composer-case/backend/inter
+     … +15 lines (ctrl+o to expand)
+  ⎿  Updated backend/internal/httpapi/approvals.go (+2 -6)
+       5          "strconv"
+       6          "time"
+       7  
+       8 +        "github.com/fyusufayan/insider-campaign-composer-case/b
+         +ackend/internal/ai"                                            
+       9          "github.com/fyusufayan/insider-campaign-composer-case/b
+          ackend/internal/approval"
+      10          "github.com/fyusufayan/insider-campaign-composer-case/b
+          ackend/internal/campaign"
+      10 -        "github.com/fyusufayan/insider-campaign-composer-case/b
+         -ackend/internal/content"                                       
+      11          "github.com/fyusufayan/insider-campaign-composer-case/b
+          ackend/internal/segment"
+      12  )
+      13  
+     ...
+      203  type approvalReviewDTO struct {
+      204          Validation    validationDTO `json:"validation"`
+      205          OfferFindings []FieldError  `json:"offer_findings"`
+      206 -        Offer         any           `json:"offer"`            
+      206 +        Offer         ai.Offer      `json:"offer"`            
+      207  }
+      208  
+      209  // approvalDTO is approval.Summary. It contains the documented
+            prepare
+     ...
+      284          }
+      285          return dto
+      286  }
+      287 -                                                              
+      288 -// contentFooter is referenced so the DTO documentation stays 
+          -honest: the                                                   
+      289 -// rendered email includes the backend footer (content.EmailFo
+          -oter).                                                        
+      290 -var _ = content.EmailFooter                                   
+  ⎿  Updated backend/internal/httpapi/campaigns.go (+26 -0)
+       9          "time"
+      10  
+      11          "github.com/fyusufayan/insider-campaign-composer-case/b
+          ackend/internal/ai"
+      12 +        "github.com/fyusufayan/insider-campaign-composer-case/b
+         +ackend/internal/approval"                                      
+      13          "github.com/fyusufayan/insider-campaign-composer-case/b
+          ackend/internal/campaign"
+      14          "github.com/fyusufayan/insider-campaign-composer-case/b
+          ackend/internal/segment"
+      15  )
+     ...
+      216                  valErr      *campaign.ValidationError
+      217                  stateErr    *campaign.StateError
+      218                  conflictErr *campaign.ConflictError
+      219 +                mismatchErr *approval.MismatchError           
+      220 +                emptyErr    *approval.EmptyAudienceError      
+      221          )
+      222          switch {
+      223 +        case errors.Is(err, approval.ErrNotFound):            
+      224 +                return &APIError{Status: http.StatusNotFound, 
+          +Code: CodeNotFound, Message: "approval not found"}            
+      225 +        case errors.Is(err, approval.ErrExpired):             
+      226 +                return &APIError{Status: http.StatusConflict, 
+          +Code: CodeApprovalExpired,                                    
+      227 +                        Message: "the approval has expired; it
+          +s recipient snapshot was released — reload the campaign and pr
+          +epare a new approval"}                                        
+      228 +        case errors.As(err, &mismatchErr):                    
+      229 +                details := make([]FieldError, len(mismatchErr.
+          +Fields))                                                      
+      230 +                for i, f := range mismatchErr.Fields {        
+      231 +                        details[i] = FieldError{Path: f, Code:
+          + CodeApprovalMismatch, Message: "differs from the prepared app
+          +roval"}                                                       
+      232 +                }                                             
+      233 +                return &APIError{Status: http.StatusConflict, 
+          +Code: CodeApprovalMismatch,                                   
+      234 +                        Message: "the approval no longer match
+          +es what was reviewed; reload the campaign and review it again"
+          +, Details: details}                                           
+      235 +        case errors.As(err, &emptyErr):                       
+      236 +                return &APIError{Status: http.StatusUnprocessa
+          +bleEntity, Code: CodeEmptyAudience,                           
+      237 +                        Message: "no selected channel has an e
+          +ligible recipient (contact and consent are required); nothing 
+          +was prepared"}                                                
+      238 +        case errors.Is(err, approval.ErrAudienceChanged):     
+      239 +                h.log.WarnContext(ctx, "audience changed durin
+          +g approval preparation", logAttrs...)                         
+      240 +                return &APIError{Status: http.StatusConflict, 
+          +Code: CodeAudienceChanged,                                    
+      241 +                        Message: "customer data changed while 
+          +the snapshot was being frozen; nothing was prepared, try again
+          +", Retryable: true}                                           
+      242 +        case errors.Is(err, approval.ErrBusy):                
+      243 +                h.log.WarnContext(ctx, "campaign busy", logAtt
+          +rs...)                                                        
+      244 +                return &APIError{Status: http.StatusServiceUna
+          +vailable, Code: CodeCampaignBusy,                             
+      245 +                        Message: "the campaign is busy with an
+          +other operation; try again", Retryable: true}                 
+      246          case errors.As(err, &valErr):
+      247                  return &APIError{Status: http.StatusUnprocessa
+           bleEntity, Code: CodeValidationFailed,
+      248                          Message: "request is invalid", Details
+           : fieldErrors(valErr.Problems)}
+  ⎿  Updated backend/internal/httpapi/dto.go (+8 -1)
+      34          ContentBrief json.RawMessage `json:"content_brief"`
+      35          // CurrentContentID is the immutable content version th
+          e campaign points
+      36          // at (null without content); GET /content returns it.
+      37 -        CurrentContentID *int64    `json:"current_content_id"` 
+      37 +        CurrentContentID *int64 `json:"current_content_id"`    
+      38 +        // ActiveApprovalID is the pending/approved approval (o
+         +r, once sending,                                               
+      39 +        // the consumed one); null otherwise. GET …/approvals/{
+         +id} reads it.                                                  
+      40 +        ActiveApprovalID *string   `json:"active_approval_id"` 
+      41          Version          int       `json:"version"`
+      42          CreatedAt        time.Time `json:"created_at"`
+      43          UpdatedAt        time.Time `json:"updated_at"`
+     ...
+      58                  CreatedAt:        c.CreatedAt,
+      59                  UpdatedAt:        c.UpdatedAt,
+      60          }
+      61 +        if c.ActiveApprovalID != nil {                         
+      62 +                a := c.ActiveApprovalID.String()               
+      63 +                dto.ActiveApprovalID = &a                      
+      64 +        }                                                      
+      65          if !c.Segment.IsZero() {
+      66                  rule, err := json.Marshal(c.Segment)
+      67                  if err != nil {
+  ⎿  Updated backend/internal/httpapi/errors.go (+6 -0)
+      17          CodeVersionConflict      = "version_conflict"
+      18          CodeAudienceUnavailable  = "audience_unavailable"
+      19          CodeRequestCancelled     = "request_cancelled"
+      20 +        // Approval codes (ARCHITECTURE §11).                  
+      21 +        CodeApprovalExpired  = "approval_expired"              
+      22 +        CodeApprovalMismatch = "approval_mismatch"             
+      23 +        CodeEmptyAudience    = "empty_audience"                
+      24 +        CodeAudienceChanged  = "audience_changed"              
+      25 +        CodeCampaignBusy     = "campaign_busy"                 
+      26          // AI codes; identical to ai.Code* (asserted by a test)
+          .
+      27          CodeAIOutputInvalid = "ai_output_invalid"
+      28          CodeLLMUnavailable  = "llm_unavailable"
+  ⎿  Updated backend/internal/httpapi/router.go (+9 -1)
+       6          "log/slog"
+       7          "net/http"
+       8  
+       9 +        "github.com/fyusufayan/insider-campaign-composer-case/b
+         +ackend/internal/approval"                                      
+      10          "github.com/fyusufayan/insider-campaign-composer-case/b
+          ackend/internal/campaign"
+      11  )
+      12  
+     ...
+      14  // routes unregistered (used by middleware tests).
+      15  type Deps struct {
+      16          Campaigns *campaign.Service
+      17 +        // Approvals serves the approval routes (registered onl
+         +y together with                                                
+      18 +        // Campaigns).                                         
+      19 +        Approvals *approval.Service                            
+      20          Readiness ReadinessFunc
+      21  }
+      22  
+     ...
+      30                  mux.HandleFunc("GET /readyz", handleReadyz(deps
+          .Readiness, log))
+      31          }
+      32          if deps.Campaigns != nil {
+      29 -                (&campaignHandlers{svc: deps.Campaigns, log: lo
+         -g}).register(mux)                                              
+      33 +                ch := &campaignHandlers{svc: deps.Campaigns, lo
+         +g: log}                                                        
+      34 +                ch.register(mux)                               
+      35 +                if deps.Approvals != nil {                     
+      36 +                        (&approvalHandlers{campaignHandlers: ch
+         +, svc: deps.Approvals}).register(mux)                          
+      37 +                }                                              
+      38          }
+      39  
+      40          var h http.Handler = envelopeUnmatched(mux)
+
+⏺ Unit tests pass. Fixing integration tests for the Prepare signature change.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ Bash(python3 - <<'EOF'
+      p='test/integration/approval_test.go'…)
+  ⎿  ok
+  ⎿  Updated backend/test/integration/approval_test.go (+9 -6)
+      169  
+      170  func (e *prepEnv) prepare(c campaign.Campaign) approval.Summar
+           y {
+      171          e.t.Helper()
+      172 -        s, err := e.approvals.Prepare(ctxBG, c.ID, c.Version) 
+      172 +        o, err := e.approvals.Prepare(ctxBG, c.ID, c.Version) 
+      173          if err != nil {
+      174                  e.t.Fatalf("prepare: %v", err)
+      175          }
+      176 -        return s                                              
+      176 +        if o.Campaign.Version != o.Summary.CampaignVersion || 
+          +o.Campaign.Status != campaign.StatusPendingApproval {         
+      177 +                e.t.Fatalf("prepare outcome campaign = %+v", o
+          +.Campaign)                                                    
+      178 +        }                                                     
+      179 +        return o.Summary                                      
+      180  }
+      181  
+      182  func (e *prepEnv) exec(sql string, args ...any) {
+     ...
+      816  func (e *prepEnv) prepareAsync(id campaign.ID, version int) <-
+           chan prepResult {
+      817          ch := make(chan prepResult, 1)
+      818          go func() {
+      816 -                s, err := e.approvals.Prepare(ctxBG, id, versi
+          -on)                                                           
+      817 -                ch <- prepResult{s, err}                      
+      819 +                o, err := e.approvals.Prepare(ctxBG, id, versi
+          +on)                                                           
+      820 +                ch <- prepResult{o.Summary, err}              
+      821          }()
+      822          return ch
+      823  }
+     ...
+      1222                                  defer wg.Done()
+      1223                                  <-start
+      1224                                  if i%2 == 0 {
+      1222 -                                        s, err := e.approvals
+           -.Prepare(ctxBG, c.ID, version)                               
+      1225 +                                        o, err := e.approvals
+           +.Prepare(ctxBG, c.ID, version)                               
+      1226                                          if err != nil {
+      1227                                                  results <- ou
+            t{err: err}
+      1228                                                  return
+      1229                                          }
+      1227 -                                        results <- out{prep: 
+           -&s}                                                          
+      1230 +                                        results <- out{prep: 
+           +&o.Summary}                                                  
+      1231                                          return
+      1232                                  }
+      1233                                  id, err := e.approvals.Expire
+            Due(ctxBG, c.ID)
+
+⏺ Running the existing integration suite in the background while I write new
+  tests.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ While that runs, I'll write the unit tests. First a look at the existing
+  PII-leak test and fixture helpers to reuse.
+
+  Ran 2 shell commands (ctrl+o to expand)
+
+⏺ Background command "Run existing integration tests" completed (exit code 0)
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ Existing integration suite passes. I'll wire approvals into the shared API
+  test env (as in production) and write the new integration tests.
+
+⏺ Bash(python3 - <<'EOF'
+      p='test/integration/api_test.go'…)
+  ⎿  Updated backend/test/integration/api_test.go (+16 -3)
+      20          "github.com/jackc/pgx/v5/pgxpool"
+      21  
+      22          "github.com/fyusufayan/insider-campaign-composer-case/b
+          ackend/internal/ai"
+      23 +        "github.com/fyusufayan/insider-campaign-composer-case/b
+         +ackend/internal/approval"                                      
+      24          "github.com/fyusufayan/insider-campaign-composer-case/b
+          ackend/internal/campaign"
+      25          "github.com/fyusufayan/insider-campaign-composer-case/b
+          ackend/internal/httpapi"
+      26          "github.com/fyusufayan/insider-campaign-composer-case/b
+          ackend/internal/llm"
+     ...
+      38          apiIstanbulRule = `{"version":1,"match":"all","conditio
+          ns":[{"type":"attribute","field":"city","op":"eq","value":"ista
+          nbul"},{"type":"behavior","predicate":"abandoned_cart","within_
+          days":30}]}`
+      39          apiAnkaraRule   = `{"version":1,"match":"all","conditio
+          ns":[{"type":"attribute","field":"city","op":"eq","value":"anka
+          ra"}]}`
+      40          apiDeadline     = 10 * time.Second
+      41 +        apiApprovedTTL  = 2 * time.Hour                        
+      42  )
+      43  
+      44  func scriptedReply(segmentJSON string, channels string) string 
+          {
+     ...
+      80          srv    *httptest.Server
+      81          llm    *llm.Scripted
+      82          svc    *campaign.Service
+      83 +        appr   *approval.Service                               
+      84 +        logs   *lockedBuffer                                   
+      85          dbURL  string
+      86          tracer *sqlRecorder
+      87  }
+     ...
+      107          if err != nil {
+      108                  t.Fatal(err)
+      109          }
+      106 -        log := logging.New(io.Discard, slog.LevelInfo)        
+      107 -        svc, err := campaign.NewService(campaign.NewRepository
+          -(e.pool), segment.NewAudienceRepository(e.pool), it, gen, log)
+      110 +        // Wired as in cmd/api: approvals with lazy expiry on 
+          +every campaign                                                
+      111 +        // operation (§5.3).                                  
+      112 +        e.logs = &lockedBuffer{}                              
+      113 +        log := logging.New(e.logs, slog.LevelInfo)            
+      114 +        e.appr, err = approval.NewService(approval.NewReposito
+          +ry(e.pool), approval.Config{                                  
+      115 +                PendingTTL: prepTTL, ApprovedTTL: apiApprovedT
+          +TL, ApprovedBy: "reviewer@test"}, log)                        
+      116 +        if err != nil {                                       
+      117 +                t.Fatal(err)                                  
+      118 +        }                                                     
+      119 +        svc, err := campaign.NewService(campaign.NewRepository
+          +(e.pool), segment.NewAudienceRepository(e.pool), it, gen, log,
+      120 +                campaign.WithApprovalExpirer(e.appr))         
+      121          if err != nil {
+      122                  t.Fatal(err)
+     … 7 more lines (ctrl+o to expand)
+
+⏺ Now the decision integration tests (service/repository level).
+
+⏺ Write(backend/test/integration/approval_decision_test.go)
+  ⎿  Wrote 701 lines to backend/test/integration/approval_decision_test.go
+       1 //go:build integration
+       2 
+       3 package integration
+       4 
+       5 import (
+       6   "errors"
+       7   "log/slog"
+       8   "slices"
+       9   "strings"
+      10   "sync"
+     … +691 lines (ctrl+o to expand)
+
+⏺ Bash(python3 - <<'EOF'
+      p='test/integration/approval_test.go'…)
+  ⎿  ok
+     github.com/fyusufayan/insider-campaign-composer-case/backend/test/
+     integration     7.000s
+  ⎿  Updated backend/test/integration/approval_decision_test.go (+6 -9)
+      34          if err != nil {
+      35                  t.Fatal(err)
+      36          }
+      37 +        e.campaigns, err = campaign.NewService(campaign.NewRepo
+         +sitory(e.pool), segment.NewAudienceRepository(e.pool), e.it, e.
+         +gen, log,                                                      
+      38 +                campaign.WithApprovalExpirer(e.approvals))     
+      39 +        if err != nil {                                        
+      40 +                t.Fatal(err)                                   
+      41 +        }                                                      
+      42          return e
+      43  }
+      44  
+     ...
+      631  // ---- Read and lazy expiry ----
+      632  
+      633  func TestApprovalReadAndLazyExpiry(t *testing.T) {
+      629 -        e := newDecisionEnv(t)                                
+      630 -        // Campaign service with lazy expiry, as wired in cmd/
+          -api.                                                          
+      631 -        it, gen := e.campaignsDeps()                          
+      632 -        svc, err := campaign.NewService(campaign.NewRepository
+          -(e.pool), segment.NewAudienceRepository(e.pool), it, gen,     
+      633 -                logging.New(e.logs, slog.LevelDebug), campaign
+          -.WithApprovalExpirer(e.approvals))                            
+      634 -        if err != nil {                                       
+      635 -                t.Fatal(err)                                  
+      636 -        }                                                     
+      637 -        e.campaigns = svc                                     
+      634 +        e := newDecisionEnv(t) // campaign service with lazy e
+          +xpiry, as wired in cmd/api                                    
+      635          c, s := e.prepared()
+      636  
+      637          // Read: identical to the preparation, re-verified fro
+           m the rows.
+  ⎿  Updated backend/test/integration/approval_test.go (+3 -0)
+      61          campaigns *campaign.Service
+      62          approvals *approval.Service
+      63          logs      *lockedBuffer
+      64 +        it        *ai.Interpreter                              
+      65 +        gen       *ai.Generator                                
+      66  }
+      67  
+      68  // newPrepEnv uses a fresh migrated database with the 30-user f
+          ixture.
+     ...
+      86          if err != nil {
+      87                  t.Fatal(err)
+      88          }
+      89 +        e.it, e.gen = it, gen                                  
+      90          log := logging.New(e.logs, slog.LevelDebug)
+      91          e.campaigns, err = campaign.NewService(campaign.NewRepo
+          sitory(pool), segment.NewAudienceRepository(pool), it, gen, log
+          )
+      92          if err != nil {
+
+⏺ All passed on the first run — verifying they actually executed.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ Now the HTTP-level integration test (real server + DB).
+
+⏺ Write(backend/test/integration/approval_api_test.go)
+  ⎿  Wrote 352 lines to backend/test/integration/approval_api_test.go
+       1 //go:build integration
+       2 
+       3 package integration
+       4 
+       5 import (
+       6   "encoding/json"
+       7   "fmt"
+       8   "strings"
+       9   "testing"
+      10   "time"
+     … +342 lines (ctrl+o to expand)
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ HTTP integration tests pass. Now Docker-free unit tests. Checking existing
+  unit-test helpers first.
+
+  Ran 2 shell commands (ctrl+o to expand)
+
+⏺ Writing the unit tests now (campaign transitions, lazy expiry, approval
+  config, env config, HTTP decoding/mapping/DTO privacy).
+
+  Searched for 1 pattern, ran 2 shell commands (ctrl+o to expand)
+
+⏺ Bash(cat > internal/approval/decision_test.go <<'EOF'
+      package approval…)
+  ⎿  ok
+     github.com/fyusufayan/insider-campaign-composer-case/backend/inter
+     nal/approval    0.680s
+  ⎿  Updated backend/internal/approval/approval_test.go (+6 -0)
+      270                  "lock": sqlLockApproval, "expire": sqlExpireAp
+           proval, "revoke": sqlRevokeApproval,
+      271                  "delete": sqlDeleteHeld, "count": sqlCountAppr
+           ovalRows, "insert approval": sqlInsertApproval,
+      272                  "insert held": sqlInsertHeldTail, "read": sqlR
+           eadSnapshot,
+      273 +                "select": sqlSelectApproval, "select for updat
+          +e": sqlSelectApprovalForUpdate,                               
+      274          }
+      275          for name, stmt := range stmts {
+      276                  low := strings.ToLower(stmt)
+     ...
+      292          if !strings.Contains(sqlInsertApproval, "'pending'") {
+      293                  t.Error("new approvals must start pending")
+      294          }
+      295 +        // The only forward move into approved is the confirmi
+          +ng CAS, and it                                                
+      296 +        // applies only to a pending approval (never to expire
+          +d/revoked ones).                                              
+      297 +        if !strings.Contains(sqlConfirmApproval, "status = 'ap
+          +proved'") || !strings.Contains(sqlConfirmApproval, "a.status =
+          + 'pending'") {                                                
+      298 +                t.Error("confirm CAS must move pending → appro
+          +ved only")                                                    
+      299 +        }                                                     
+      300  }
+  ⎿  Created backend/internal/approval/decision_test.go (+110 -0)
+        1 +package approval                                              
+        2 +                                                              
+        3 +import (                                                      
+        4 +        "context"                                             
+        5 +        "errors"                                              
+        6 +        "io"                                                  
+        7 +        "log/slog"                                            
+        8 +        "strings"                                             
+        9 +        "testing"                                             
+       10 +        "time"                                                
+       11 +                                                              
+       12 +        "github.com/fyusufayan/insider-campaign-composer-case/
+          +backend/internal/campaign"                                    
+       13 +        "github.com/fyusufayan/insider-campaign-composer-case/
+          +backend/internal/segment"                                     
+       14 +)                                                             
+       15 +                                                              
+       16 +func TestDecisionConfig(t *testing.T) {                       
+       17 +        // Zero optional fields take the documented defaults (
+          +§16).                                                         
+       18 +        c := Config{PendingTTL: DefaultPendingTTL}.withDefault
+          +s()                                                           
+       19 +        if c.ApprovedTTL != 24*time.Hour || c.ApprovedBy != "m
+          +arketer@demo" {                                               
+       20 +                t.Errorf("defaults = %+v", c)                 
+       21 +        }                                                     
+       22 +        for _, ttl := range []time.Duration{-time.Second, time
+          +.Millisecond, MaxApprovedTTL + time.Second} {                 
+       23 +                if err := (Config{PendingTTL: DefaultPendingTT
+          +L, ApprovedTTL: ttl}).Validate(); err == nil {                
+       24 +                        t.Errorf("approved ttl %s accepted", t
+          +tl)                                                           
+       25 +                }                                             
+       26 +        }                                                     
+       27 +        for _, name := range []string{" lead", "trail ", "tab\
+          +there", "nl\nx", strings.Repeat("a", MaxApproverRunes+1), "\xf
+          +f"} {                                                         
+       28 +                if err := (Config{PendingTTL: DefaultPendingTT
+          +L, ApprovedBy: name}).Validate(); err == nil {                
+       29 +                        t.Errorf("approver %q accepted", name)
+       30 +                }                                             
+       31 +        }                                                     
+       32 +        if err := (Config{PendingTTL: DefaultPendingTTL, Appro
+          +vedTTL: time.Second, ApprovedBy: "Ayşe Yılmaz"}).Validate(); e
+          +rr != nil {                                                   
+       33 +                t.Error(err)                                  
+       34 +        }                                                     
+       35 +        log := slog.New(slog.NewTextHandler(io.Discard, nil)) 
+       36 +        if _, err := NewService(NewRepository(nil), Config{Pen
+          +dingTTL: DefaultPendingTTL, ApprovedTTL: 8 * 24 * time.Hour}, 
+          +log); err == nil {                                            
+       37 +                t.Error("service accepted an out-of-range appr
+          +oved TTL")                                                    
+       38 +        }                                                     
+       39 +        // The repository refuses invalid parameters before to
+          +uching the pool.                                              
+       40 +        repo := NewRepository(nil)                            
+     … 70 more lines (ctrl+o to expand)
+
+⏺ Now campaign transition and lazy-expiry unit tests.
+
+⏺ Bash(grep -n "func draft\|genSMS\s*=\|genSubject\|func (m \*MemoryStore) Put"
+      internal/campaign/*_test.go internal/campaign/campaigntest/memstore.go |
+      head -5; cat >…)
+  ⎿  internal/campaign/campaign_test.go:40:func draft() Campaign {
+     internal/campaign/campaigntest/memstore.go:155:func (m *MemoryStore) P
+     ut(c campaign.Campaign) {
+     … +6 lines (ctrl+o to expand)
+  ⎿  Created backend/internal/campaign/decision_test.go (+163 -0)
+        1 +package campaign_test                                         
+        2 +                                                              
+        3 +import (                                                      
+        4 +        "context"                                             
+        5 +        "errors"                                              
+        6 +        "testing"                                             
+        7 +                                                              
+        8 +        "github.com/fyusufayan/insider-campaign-composer-case/
+          +backend/internal/campaign"                                    
+        9 +        "github.com/fyusufayan/insider-campaign-composer-case/
+          +backend/internal/segment"                                     
+       10 +)                                                             
+       11 +                                                              
+       12 +// Every campaign status × confirm/withdraw (§5.2): allowed on
+          +ly for the                                                    
+       13 +// active approval of pending_approval (confirm) or pending_ap
+          +proval /                                                      
+       14 +// approved (withdraw); everything else is a *StateError, a st
+          +ale version                                                   
+       15 +// a *ConflictError; allowed transitions advance the version b
+          +y one.                                                        
+       16 +func TestConfirmAndWithdrawTransitions(t *testing.T) {        
+       17 +        base, _ := readyCampaign(t, draft(genSMS, genSubject, 
+          +genBody))                                                     
+       18 +        live, other := approvalID(1), approvalID(2)           
+       19 +        type want struct{ confirm, withdraw bool }            
+       20 +        cases := []struct {                                   
+       21 +                status campaign.Status                        
+       22 +                active *campaign.ID                           
+       23 +                want   want                                   
+       24 +        }{                                                    
+       25 +                {campaign.StatusDraft, nil, want{}},          
+       26 +                {campaign.StatusSegmented, nil, want{}},      
+       27 +                {campaign.StatusContentReady, nil, want{}},   
+       28 +                {campaign.StatusPendingApproval, &live, want{c
+          +onfirm: true, withdraw: true}},                               
+       29 +                {campaign.StatusApproved, &live, want{confirm:
+          + false, withdraw: true}},                                     
+       30 +                {campaign.StatusSending, &live, want{}},      
+       31 +                {campaign.StatusCompleted, &live, want{}},    
+       32 +                {campaign.StatusCompletedWithFailures, &live, 
+          +want{}},                                                      
+       33 +                {campaign.StatusCancelled, &live, want{}},    
+       34 +        }                                                     
+       35 +        for _, tc := range cases {                            
+       36 +                c := base                                     
+       37 +                c.Status, c.ActiveApprovalID, c.Version = tc.s
+          +tatus, tc.active, 7                                           
+       38 +                                                              
+       39 +                // Stale versions are conflicts in every statu
+          +s.                                                            
+       40 +                var ce *campaign.ConflictError                
+     … 123 more lines (ctrl+o to expand)
+
+⏺ Bash(python3 - <<'EOF'
+      p='internal/campaign/service_test.go'…)  ⎿  ok
+     github.com/fyusufayan/insider-campaign-composer-case/backend/inter
+     nal/campaign    0.302s
+  ⎿  Updated backend/internal/campaign/decision_test.go (+3 -1)
+       3  import (
+       4          "context"
+       5          "errors"
+       6 +        "io"                                                   
+       7 +        "log/slog"                                             
+       8          "testing"
+       9  
+      10          "github.com/fyusufayan/insider-campaign-composer-case/b
+          ackend/internal/campaign"
+     ...
+      120  func TestServiceLazyExpiry(t *testing.T) {
+      121          f := newFixture(t)
+      122          x := &fakeExpirer{f: f}
+      121 -        svc, err := campaign.NewService(f.store, f.audience, m
+          -ustInterpreter(t, f), mustGenerator(t, f), discardLogger(), ca
+          -mpaign.WithApprovalExpirer(x))                                
+      123 +        svc, err := campaign.NewService(f.store, f.audience, f
+          +.it, f.gen, slog.New(slog.NewTextHandler(io.Discard, nil)), ca
+          +mpaign.WithApprovalExpirer(x))                                
+      124          if err != nil {
+      125                  t.Fatal(err)
+      126          }
+  ⎿  Updated backend/internal/campaign/service_test.go (+3 -0)
+      38          audience *campaigntest.Audience
+      39          llm      *llm.Scripted
+      40          logs     *bytes.Buffer
+      41 +        it       *ai.Interpreter                               
+      42 +        gen      *ai.Generator                                 
+      43  }
+      44  
+      45  func newFixture(t *testing.T) *fixture {
+     ...
+      53          if err != nil {
+      54                  t.Fatal(err)
+      55          }
+      56 +        f.it, f.gen = it, gen                                  
+      57          f.svc, err = campaign.NewService(f.store, f.audience, i
+          t, gen, logging.New(f.logs, slog.LevelDebug))
+      58          if err != nil {
+      59                  t.Fatal(err)
+
+⏺ Now config and HTTP unit tests.
+
+  Searched for 1 pattern (ctrl+o to expand)
+
+⏺ Bash(cat > internal/platform/config/approval_test.go <<'EOF'
+      package config…)
+  ⎿          imports
+     github.com/fyusufayan/insider-campaign-composer-case/backend/i
+     nternal/ai from approval.go
+             imports
+     github.com/fyusufayan/insider-campaign-composer-case/backend/i
+     … +7 lines (ctrl+o to expand)
+  ⎿  Created backend/internal/platform/config/approval_test.go (+46 -0)
+       1 +package config                                                 
+       2 +                                                               
+       3 +import (                                                       
+       4 +        "strings"                                              
+       5 +        "testing"                                              
+       6 +        "time"                                                 
+       7 +                                                               
+       8 +        "github.com/fyusufayan/insider-campaign-composer-case/b
+         +ackend/internal/approval"                                      
+       9 +)                                                              
+      10 +                                                               
+      11 +func TestApprovalConfig(t *testing.T) {                        
+      12 +        cfg, err := Load(env(validEnv()))                      
+      13 +        if err != nil {                                        
+      14 +                t.Fatal(err)                                   
+      15 +        }                                                      
+      16 +        if cfg.Approval != (Approval{PendingTTL: 15 * time.Minu
+         +te, ApprovedTTL: 24 * time.Hour, ApproverName: "marketer@demo"}
+         +) {                                                            
+      17 +                t.Errorf("defaults = %+v", cfg.Approval)       
+      18 +        }                                                      
+      19 +        cfg, err = Load(env(with(validEnv(), "APPROVAL_PENDING_
+         +TTL", "20s", "APPROVAL_APPROVED_TTL", "1m", "APPROVER_NAME", "A
+         +yşe")))                                                        
+      20 +        if err != nil {                                        
+      21 +                t.Fatal(err)                                   
+      22 +        }                                                      
+      23 +        if cfg.Approval != (Approval{PendingTTL: 20 * time.Seco
+         +nd, ApprovedTTL: time.Minute, ApproverName: "Ayşe"}) {         
+      24 +                t.Errorf("overrides = %+v", cfg.Approval)      
+      25 +        }                                                      
+      26 +        for _, kv := range [][2]string{                        
+      27 +                {"APPROVAL_PENDING_TTL", "15"}, {"APPROVAL_PEND
+         +ING_TTL", "500ms"}, {"APPROVAL_PENDING_TTL", "25h"},           
+      28 +                {"APPROVAL_APPROVED_TTL", "-1h"}, {"APPROVAL_AP
+         +PROVED_TTL", "169h"}, {"APPROVER_NAME", strings.Repeat("x", 101
+         +)},                                                            
+      29 +                {"APPROVER_NAME", "a\x07b"},                   
+      30 +        } {                                                    
+      31 +                if _, err := Load(env(with(validEnv(), kv[0], k
+         +v[1]))); err == nil || !strings.Contains(err.Error(), kv[0]) { 
+      32 +                        t.Errorf("%s=%q: %v", kv[0], kv[1], err
+         +)                                                              
+      33 +                }                                              
+      34 +        }                                                      
+      35 +}                                                              
+      36 +                                                               
+      37 +// The configuration bounds and defaults are exactly the approv
+         +al                                                             
+      38 +// package's, so a value accepted here is accepted by approval.
+         +NewService.                                                    
+      39 +func TestApprovalBoundsMatchDomain(t *testing.T) {             
+      40 +        if DefaultApprovalPendingTTL != approval.DefaultPending
+         +TTL || DefaultApprovalApprovedTTL != approval.DefaultApprovedTT
+         +L ||                                                           
+     … 6 more lines (ctrl+o to expand)
+
+⏺ Bash(python3 - <<'EOF'
+      p='internal/platform/config/approval_test.go'…)
+  ⎿  # [github.com/fyusufayan/insider-campaign-composer-case/backend/intern
+     al/approval]
+     internal/approval/decision_test.go:117:3: suspect or: config.MinApprov
+     … +6 lines (ctrl+o to expand)
+  ⎿  Updated backend/internal/approval/decision_test.go (+12 -0)
+      10          "time"
+      11  
+      12          "github.com/fyusufayan/insider-campaign-composer-case/b
+          ackend/internal/campaign"
+      13 +        "github.com/fyusufayan/insider-campaign-composer-case/b
+         +ackend/internal/platform/config"                               
+      14          "github.com/fyusufayan/insider-campaign-composer-case/b
+          ackend/internal/segment"
+      15  )
+      16  
+     ...
+      109                  t.Errorf("no content: %v", f)
+      110          }
+      111  }
+      112 +                                                              
+      113 +// The configuration bounds and defaults (platform/config) are
+          + exactly this                                                 
+      114 +// package's, so a value accepted at startup is accepted by Ne
+          +wService.                                                     
+      115 +func TestBoundsMatchConfig(t *testing.T) {                    
+      116 +        if config.DefaultApprovalPendingTTL != DefaultPendingT
+          +TL || config.DefaultApprovalApprovedTTL != DefaultApprovedTTL 
+          +||                                                            
+      117 +                config.MinApprovalTTL != MinPendingTTL || conf
+          +ig.MinApprovalTTL != MinApprovedTTL ||                        
+      118 +                config.MaxApprovalPendingTTL != MaxPendingTTL 
+          +|| config.MaxApprovalApprovedTTL != MaxApprovedTTL ||         
+      119 +                config.MaxApproverNameRunes != MaxApproverRune
+          +s || config.DefaultApproverName != DefaultApprover {          
+      120 +                t.Error("config and approval bounds differ")  
+      121 +        }                                                     
+      122 +}                                                             
+  ⎿  Updated backend/internal/platform/config/approval_test.go (+0 -13)
+       4          "strings"
+       5          "testing"
+       6          "time"
+       7 -                                                               
+       8 -        "github.com/fyusufayan/insider-campaign-composer-case/b
+         -ackend/internal/approval"                                      
+       7  )
+       8  
+       9  func TestApprovalConfig(t *testing.T) {
+     ...
+      31                  }
+      32          }
+      33  }
+      36 -                                                               
+      37 -// The configuration bounds and defaults are exactly the approv
+         -al                                                             
+      38 -// package's, so a value accepted here is accepted by approval.
+         -NewService.                                                    
+      39 -func TestApprovalBoundsMatchDomain(t *testing.T) {             
+      40 -        if DefaultApprovalPendingTTL != approval.DefaultPending
+         -TTL || DefaultApprovalApprovedTTL != approval.DefaultApprovedTT
+         -L ||                                                           
+      41 -                MinApprovalTTL != approval.MinPendingTTL || Min
+         -ApprovalTTL != approval.MinApprovedTTL ||                      
+      42 -                MaxApprovalPendingTTL != approval.MaxPendingTTL
+         - || MaxApprovalApprovedTTL != approval.MaxApprovedTTL ||       
+      43 -                MaxApproverNameRunes != approval.MaxApproverRun
+         -es || DefaultApproverName != approval.DefaultApprover {        
+      44 -                t.Error("config and approval bounds differ")   
+      45 -        }                                                      
+      46 -}                                                              
+
+⏺ Bash(python3 - <<'EOF'
+      p='internal/approval/decision_test.go'…)
+  ⎿  ok
+     github.com/fyusufayan/insider-campaign-composer-case/backend/inter
+     nal/approval    0.311s
+  ⎿  Updated backend/internal/approval/decision_test.go (+18 -5)
+      113  // The configuration bounds and defaults (platform/config) are
+            exactly this
+      114  // package's, so a value accepted at startup is accepted by Ne
+           wService.
+      115  func TestBoundsMatchConfig(t *testing.T) {
+      116 -        if config.DefaultApprovalPendingTTL != DefaultPendingT
+          -TL || config.DefaultApprovalApprovedTTL != DefaultApprovedTTL 
+          -||                                                            
+      117 -                config.MinApprovalTTL != MinPendingTTL || conf
+          -ig.MinApprovalTTL != MinApprovedTTL ||                        
+      118 -                config.MaxApprovalPendingTTL != MaxPendingTTL 
+          -|| config.MaxApprovalApprovedTTL != MaxApprovedTTL ||         
+      119 -                config.MaxApproverNameRunes != MaxApproverRune
+          -s || config.DefaultApproverName != DefaultApprover {          
+      120 -                t.Error("config and approval bounds differ")  
+      116 +        pairs := []struct {                                   
+      117 +                name      string                              
+      118 +                cfg, here time.Duration                       
+      119 +        }{                                                    
+      120 +                {"default pending", config.DefaultApprovalPend
+          +ingTTL, DefaultPendingTTL},                                   
+      121 +                {"default approved", config.DefaultApprovalApp
+          +rovedTTL, DefaultApprovedTTL},                                
+      122 +                {"min pending", config.MinApprovalTTL, MinPend
+          +ingTTL},                                                      
+      123 +                {"min approved", config.MinApprovalTTL, MinApp
+          +rovedTTL},                                                    
+      124 +                {"max pending", config.MaxApprovalPendingTTL, 
+          +MaxPendingTTL},                                               
+      125 +                {"max approved", config.MaxApprovalApprovedTTL
+          +, MaxApprovedTTL},                                            
+      126 +        }                                                     
+      127 +        for _, p := range pairs {                             
+      128 +                if p.cfg != p.here {                          
+      129 +                        t.Errorf("%s: config %s, approval %s",
+          + p.name, p.cfg, p.here)                                       
+      130 +                }                                             
+      131 +        }                                                     
+      132 +        if config.MaxApproverNameRunes != MaxApproverRunes || 
+          +config.DefaultApproverName != DefaultApprover {               
+      133 +                t.Error("approver bounds differ")             
+      134          }
+      135  }
+
+⏺ Bash(cat > internal/httpapi/approvals_test.go <<'EOF'
+      package httpapi…)
+  ⎿  --- FAIL: TestApprovalRoutesStrictJSON (0.00s)
+         approvals_test.go:109: /api/v1/campaigns/11111111-1111-4111-8111-1
+     11111111111/approvals {"expected_version":1}x: details = [map[code:tra
+     … +6 lines (ctrl+o to expand)
+  ⎿  Created backend/internal/httpapi/approvals_test.go (+230 -0)
+        1 +package httpapi                                               
+        2 +                                                              
+        3 +import (                                                      
+        4 +        "encoding/json"                                       
+        5 +        "errors"                                              
+        6 +        "fmt"                                                 
+        7 +        "io"                                                  
+        8 +        "log/slog"                                            
+        9 +        "net/http"                                            
+       10 +        "net/http/httptest"                                   
+       11 +        "slices"                                              
+       12 +        "strings"                                             
+       13 +        "testing"                                             
+       14 +        "time"                                                
+       15 +                                                              
+       16 +        "github.com/fyusufayan/insider-campaign-composer-case/
+          +backend/internal/ai"                                          
+       17 +        "github.com/fyusufayan/insider-campaign-composer-case/
+          +backend/internal/approval"                                    
+       18 +        "github.com/fyusufayan/insider-campaign-composer-case/
+          +backend/internal/campaign"                                    
+       19 +        "github.com/fyusufayan/insider-campaign-composer-case/
+          +backend/internal/content"                                     
+       20 +        "github.com/fyusufayan/insider-campaign-composer-case/
+          +backend/internal/segment"                                     
+       21 +)                                                             
+       22 +                                                              
+       23 +// newApprovalFixture is the API with approval routes whose re
+          +pository has no                                               
+       24 +// database: these tests exercise only what the transport deci
+          +des before                                                    
+       25 +// any service call (ids, strict JSON) and the error mapping. 
+          +Database                                                      
+       26 +// behaviour is covered by test/integration.                  
+       27 +func newApprovalFixture(t *testing.T) *apiFixture {           
+       28 +        t.Helper()                                            
+       29 +        f := newAPIFixture(t, nil)                            
+       30 +        log := slog.New(slog.NewTextHandler(io.Discard, nil)) 
+       31 +        svc, err := approval.NewService(approval.NewRepository
+          +(nil), approval.Config{PendingTTL: approval.DefaultPendingTTL}
+          +, log)                                                        
+       32 +        if err != nil {                                       
+       33 +                t.Fatal(err)                                  
+       34 +        }                                                     
+       35 +        f.router = NewRouter(log, Deps{Campaigns: f.svc, Appro
+          +vals: svc})                                                   
+       36 +        return f                                              
+       37 +}                                                             
+       38 +                                                              
+       39 +const (                                                       
+       40 +        testCID = "11111111-1111-4111-8111-111111111111"      
+     … 190 more lines (ctrl+o to expand)
+
+⏺ Bash(sed -i '' 's|{prep, `{"expected_version":1}x`, fieldMalformedJSON,
+      ""},|{prep, `{"expected_version":`, fieldMalformedJSON, ""},|'
+      internal/httpapi/approvals_tes…)
+  ⎿  --- FAIL: TestApprovalRoutesStrictJSON (0.00s)
+         approvals_test.go:109: /api/v1/campaigns/11111111-1111-4111-8111-1
+     11111111111/approvals {"expected_version":: details = [map[code:malfor
+     … +16 lines (ctrl+o to expand)
+  ⎿  Updated backend/internal/httpapi/approvals_test.go (+1 -1)
+      81                  {prep, `{"expected_version":0}`, fieldOutOfRang
+          e, "expected_version"},
+      82                  {prep, `{"expected_version":99999999999}`, fiel
+          dOutOfRange, "expected_version"},
+      83                  {prep, `[]`, fieldWrongType, ""},
+      84 -                {prep, `{"expected_version":1}x`, fieldMalforme
+         -dJSON, ""},                                                    
+      84 +                {prep, `{"expected_version":`, fieldMalformedJS
+         +ON, ""},                                                       
+      85                  {prep, `{"expected_version":1}{}`, fieldTrailin
+          gData, ""},
+      86                  {withdraw, `{"expected_version":true}`, fieldWr
+          ongType, "expected_version"},
+      87                  {withdraw, `{"expected_version":1,"reason":"x"}
+          `, fieldUnknownProperty, "reason"},
+
+⏺ Fixing one test expectation (malformed JSON is reported at the property path),
+  then moving on to the frontend.
+
+⏺ Bash(sed -i '' 's|{prep, `{"expected_version":`, fieldMalformedJSON,
+      ""},|{prep, `{"expected_version":`, fieldMalformedJSON,
+      "expected_version"},|' internal/httpapi/…)
+  ⎿  done
+  ⎿  Updated backend/internal/httpapi/approvals_test.go (+1 -1)
+      81                  {prep, `{"expected_version":0}`, fieldOutOfRang
+          e, "expected_version"},
+      82                  {prep, `{"expected_version":99999999999}`, fiel
+          dOutOfRange, "expected_version"},
+      83                  {prep, `[]`, fieldWrongType, ""},
+      84 -                {prep, `{"expected_version":`, fieldMalformedJS
+         -ON, ""},                                                       
+      84 +                {prep, `{"expected_version":`, fieldMalformedJS
+         +ON, "expected_version"},                                       
+      85                  {prep, `{"expected_version":1}{}`, fieldTrailin
+          gData, ""},
+      86                  {withdraw, `{"expected_version":true}`, fieldWr
+          ongType, "expected_version"},
+      87                  {withdraw, `{"expected_version":1,"reason":"x"}
+          `, fieldUnknownProperty, "reason"},
+
+⏺ Backend unit + integration tests pass. Moving to the frontend.
+
+  Ran 3 shell commands (ctrl+o to expand)
+
+⏺ Writing the frontend types, decoder and client.
+
+⏺ Bash(python3 - <<'EOF'
+      p='src/api/types.ts'…)
+  ⎿  Updated frontend/src/api/client.ts (+31 -0)
+       8  
+       9  import {
+      10    DecodeError,
+      11 +  decodeApprovalResponse,                                      
+      12    decodeAudienceResponse,
+      13    decodeCampaign,
+      14    decodeContentSaved,
+     ...
+      21  } from './decode'
+      22  import { SseLimitError, SseParser } from './sse'
+      23  import type {
+      24 +  ApprovalResponse,                                            
+      25 +  ConfirmApprovalRequest,                                      
+      26 +  PrepareApprovalRequest,                                      
+      27 +  WithdrawApprovalRequest,                                     
+      28    AudienceResponse,
+      29    Campaign,
+      30    Channel,
+     ...
+      313    return `${API_BASE}/campaigns/${encodeURIComponent(id)}`
+      314  }
+      315  
+      316 +function approvalUrl(id: string, approvalId: string): string {
+      317 +  return `${campaignUrl(id)}/approvals/${encodeURIComponent(ap
+          +provalId)}`                                                   
+      318 +}                                                             
+      319 +                                                              
+      320  export const api = {
+      321    /** POST /api/v1/campaigns → 201 campaign. */
+      322    createCampaign(req: CreateCampaignRequest, signal?: AbortSig
+           nal): Promise<Campaign> {
+     ...
+      365      return generationStream(`${campaignUrl(id)}/content/genera
+           tions`, signal, onEvent)
+      366    },
+      367  
+      368 +  /** POST /api/v1/campaigns/{id}/approvals {expected_version}
+          + → 201 {campaign, approval}. */                               
+      369 +  prepareApproval(id: string, expectedVersion: number, signal?
+          +: AbortSignal): Promise<ApprovalResponse> {                   
+      370 +    const body: PrepareApprovalRequest = { expected_version: e
+          +xpectedVersion }                                              
+      371 +    return request('POST', `${campaignUrl(id)}/approvals`, (v)
+          + => decodeApprovalResponse(v), { body, signal })              
+      372 +  },                                                          
+      373 +                                                              
+      374 +  /** GET /api/v1/campaigns/{id}/approvals/{aid} → {campaign, 
+          +approval} (lazy expiry first). */                             
+      375 +  getApproval(id: string, approvalId: string, signal?: AbortSi
+          +gnal): Promise<ApprovalResponse> {                            
+      376 +    return request('GET', approvalUrl(id, approvalId), (v) => 
+          +decodeApprovalResponse(v), { signal })                        
+      377 +  },                                                          
+     … 15 more lines (ctrl+o to expand)
+  ⎿  Updated frontend/src/api/decode.ts (+209 -0)
+      25    ErrorBody,
+      26    ExampleValues,
+      27    FieldError,
+      28 +  ApprovalChannelSnapshot,                                     
+      29 +  ApprovalResponse,                                            
+      30 +  ApprovalReview,                                              
+      31 +  ApprovalStatus,                                              
+      32 +  ApprovalSummary,                                             
+      33 +  Offer,                                                       
+      34 +  RevokeReason,                                                
+      35    GenerationDelta,
+      36    GenerationErrorEvent,
+      37    GenerationEvent,
+     ...
+       86    return str(v, path)
+       87  }
+       88  
+       89 +const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]
+          +{4}-[0-9a-f]{12}$/                                            
+       90 +                                                              
+       91 +function uuid(v: unknown, path: string): string {             
+       92 +  const s = str(v, path)                                      
+       93 +  if (!UUID_RE.test(s)) throw new DecodeError(path, 'a lower-c
+          +ase UUID')                                                    
+       94 +  return s                                                    
+       95 +}                                                             
+       96 +                                                              
+       97 +function nullableUuid(v: unknown, path: string): string | null
+          + {                                                            
+       98 +  if (v === null) return null                                 
+       99 +  return uuid(v, path)                                        
+      100 +}                                                             
+      101 +                                                              
+      102 +function timestamp(v: unknown, path: string): string {        
+      103 +  const s = str(v, path)                                      
+      104 +  if (Number.isNaN(Date.parse(s))) throw new DecodeError(path,
+          + 'an RFC 3339 timestamp')                                     
+      105 +  return s                                                    
+      106 +}                                                             
+      107 +                                                              
+      108 +function nullableTimestamp(v: unknown, path: string): string |
+          + null {                                                       
+      109 +  if (v === null) return null                                 
+      110 +  return timestamp(v, path)                                   
+      111 +}                                                             
+      112 +                                                              
+     … 190 more lines (ctrl+o to expand)
+  ⎿  Updated frontend/src/api/types.ts (+79 -0)
+      135    content_brief: unknown
+      136    /** Immutable content version the campaign points at; null w
+           ithout content. */
+      137    current_content_id: number | null
+      138 +  /** The live (pending/approved) approval, or the consumed on
+          +e once sending; null otherwise. */                            
+      139 +  active_approval_id: string | null                           
+      140    version: number
+      141    created_at: string
+      142    updated_at: string
+     ...
+      388    | 'llm_refused'
+      389    | 'llm_truncated'
+      390    | 'invalid_brief'
+      391 +  | 'approval_expired'                                        
+      392 +  | 'approval_mismatch'                                       
+      393 +  | 'empty_audience'                                          
+      394 +  | 'audience_changed'                                        
+      395 +  | 'campaign_busy'                                           
+      396  
+      397  export interface ErrorBody {
+      398    /** One of ErrorCode for this API version; unknown codes are
+            tolerated. */
+     ...
+      408    error: ErrorBody
+      409  }
+      410  
+      411 +// ---- Approval (CP15, backend httpapi/approvals.go approvalD
+          +TO) ----                                                      
+      412 +                                                              
+      413 +export type ApprovalStatus = 'pending' | 'approved' | 'consume
+          +d' | 'revoked' | 'expired'                                    
+      414 +export type RevokeReason = 'superseded' | 'edited' | 'withdraw
+          +n' | 'campaign_cancelled'                                     
+      415 +                                                              
+      416 +/** Frozen recipients of one channel (counts only, never recip
+          +ients). */                                                    
+      417 +export interface ApprovalChannelSnapshot {                    
+      418 +  recipients: number                                          
+      419 +  /** Held rows whose frozen values cannot be rendered, by cod
+          +e; null for a closed approval. */                             
+      420 +  render_issues: Record<string, number> | null                
+      421 +}                                                             
+      422 +                                                              
+      423 +/** Re-validation of the bound content against the current con
+          +tent brief (live approvals). */                               
+      424 +export interface ApprovalReview {                             
+      425 +  validation: ContentValidation                               
+      426 +  /** Advisory keyword findings (unauthorized_offer / unauthor
+          +ized_claim); never blocking for marketer text. */             
+      427 +  offer_findings: FieldError[]                                
+      428 +  offer: Offer                                                
+     … 57 more lines (ctrl+o to expand)
+  ⎿  Updated frontend/tests/helpers/fixtures.ts (+1 -0)
+      55      interpretation: null,
+      56      content_brief: null,
+      57      current_content_id: null,
+      58 +    active_approval_id: null,                                  
+      59      version: 1,
+      60      created_at: '2026-11-04T10:00:00Z',
+      61      updated_at: '2026-11-04T10:00:00Z',
+
+⏺ Now error presentation for approval operations.
+
+⏺ Bash(python3 - <<'EOF'
+      p='src/api/errors.ts'…)
+  ⎿  ok
+  ⎿  Updated frontend/src/api/errors.ts (+70 -0)
+      14    | 'generate'
+      15    | 'saveContent'
+      16    | 'validateContent'
+      17 +  | 'prepareApproval'                                          
+      18 +  | 'approval'                                                 
+      19 +  | 'confirmApproval'                                          
+      20 +  | 'withdrawApproval'                                         
+      21  
+      22  export interface ErrorPresentation {
+      23    title: string
+     ...
+      60      const g = presentGenerationError(err, base)
+      61      if (g) return g
+      62    }
+      63 +  if (op === 'prepareApproval' || op === 'approval' || op === '
+         +confirmApproval' || op === 'withdrawApproval') {               
+      64 +    const a = presentApprovalError(err, op, base)              
+      65 +    if (a) return a                                            
+      66 +  }                                                            
+      67  
+      68    switch (err.code) {
+      69      case 'validation_failed':
+     ...
+      168        return null
+      169    }
+      170  }
+      171 +                                                              
+      172 +/** Approval-specific wording (CP15). Nothing is retried autom
+          +atically. */                                                  
+      173 +function presentApprovalError(err: ApiError, op: Operation, ba
+          +se: ErrorPresentation): ErrorPresentation | null {            
+      174 +  switch (err.code) {                                         
+      175 +    case 'approval_expired':                                  
+      176 +      return {                                                
+      177 +        ...base,                                              
+      178 +        title: 'The approval has expired',                    
+      179 +        message:                                              
+      180 +          'Its time limit passed, so it can no longer be confi
+          +rmed and its recipient snapshot was released. Nothing was sent
+          +.',                                                           
+      181 +        hint: 'Reload the campaign and prepare a new approval 
+          +to review a fresh snapshot.',                                 
+      182 +        canRetry: false,                                      
+      183 +        canReload: true,                                      
+      184 +      }                                                       
+      185 +    case 'approval_mismatch':                                 
+      186 +      return {                                                
+      187 +        ...base,                                              
+     … 45 more lines (ctrl+o to expand)
+
+⏺ Now the store: approval state, guarded actions, lazy-expiry refresh.
+
+⏺ Bash(python3 - <<'EOF'
+      p='src/stores/campaign.ts'…)
+  ⎿  Updated frontend/src/stores/campaign.ts (+303 -3)
+      31  //      the commit) changes the campaign and its content. Any f
+          ailure,
+      32  //      interruption or cancellation reloads the campaign and i
+          ts content,
+      33  //      because a commit may have happened just before the conn
+          ection ended.
+      34 +//   7. Approval (CP15): the approval summary is applied only t
+         +ogether with                                                   
+      35 +//      the campaign returned in the same response (same versio
+         +n), so the                                                     
+      36 +//      dialog never shows an approval for another campaign sta
+         +te. Prepare,                                                   
+      37 +//      confirm and withdraw are version-guarded mutations like
+         + the others                                                    
+      38 +//      (one at a time, never retried automatically; a 409 is s
+         +hown with a                                                    
+      39 +//      reload path). The expiry countdown is display only: whe
+         +n it elapses                                                   
+      40 +//      the store re-reads the approval (the server performs th
+         +e expiry) and                                                  
+      41 +//      Confirm is disabled; the server's decision is authorita
+         +tive.                                                          
+      42  
+      43  import { defineStore } from 'pinia'
+      44  import { computed, ref, shallowRef } from 'vue'
+      45  import { ApiError, api, isApiError } from '@/api/client'
+      46  import type {
+      47 +  ApprovalResponse,                                            
+      48 +  ApprovalSummary,                                             
+      49    AudienceStats,
+      50    Campaign,
+      51    CampaignStatus,
+     ...
+      88  
+      89  export type Draft = Record<ContentField, string>
+      90  
+      91 +export type ApprovalAction = 'prepareApproval' | 'confirmApprov
+         +al' | 'withdrawApproval'                                       
+      92 +/** How the approval shown last ended, or that it was just conf
+         +irmed. */                                                      
+      93 +export type ApprovalNotice = 'expired' | 'withdrawn' | 'replace
+         +d' | 'confirmed'                                               
+      94 +                                                               
+      95 +                                                               
+      96  const IDLE_GENERATION: GenerationView = {
+      97    phase: 'idle',
+      98    attempt: 0,
+     ...
+      178    const saveNotice = ref<'saved' | 'unchanged' | null>(null)
+      179    const generation = shallowRef<GenerationView>(IDLE_GENERATIO
+           N)
+      180  
+      181 +  // ---- approval (CP15) ----                                
+      182 +  const approval = shallowRef<ApprovalSummary | null>(null)   
+      183 +  const approvalLoading = ref(false)                          
+      184 +  /** Reading the approval failed. */                         
+      185 +  const approvalError = shallowRef<ApiError | null>(null)     
+     … 359 more lines (ctrl+o to expand)
+
+⏺ Now the countdown composable and the approval components.
+
+⏺ Bash(cat > src/composables/useCountdown.ts <<'EOF'
+      // Display-only countdown to a server timestamp. The client clock is
+      aligned…)
+  ⎿  <script setup lang="ts">
+     import { computed } from 'vue'
+     import type { CampaignStatus } from '@/api/types'
+     … +49 lines (ctrl+o to expand)
+  ⎿  Created frontend/src/composables/useCountdown.ts (+47 -0)
+       1 +// Display-only countdown to a server timestamp. The client clo
+         +ck is aligned                                                  
+       2 +// with the server clock by `offsetMs` (server − client, from t
+         +he response's                                                  
+       3 +// server_time). It never decides anything: the server compares
+         + expiry with                                                   
+       4 +// its database clock; the UI only disables actions and asks th
+         +e server to                                                    
+       5 +// re-read when the deadline passes.                           
+       6 +                                                               
+       7 +import { computed, onBeforeUnmount, ref, watch, type Ref } from
+         + 'vue'                                                         
+       8 +                                                               
+       9 +export function useCountdown(target: Ref<string | null>, offset
+         +Ms: Ref<number>, onElapsed?: () => void, tickMs = 1000) {      
+      10 +  const now = ref(Date.now())                                  
+      11 +  const timer = setInterval(() => (now.value = Date.now()), tic
+         +kMs)                                                           
+      12 +  onBeforeUnmount(() => clearInterval(timer))                  
+      13 +                                                               
+      14 +  const remainingMs = computed<number | null>(() => {          
+      15 +    if (!target.value) return null                             
+      16 +    const t = Date.parse(target.value)                         
+      17 +    if (Number.isNaN(t)) return null                           
+      18 +    return t - (now.value + offsetMs.value)                    
+      19 +  })                                                           
+      20 +  const elapsed = computed(() => remainingMs.value !== null && 
+         +remainingMs.value <= 0)                                        
+      21 +                                                               
+      22 +  // Fire once per target when it elapses.                     
+      23 +  let firedFor: string | null = null                           
+      24 +  watch(                                                       
+      25 +    [elapsed, target],                                         
+      26 +    ([e, t]) => {                                              
+      27 +      if (e && t && firedFor !== t) {                          
+      28 +        firedFor = t                                           
+      29 +        onElapsed?.()                                          
+      30 +      }                                                        
+      31 +    },                                                         
+      32 +    { immediate: true },                                       
+      33 +  )                                                            
+      34 +  return { remainingMs, elapsed, now }                         
+      35 +}                                                              
+      36 +                                                               
+      37 +/** "14:59", "1:02:03", "23 h 59 min" style remaining time; "ex
+         +pired" at ≤ 0. */                                              
+      38 +export function formatRemaining(ms: number | null): string {   
+      39 +  if (ms === null) return '—'                                  
+      40 +  if (ms <= 0) return 'expired'                                
+     … 7 more lines (ctrl+o to expand)
+
+⏺ Write(frontend/src/components/composer/ApprovalSummary.vue)
+  ⎿  Wrote 234 lines to
+     frontend/src/components/composer/ApprovalSummary.vue
+       1 <script setup lang="ts">
+       2 // The frozen approval as the server reported it: binding (conte
+         nt version,
+       3 // segment version, channels, snapshot digest), the exact partit
+         ion stored
+       4 // with the approval, the frozen recipients per channel, render 
+         issues,
+       5 // timestamps and the rendered content (fictional example values
+         ). Counts
+       6 // only — the browser never receives recipient records. All text
+     … +229 lines (~8 KB) (ctrl+o to expand)
+
+⏺ Write(frontend/src/components/composer/ApprovalDialog.vue)
+  ⎿  Wrote 318 lines to frontend/src/components/composer/ApprovalDialog.vue
+       1 <script setup lang="ts">
+       2 // Review dialog of a prepared (pending) approval. Shows exactly
+          what the
+       3 // server froze and every advisory offer/price finding, explains
+          what
+       4 // confirming authorizes, and requires explicit acknowledgement 
+         before
+       5 // Confirm. Closing it decides nothing: the approval stays pendi
+         ng until it
+       6 // is confirmed, withdrawn or expires. The server enforces versi
+     … +313 lines (~10 KB) (ctrl+o to expand)
+
+⏺ Now the step-5 panel that hosts prepare/approved state and the dialog.
+
+⏺ Write(frontend/src/components/composer/ApprovalPanel.vue)
+  ⎿  Wrote 251 lines to frontend/src/components/composer/ApprovalPanel.vue
+       1 <script setup lang="ts">
+       2 // Step 5: approval. Prepare freezes the audience and content in
+         to a pending
+       3 // approval (server); the dialog reviews and confirms or withdra
+         ws it; an
+       4 // approved campaign shows a read-only summary. No send action e
+         xists in this
+       5 // version. All state lives in the campaign store.
+       6 import { computed, ref, watch } from 'vue'
+       7 import { storeToRefs } from 'pinia'
+     … +244 lines (ctrl+o to expand)
+
+⏺ Bash(python3 - <<'EOF'
+      p='src/pages/CampaignComposerPage.vue'…)  ⎿  > campaign-composer-frontend@0.1.0 typecheck
+     > vue-tsc --noEmit -p tsconfig.app.json && vue-tsc --noEmit -p tsconfi
+     g.test.json && tsc --noEmit -p tsconfig.node.json
+     … +11 lines (ctrl+o to expand)
+  ⎿  Updated frontend/src/pages/CampaignComposerPage.vue (+2 -0)
+      10  import { isCampaignId, useRecentCampaigns } from '@/composables
+          /useRecentCampaigns'
+      11  import { formatDateTime } from '@/composables/format'
+      12  import type { Channel } from '@/api/types'
+      13 +import ApprovalPanel from '@/components/composer/ApprovalPanel.
+         +vue'                                                           
+      14  import AudienceCard from '@/components/composer/AudienceCard.vu
+          e'
+      15  import BriefCard from '@/components/composer/BriefCard.vue'
+      16  import ContentPanel from '@/components/composer/ContentPanel.vu
+          e'
+     ...
+      234        </div>
+      235  
+      236        <ContentPanel v-if="hasContentStep" class="content-step"
+            @revise="revise" />
+      237 +      <ApprovalPanel v-if="hasContentStep" class="content-step
+          +" />                                                          
+      238      </template>
+      239    </div>
+      240  </template>
+
+⏺ Existing 162 frontend tests still pass. Now the fake backend approval routes
+  and frontend tests — checking how existing content tests seed state.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ Bash(python3 - <<'EOF'
+      p='tests/helpers/fixtures.ts'…)
+  ⎿  // Real-shaped API payloads (field names and shapes from the CP6 DTOs)
+     .
+     import type {
+     … +13 lines (ctrl+o to expand)
+  ⎿  Updated frontend/tests/helpers/fixtures.ts (+42 -0)
+      1  // Real-shaped API payloads (field names and shapes from the CP6
+          DTOs).
+      2  import type {
+      3 +  ApprovalSummary,                                              
+      4    AudienceStats,
+      5    Campaign,
+      6    Channel,
+     ...
+      241      email_body: chs.includes('email') ? v.email_body : null,
+      242    }
+      243  }
+      244 +                                                              
+      245 +// ---- Approval (CP15) ----                                  
+      246 +                                                              
+      247 +export const APPROVAL_ID = 'a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c
+          +5d'                                                           
+      248 +export const DIGEST = 'ab'.repeat(32)                         
+      249 +export const SERVER_TIME = '2026-11-04T10:20:00Z'             
+      250 +                                                              
+      251 +/** A pending approval of campaign c (which must already be pe
+          +nding_approval) bound to content v. */                        
+      252 +export function approvalFor(c: Campaign, v: ContentVersion, ov
+          +errides: Partial<ApprovalSummary> = {}): ApprovalSummary {    
+      253 +  const stats = audienceFor(c.channels)                       
+      254 +  const snapshot: ApprovalSummary['snapshot'] = {}            
+      255 +  for (const ch of c.channels) snapshot[ch] = { recipients: st
+          +ats.by_channel[ch]!.eligible, render_issues: {} }             
+      256 +  const validation = fakeValidate(storedForChannels(v, c.chann
+          +els), c.channels)                                             
+      257 +  return {                                                    
+      258 +    approval_id: APPROVAL_ID,                                 
+      259 +    campaign_id: c.id,                                        
+      260 +    status: 'pending',                                        
+      261 +    revoke_reason: null,                                      
+      262 +    campaign_version: c.version,                              
+      263 +    segment_version: c.segment_version,                       
+      264 +    content_id: v.id,                                         
+      265 +    content_version: v.version,                               
+      266 +    content_origin: v.origin,                                 
+      267 +    content_model: v.model,                                   
+      268 +    content_prompt_version: v.prompt_version,                 
+      269 +    channels: [...c.channels],                                
+      270 +    audience_stats: stats,                                    
+      271 +    snapshot_count: stats.messages,                           
+      272 +    snapshot_digest: DIGEST,                                  
+      273 +    snapshot,                                                 
+      274 +    prepared_at: '2026-11-04T10:15:00Z',                      
+     … 10 more lines (ctrl+o to expand)
+
+⏺ Bash(python3 - <<'EOF'
+      p='tests/helpers/fakeBackend.ts'…)
+  ⎿  Updated frontend/tests/helpers/fakeBackend.ts (+126 -2)
+       4  // route (e.g. to delay, reorder or fail responses).
+       5  
+       6  import { vi } from 'vitest'
+       7 -import type { Campaign, Channel, ContentField, ContentVersion }
+         - from '@/api/types'                                            
+       7 +import type { ApprovalSummary, Campaign, Channel, ContentField,
+         + ContentVersion } from '@/api/types'                           
+       8  import {
+       9 +  APPROVAL_ID,                                                 
+      10 +  approvalFor,                                                 
+      11    CAMPAIGN_ID,
+      12    CONTENT_LIMITS,
+      13    EXAMPLE_CONTENT_BRIEF,
+     ...
+      117    /** Writes the generation stream (default: a successful demo
+            generation). */
+      118    generation: GenerationScript = (c, s) => this.defaultGenerat
+           ion(c, s)
+      119    streams: FakeSseStream[] = []
+      120 +  /** Approvals by id (the fake keeps every approval, like the
+          + database). */                                                
+      121 +  approvals = new Map<string, ApprovalSummary>()              
+      122 +  nextApprovalSeq = 0                                         
+      123 +  pendingTtlMs = 15 * 60_000                                  
+      124 +  approvedTtlMs = 24 * 3_600_000                              
+      125 +  /** Offer findings attached to the next prepared approval. *
+          +/                                                             
+      126 +  nextFindings: ApprovalSummary['review'] extends infer R ? (R
+          + extends { offer_findings: infer F } ? F : never) : never = []
+      127  
+      128    constructor() {
+      129      vi.stubGlobal('fetch', this.fetch)
+     ...
+      176        this.campaigns.set(c.id, c)
+      177        return json(201, c)
+      178      }
+      179 +    const am = path.match(/^\/api\/v1\/campaigns\/([^/]+)\/app
+          +rovals(?:\/([^/]+)(?:\/([a-z]+))?)?$/)                        
+      180 +    if (am) return this.approvalRoute(method, am[1]!, am[2], a
+          +m[3], body)                                                   
+      181      const m = path.match(/^\/api\/v1\/campaigns\/([^/]+)(\/[a-
+           z]+(?:\/[a-z]+)?)?$/)
+      182      if (!m) return json(404, errorEnvelope('not_found', 'resou
+           rce not found'))
+      183      const [, id, sub] = m
+      184      const c = this.campaigns.get(id!)
+      185      if (!c) return json(404, errorEnvelope('not_found', 'campa
+           ign not found'))
+      186  
+      176 -    if (method === 'GET' && !sub) return json(200, c)         
+      187 +    if (method === 'GET' && !sub) {                           
+      188 +      this.lazyExpire(c.id)                                   
+      189 +      return json(200, this.campaigns.get(c.id))              
+      190 +    }                                                         
+     … 119 more lines (ctrl+o to expand)
+
+⏺ Bash(python3 - <<'EOF'
+      p='tests/helpers/fakeBackend.ts'…)
+  ⎿  Updated frontend/tests/helpers/fakeBackend.ts (+2 -2)
+       4  // route (e.g. to delay, reorder or fail responses).
+       5  
+       6  import { vi } from 'vitest'
+       7 -import type { ApprovalSummary, Campaign, Channel, ContentField,
+         - ContentVersion } from '@/api/types'                           
+       7 +import type { ApprovalSummary, Campaign, Channel, ContentField,
+         + ContentVersion, FieldError } from '@/api/types'               
+       8  import {
+       9    APPROVAL_ID,
+      10    approvalFor,
+     ...
+      123    pendingTtlMs = 15 * 60_000
+      124    approvedTtlMs = 24 * 3_600_000
+      125    /** Offer findings attached to the next prepared approval. *
+           /
+      126 -  nextFindings: ApprovalSummary['review'] extends infer R ? (R
+          - extends { offer_findings: infer F } ? F : never) : never = []
+      126 +  nextFindings: FieldError[] = []                             
+      127  
+      128    constructor() {
+      129      vi.stubGlobal('fetch', this.fetch)
+
+⏺ Now the frontend approval tests.
+
+⏺ Write(frontend/tests/approval.spec.ts)
+  ⎿  Wrote 478 lines to frontend/tests/approval.spec.ts
+       1 // The approval step (CP15) against the stateful fake backend: p
+         repare →
+       2 // review dialog → confirm / withdraw, offer findings, expiry, c
+         onflicts,
+       3 // navigation races, refresh, and strict decoding of approval re
+         sponses.
+       4 import { afterEach, beforeEach, describe, expect, it, vi } from 
+         'vitest'
+       5 import type { Campaign, ContentVersion } from '@/api/types'
+       6 import { decodeApprovalResponse } from '@/api/decode'
+     … +472 lines (ctrl+o to expand)
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ Only my guessed fixture numbers were wrong; reading the real partition and
+  fixing.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ Bash(sed -i '' -e 's|/^SMS 200 150 62\$/|/^SMS 251 140 21$/|' -e 's|/^Email
+      240 90 82\$/|/^Email 318 82 12$/|' -e "s|toBe('440')|toBe('569')|g" -e
+      's|snapshot_count)…)
+  ⎿        Tests  202 passed (202)
+  ⎿  Updated frontend/tests/approval.spec.ts (+6 -6)
+      73      expect(store.campaign?.status).toBe('pending_approval')
+      74      expect(store.campaign?.version).toBe(campaign.version + 1)
+      75      // Frozen counts per channel (eligible from the stored part
+          ition), totals, binding.
+      76 -    expect(text(app!.wrapper, 'approval-row-sms')).toMatch(/^SM
+         -S 200 150 62$/)                                                
+      77 -    expect(text(app!.wrapper, 'approval-row-email')).toMatch(/^
+         -Email 240 90 82$/)                                             
+      78 -    expect(text(app!.wrapper, 'approval-total')).toBe('440')   
+      76 +    expect(text(app!.wrapper, 'approval-row-sms')).toMatch(/^SM
+         +S 251 140 21$/)                                                
+      77 +    expect(text(app!.wrapper, 'approval-row-email')).toMatch(/^
+         +Email 318 82 12$/)                                             
+      78 +    expect(text(app!.wrapper, 'approval-total')).toBe('569')   
+      79      expect(text(app!.wrapper, 'approval-reach')).toMatch(/202 o
+          n both channels/)
+      80      expect(text(app!.wrapper, 'approval-content')).toMatch(/Ver
+          sion 1 · AI \(demo generator, not Claude\)/)
+      81      expect(text(app!.wrapper, 'approval-segment')).toMatch(/Seg
+          ment version 1/)
+     ...
+      342      fake.seedPending({ ...campaign, version: campaign.version 
+           + 1 }, version)
+      343      await open()
+      344      await until(() => expect(find('approval-dialog').exists())
+           .toBe(true))
+      345 -    expect(text(app!.wrapper, 'approval-total')).toBe('440')  
+      345 +    expect(text(app!.wrapper, 'approval-total')).toBe('569')  
+      346    })
+      347  
+      348    it('shows an approval that expired elsewhere as expired afte
+           r a reload', async () => {
+     ...
+      408    }
+      409  
+      410    it('accepts the contract', () => {
+      411 -    expect(decodeApprovalResponse(JSON.parse(JSON.stringify(va
+          -lid()))).approval.snapshot_count).toBe(440)                   
+      411 +    expect(decodeApprovalResponse(JSON.parse(JSON.stringify(va
+          +lid()))).approval.snapshot_count).toBe(569)                   
+      412    })
+      413  
+      414    it.each([
+     ...
+      423        r.campaign.active_approval_id = null
+      424      }],
+      425      ['a live approval without review', (r: any) => (r.approval
+           .review = null)],
+      426 -    ['a count that is not the sum', (r: any) => (r.approval.sn
+          -apshot_count = 441)],                                         
+      426 +    ['a count that is not the sum', (r: any) => (r.approval.sn
+          +apshot_count = 570)],                                         
+      427      ['recipients that differ from the stored eligible count', 
+           (r: any) => (r.approval.snapshot.sms.recipients = 1)],
+      428      ['a missing channel snapshot', (r: any) => delete r.approv
+           al.snapshot.email],
+      429      ['a bad digest', (r: any) => (r.approval.snapshot_digest =
+            'xyz')],
+
+⏺ All 202 frontend tests pass. Typecheck and production build:
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ Frontend green. Now config wiring in Compose/.env.example and the
+  documentation.
+
+⏺ Bash(cd /Users/bilgem/Desktop/devel/leet/insider-case/insider-campaign-compose
+      r-case && python3 - <<'EOF'
+      p='docker-compose.yml'…)
+  ⎿  docker-compose.yml:95:      APPROVAL_PENDING_TTL: ${APPROVAL_PENDING_T
+     TL:-15m}
+     docker-compose.yml:96:      APPROVAL_APPROVED_TTL: ${APPROVAL_APPROVED
+     … +20 lines (ctrl+o to expand)
+  ⎿  Updated .env.example (+9 -0)
+      43  CLAUDE_CONTENT_TIMEOUT=90s
+      44  CLAUDE_CONTENT_MAX_TOKENS=8000
+      45  
+      46 +# Approval workflow (ADR-006, ARCHITECTURE §5.3). A prepared ap
+         +proval must be                                                 
+      47 +# confirmed within APPROVAL_PENDING_TTL (1s–24h); a confirmed a
+         +pproval may be                                                 
+      48 +# used for sending until APPROVAL_APPROVED_TTL after confirmati
+         +on (1s–168h).                                                  
+      49 +# Shorten both (e.g. 30s / 1m) to demonstrate expiry. APPROVER_
+         +NAME is recorded                                               
+      50 +# as approved_by (there is no authentication).                 
+      51 +APPROVAL_PENDING_TTL=15m                                       
+      52 +APPROVAL_APPROVED_TTL=24h                                      
+      53 +APPROVER_NAME=marketer@demo                                    
+      54 +                                                               
+      55  # Deterministic seed (cmd/seed). The same three values always p
+          roduce the same
+      56  # dataset; SEED_REFERENCE_TIME must be RFC 3339 in UTC. `make s
+          eed-today` uses
+      57  # today's UTC midnight instead of the fixed default.
+  ⎿  Updated docker-compose.yml (+4 -0)
+       91        CLAUDE_CONTENT_EFFORT: ${CLAUDE_CONTENT_EFFORT:-medium}
+       92        CLAUDE_CONTENT_TIMEOUT: ${CLAUDE_CONTENT_TIMEOUT:-90s}
+       93        CLAUDE_CONTENT_MAX_TOKENS: ${CLAUDE_CONTENT_MAX_TOKENS:-
+           8000}
+       94 +      # Approval expiry (ADR-006) and the recorded approver (n
+          +o auth).                                                      
+       95 +      APPROVAL_PENDING_TTL: ${APPROVAL_PENDING_TTL:-15m}      
+       96 +      APPROVAL_APPROVED_TTL: ${APPROVAL_APPROVED_TTL:-24h}    
+       97 +      APPROVER_NAME: ${APPROVER_NAME:-marketer@demo}          
+       98      depends_on:
+       99        seed:
+      100          condition: service_completed_successfully
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ Bash(python3 - <<'EOF'
+      p='README.md'…)
+  ⎿  7:the marketer then prepares an approval (a frozen recipient snapshot)
+     , reviews
+     14:validation and immutable content versions, plus Slice 3's approval
+     … +11 lines (ctrl+o to expand)
+  ⎿  Updated README.md (+23 -4)
+       3  AI-assisted campaign composer: a marketer writes a brief, the A
+          I proposes a
+       4  typed audience rule, the backend validates it and shows a live,
+       5  database-backed audience preview; the AI then writes SMS/email 
+          content that
+       6 -the backend validates and stores as immutable versions the mark
+         -eter can edit.                                                 
+       7 -No real messages are sent.                                     
+       6 +the backend validates and stores as immutable versions the mark
+         +eter can edit;                                                 
+       7 +the marketer then prepares an approval (a frozen recipient snap
+         +shot), reviews                                                 
+       8 +it and confirms or withdraws it. No real messages are sent.    
+       9  
+      10  Design and rationale: `docs/ARCHITECTURE.md`, `DECISIONS.md`, `
+          docs/ROADMAP.md`,
+      11  `CLAUDE.md`. Current scope: **Slices 1a, 1b and 2** — brief →
+      12  interpretation (demo, or real Claude when a key is configured) 
+          → validated
+      13  segment → audience preview → streamed content generation, editi
+          ng,
+      13 -validation and immutable content versions. Approval and sending
+         - come in                                                       
+      14 -later slices.                                                  
+      14 +validation and immutable content versions, plus Slice 3's appro
+         +val                                                            
+      15 +preparation, review, confirmation, withdrawal and expiry (CP14–
+         +CP15).                                                         
+      16 +Sending (worker, provider, rate limiting) comes in Slice 4: an 
+         +approved                                                       
+      17 +campaign stays approved and nothing is sent.                   
+      18  
+      19  ## Quick start (Docker only)
+      20  
+     ...
+       91     (*Edited manually*); saving unchanged text reports *No chan
+           ges* and creates
+       92     no version.
+       93  6. Reload or share `/campaigns/{id}` — campaign and content ar
+           e stored in PostgreSQL.
+       94 +7. In **Review & approval**, click **Prepare approval**. The b
+          +ackend freezes                                                
+       95 +   the eligible recipients (rule match + contact + consent, pe
+          +r selected                                                    
+       96 +   channel) and the content version into a pending approval; t
+          +he review dialog                                              
+       97 +   shows the frozen per-channel counts, the excluded `no_conse
+          +nt / no_contact`                                              
+       98 +   counts, reach, the content version and origin, the snapshot
+          + digest, a                                                    
+       99 +   countdown to the 15-minute confirmation deadline, the rende
+          +red content and                                               
+      100 +   every advisory offer/price finding. Tick the acknowledgemen
+          +t and click                                                   
+      101 +   **Confirm approval**: the campaign becomes *Approved* (vali
+          +d 24 h) and the                                               
+      102 +   read-only summary is shown after a reload too. Nothing is s
+          +ent — there is no                                             
+      103 +   send button in this version.                               
+      104 +8. **Withdraw approval** (pending: one click in the dialog or 
+          +panel; approved:                                              
+      105 +   a second confirmation step) releases the snapshot and retur
+          +ns the campaign to                                            
+      106 +   *Content ready*. To see expiry, start the stack with short 
+          +TTLs, e.g.                                                    
+      107 +   `APPROVAL_PENDING_TTL=30s APPROVAL_APPROVED_TTL=1m docker c
+          +ompose up -d`;                                                
+      108 +   an expired approval cannot be confirmed (`409 approval_expi
+          +red`) and the UI                                              
+     … 4 more lines (ctrl+o to expand)
+
+⏺ Now the architecture doc and ADR.
+
+⏺ Bash(python3 - <<'EOF'
+      p='docs/ARCHITECTURE.md'…)
+  ⎿  280:## ADR-020 — Mock provider as a separate HTTP service with fault i
+     njection, idempotency ledger and arrival recorder
+     294:## ADR-021 — Campaign cancellation is core
+     … +3 lines (ctrl+o to expand)
+  ⎿  Updated DECISIONS.md (+14 -0)
+      314  **Reasoning.** Core contains everything the requirements deman
+           d plus the mechanisms needed to *prove* reliability claims. It
+           ems that improve polish or catch rarer bugs follow only when c
+           ore is complete.
+      315  
+      316  **Trade-offs.** Some valuable test techniques (property-based 
+           testing) are deferred in favour of fixture-based tests with ha
+           nd-computed expectations.
+      317 +                                                              
+      318 +---                                                           
+      319 +                                                              
+      320 +## ADR-023 — Approval decision contract (CP15): version-guarde
+          +d confirm/withdraw, committed lazy expiry, UI-level acknowledg
+          +ement                                                         
+      321 +                                                              
+      322 +**Context.** CP15 makes prepare/confirm/withdraw usable from t
+          +he browser. §11 documented `confirm {segment_version, content_
+          +version, channels}` and `withdraw` without a body and no read 
+          +route; CP14 left open whether confirming advisory offer findin
+          +gs needs an explicit acknowledgement, and whether an approved 
+          +campaign can be re-prepared in one step.                      
+      323 +                                                              
+      324 +**Alternatives.** (a) Confirm bound only to the approval bindi
+          +ng; (b) additionally require `expected_version` (optimistic co
+          +ncurrency like every other mutation). For the findings: (i) a 
+          +new `acknowledge_offer_findings` field enforced server-side; (
+          +ii) an explicit UI acknowledgement with the findings always sh
+          +own. For expiry discovered inside a decision: roll it back wit
+          +h the rejected request, or commit it. For reading: embed the f
+          +ull summary in every campaign response, or a dedicated `GET …/
+          +approvals/{aid}`.                                             
+      325 +                                                              
+      326 +**Decision.** (b): every approval mutation carries `expected_v
+          +ersion`; confirm additionally binds approval id, segment versi
+          +on, content version and channels. (ii): no acknowledgement fie
+          +ld was invented; the dialog lists every finding and requires e
+          +xplicit checkboxes. Expiry found under the decision's lock is 
+          +**committed** and the request ends `409 approval_expired`. A d
+          +edicated `GET …/approvals/{aid}` (lazy expiry, then a REPEATAB
+          +LE READ re-verification of the held rows) and `campaign.active
+          +_approval_id`. Re-preparing an approved campaign stays two exp
+          +licit steps (withdraw, then prepare). Responses are `{campaign
+          +, approval, server_time}`.                                    
+      327 +                                                              
+      328 +**Reasoning.** `expected_version` makes stale tabs determinist
+          +ic (`409 version_conflict`) even when the binding is unchanged
+          +, and matches the rest of the API. The keyword checker is advi
+          +sory and conservative; a server-side flag would only prove tha
+          +t a checkbox was ticked, while the binding already proves the 
+          +marketer confirmed exactly the reviewed approval — and a flag 
+          +would change the documented contract solely for UX. Committing
+          + a due expiry keeps it final (an expired approval can never be
+          + reactivated or confirmed, invariant 8) and avoids clients loo
+          +ping on a state that is never closed. A dedicated read keeps c
+          +ampaign responses cheap and lets reload restore the dialog fro
+          +m server truth, not client state.                             
+      329 +                                                              
+      330 +**Trade-offs.** The acknowledgement is not recorded server-sid
+          +e (no audit of who ticked what beyond `approved_by`). `approva
+          +l_expired` takes precedence over `version_conflict`, so a pre-
+          +expiry client learns why. The read re-scans the held rows (≤ 2
+          + × users); acceptable at this scale. Revoke-on-edit (editing a
+          + pending/approved campaign revokes its approval in the same tr
+          +ansaction) is still deferred: edits are refused with "withdraw
+          + it first".                                                   
+  ⎿  Updated docs/ARCHITECTURE.md (+35 -4)
+      293  | sending | cancel | `cancelled` | pending/retry_scheduled → c
+           ancelled; in_flight rows finish (§10.8) |
+      294  | completed*, cancelled | anything | — | `409 invalid_state` |
+      295  
+      296 -¹ **Deliberate product-safe deviation (CP14, approved in revie
+          -w):** prepare in `approved` is refused (`409 invalid_state`, "
+          -withdraw the approval first"), so a plain prepare can never si
+          -lently invalidate a confirmed approval; an explicit re-prepara
+          -tion contract, if wanted, belongs to CP15 (§9.1). An *expired*
+          - approved approval is closed by lazy expiry (version + 1); aft
+          -er a reload the marketer prepares from `content_ready`.       
+      296 +¹ **Deliberate product-safe deviation (CP14, approved in revie
+          +w):** prepare in `approved` is refused (`409 invalid_state`, "
+          +withdraw the approval first"), so a plain prepare can never si
+          +lently invalidate a confirmed approval. CP15 keeps this: the e
+          +xplicit re-preparation contract **is** withdraw (version-guard
+          +ed, explicit second step in the UI) followed by prepare; no co
+          +mbined "replace" route was added (§9.2). An *expired* approved
+          + approval is closed by lazy expiry (version + 1); after a relo
+          +ad the marketer prepares from `content_ready`.                
+      297  
+      298  "Base status" after an invalidating edit = `content_ready` if 
+           `current_content_id` is set, else `segmented` (or `draft` if n
+           o rule). `active_approval_id` is cleared whenever the approval
+            becomes revoked/expired and set on prepare.
+      299  
+     ...
+      582  
+      583  ### 9.1 Preparation as implemented (CP14)
+      584  
+      585 -CP14 is the backend half of the prepare step: `approval.Servic
+          -e.Prepare` / `ExpireDue`, `approval.Repository`, the campaign-
+          -side transitions (`campaign/approval.go`) and `segment.Compile
+          -Eligible`. Confirm, withdraw, send, the sweeper loop and the H
+          -TTP routes follow in CP15; until `POST /approvals` exists no A
+          -PI path can create an approval, so the "until Slice 3" refusal
+          -s of §7.8/§7.9/§11.1 stay in place.                           
+      585 +CP14 is the backend half of the prepare step: `approval.Servic
+          +e.Prepare` / `ExpireDue`, `approval.Repository`, the campaign-
+          +side transitions (`campaign/approval.go`) and `segment.Compile
+          +Eligible`. CP15 (§9.2) adds confirm, withdraw, the approval re
+          +ad, the HTTP routes and the UI. Send and the worker sweeper lo
+          +op follow in Slice 4. The "until Slice 3" refusals of interpre
+          +t / channels / content edits in `pending_approval`/`approved` 
+          +(§7.8/§7.9/§11.1) stay in place in CP15 with the reason "withd
+          +raw it first", which is now an available action; revoke-on-edi
+          +t (revoking the live approval inside the edit transaction) is 
+          +not implemented yet.                                          
+      586  
+      587  - **Lazy expiry first, in its own transaction.** `Service.Prep
+           are` runs `ExpireDue` (the §5.5 Expire transaction) and commit
+           s it before the preparation transaction. Expiry advances the v
+           ersion, so a request based on the pre-expiry view then fails t
+           he version CAS with `409 version_conflict` — and because the e
+           xpiry is already committed, that rollback cannot undo it; the 
+           client reloads (content_ready, version + 1) and prepares again
+           .
+      588  - **Transaction** (§5.5, READ COMMITTED, `lock_timeout` 5 s, `
+           statement_timeout` 10 s, 30 s context deadline for the whole t
+           ransaction; no I/O but the database): lock campaign → expiry r
+           e-check after the lock (an approval that became due since the 
+           lazy expiry is expired, never superseded; the version advance 
+           makes the CAS fail and the transaction roll back) → version CA
+           S (`expected_version`) + state check → re-read the current con
+           tent version (re-validated, must be the newest) → `Campaign.Re
+           viewForApproval` → revoke a still-live **pending** approval (`
+           superseded`) and delete its held rows (count must equal its `s
+           napshot_count`) → `segment.ComputeSnapshotAudience`: partition
+            **and** expected snapshot (per-channel eligible counts + dige
+           st) in one statement → insert approval → `INSERT … SELECT` hel
+           d rows (same `eligible` definition) → read them back in digest
+            order and compare counts + digest → campaign `pending_approva
+           l`, `active_approval_id`, `version+1`. Any failure rolls back 
+           everything, so a superseded approval stays live when the new p
+           reparation fails, and no approval ever points at an incomplete
+            snapshot.
+     ...
+      598  - **Expiry**: `expires_at = prepared_at + APPROVAL_PENDING_TTL
+           ` from one `clock_timestamp()` value taken after the lock (TTL
+            is a service parameter, 1 s – 24 h, default 15 min; env wirin
+           g with CP15). A due approval is closed as `expired` (never `su
+           perseded`), even when it expired while the expiry transaction 
+           waited for the campaign lock (integration test: the waiting tr
+           ansaction started before expiry, expires it after the lock, an
+           d the stale preparation is `409`). `ExpireDue` performs the §5
+           .5 Expire transaction. Expired and revoked approvals keep thei
+           r row (binding, stats, count, digest); only their held rows ar
+           e deleted.
+      599  - **Summary** (`approval.Summary`): approval id, campaign vers
+           ion, segment version, content id + number, channels, the store
+           d partition, count, digest, prepared/expires times, per-channe
+           l held counts with render issues, the content review, and the 
+           superseded/expired approval ids. It contains no user ids, name
+           s, cities or contacts. Logs carry ids and counts only.
+      600  
+      601 +### 9.2 Confirmation, withdrawal and review as implemented (CP
+          +15)                                                           
+      602 +                                                              
+      603 +`approval.Service.Get` / `Confirm` / `Withdraw`, `approval.Rep
+          +ository` (`decision.go`), the campaign transitions `CheckConfi
+          +rmAt` / `WithConfirmedApproval` / `CheckWithdrawAt` (`campaign
+          +/approval.go`), the HTTP routes (§11.3) and the Vue approval s
+          +tep. Nothing here calls the LLM or a provider; no transaction 
+          +is open across any I/O but the database.                      
+      604 +                                                              
+      605 +- **Lazy expiry everywhere.** Every approval operation first r
+          +uns `ExpireDue` in its own committed transaction (as Prepare d
+          +oes, §9.1). The campaign service has an optional `ApprovalExpi
+          +rer` (wired in `cmd/api`): `Get`, `Audience`, `Content`, `Vali
+          +dateContent`, `Interpret`, `GenerateContentStream`, `SetChanne
+          +ls` and `EditContent` load the campaign and, **only** when it 
+          +is `pending_approval`/`approved`, run `ExpireDue` first and re
+          +-read. A request based on the pre-expiry view is therefore a `
+          +409 version_conflict` for every version-guarded mutation, and 
+          +reads never present a due approval as live. Sending/finished c
+          +ampaigns are never touched (their consumed approval never expi
+          +res).                                                         
+      606 +- **Decision transactions** (READ COMMITTED, `lock_timeout` 5 
+          +s, `statement_timeout` 10 s, 30 s deadline): lock campaign → l
+          +ock the **target** approval row (`id` + `campaign_id`; else `4
+          +04`) → `expireIfDue` under the lock with `clock_timestamp()`. 
+          +If the campaign's live approval is due *now* (it became due af
+          +ter the service's lazy expiry, e.g. while this request waited 
+          +for the lock), the expiry is written and the transaction **com
+          +mits** with the request ending as `409 approval_expired` (targ
+          +et) or `409 version_conflict` (another approval expired under 
+          +the client) — a final transition is never rolled back with the
+          + rejected request. A target that is already `expired` → `409 a
+          +pproval_expired` (before the version check, so a pre-expiry cl
+          +ient learns why).                                             
+      607 +- **Confirm** (after the prelude): target `approved` → `409 in
+          +valid_state` ("already confirmed"), `consumed`/`revoked` → `40
+          +9 invalid_state`; version CAS (`expected_version`) and campaig
+          +n state (`pending_approval` with this approval active) → `409 
+          +version_conflict` / `invalid_state`; binding: the request's `s
+          +egment_version`, `content_version`, `channels` must equal the 
+          +approval's, and the approval's must equal the campaign's curre
+          +nt ones → `409 approval_mismatch` with the differing fields as
+          + `details` (`campaign.*` paths for drift between approval and 
+          +campaign); the bound content version is re-read and re-reviewe
+          +d for the bound channels against the **current** content brief
+          + (`ReviewForApproval`; offer findings recomputed, never taken 
+          +from client state or a cached preparation); the held rows are 
+          +re-read and their per-channel counts and digest must equal the
+          + stored partition, `snapshot_count` and digest (else `ErrIncon
+          +sistent` → 500, rollback); then the §5.5 CAS `UPDATE … SET sta
+          +tus='approved', approved_at=t, approved_by=$APPROVER_NAME, exp
+          +ires_at=t + APPROVAL_APPROVED_TTL FROM (SELECT clock_timestamp
+          +() t) WHERE status='pending' AND expires_at > t AND segment_ve
+          +rsion/content_id/channels = binding` — `t` is one value, so `e
+          +xpires_at − approved_at` is exactly the approved TTL. If the C
+          +AS matches no row the only remaining cause is expiry between t
+          +he prelude and the CAS: the approval is expired (committed) → 
+          +`409 approval_expired`. Finally campaign → `approved`, version
+          + + 1. Held rows, `vars`, content and the audience are untouche
+          +d; nothing is re-evaluated.                                   
+      608 +- **Withdraw** (after the prelude): target `revoked` → `409 in
+          +valid_state` ("already withdrawn or replaced"), `consumed` → `
+          +409 invalid_state`; version CAS and campaign state (`pending_a
+          +pproval`/`approved` with this approval active; `sending`/finis
+          +hed → `409 invalid_state`); approval → `revoked(withdrawn)`, `
+          +closed_at = clock_timestamp()`; its held rows deleted (count m
+          +ust equal `snapshot_count`, no non-held row may exist); campai
+          +gn → `content_ready`, `active_approval_id = NULL`, version + 1
+          +. The approval row keeps its binding, partition, count, digest
+          + and `approved_at`.                                           
+      609 +- **Concurrency.** All decisions of one campaign serialize on 
+          +the campaign row lock; every mutation CASes the version. Two s
+          +imultaneous confirms: one commits, the other sees `approved` →
+          + `409 invalid_state`. Confirm vs. withdraw: exactly one applie
+          +s. Repeated withdraw: `409 invalid_state`. A failure at any st
+          +ep (including the final campaign update) rolls everything back
+          +; integration tests inject one with a trigger.                
+      610 +- **Read** (`GET …/approvals/{aid}`): lazy expiry, then one re
+          +ad-only REPEATABLE READ transaction: campaign, approval, bound
+          + content version and — for a live approval — the review and th
+          +e held-row verification above (so the dialog shows what is act
+          +ually frozen, with render issues). A closed approval (expired/
+          +revoked/consumed) returns its stored binding and partition, `r
+          +eview: null`, `render_issues: null`.                          
+      611 +- **TTLs.** Pending: `prepared_at + APPROVAL_PENDING_TTL` (def
+          +ault 15 min, 1 s – 24 h). Approved: `approved_at + APPROVAL_AP
+          +PROVED_TTL` (default 24 h, 1 s – 7 d), i.e. 24 h from confirma
+          +tion, not from preparation; the pending TTL never applies to a
+          +n approved approval. Both are configured once at startup (`pla
+          +tform/config`, bounds identical to `approval`'s, asserted by a
+          + test). `APPROVER_NAME` (default `marketer@demo`, ≤ 100 printa
+          +ble characters) is stored as `approved_by`.                   
+      612 +- **Offer findings and acknowledgement (CP15 decision).** The 
+          +documented confirm contract (§11) has no acknowledgement field
+          +, so none was invented. The findings are returned by prepare, 
+          +read and confirm (`review.offer_findings`, recomputed each tim
+          +e), listed individually in the dialog (never as a bare count) 
+          +with the authorized offer and an explicit statement that the c
+          +heck is keyword-based and advisory; Confirm requires ticking "
+          +I reviewed the frozen content and recipient counts" and, when 
+          +there are findings, "I reviewed all N offer/price findings". T
+          +his is a UI control, not a server-side guarantee; the server-s
+          +ide guarantee is the binding (approval id + version + segment/
+          +content version + channels) to exactly the reviewed state. See
+          + ADR-023.                                                     
+      613 +- **Privacy.** Responses contain counts, binding metadata, the
+          + review (rendered with the fictional `content.ExampleValues`) 
+          +and the digest — never user ids, names, cities, contacts, `var
+          +s`, destinations or idempotency keys. The frontend decoder rej
+          +ects unknown properties in approval responses. Logs carry ids,
+          + versions and counts.                                         
+      614 +                                                              
+      615  ---
+      616  
+      617  ## 10. Delivery engine
+     ...
+      764  | `POST /campaigns/{id}/content/validate` | segmented … approv
+           ed | validate without saving (debounced editor) |
+      765  | `PUT /campaigns/{id}/content` | segmented … approved | save 
+           edited version `{sms_body, email_subject, email_body, expected
+           _version}` |
+      766  | `POST /campaigns/{id}/approvals` | content_ready, pending_ap
+           proval (approved: see §5.2 note ¹) | **prepare**: returns `{ap
+           proval_id, expires_at, segment_version, content_version, chann
+           els, audience_stats, rendered_content}` |
+      753 -| `POST /campaigns/{id}/approvals/{aid}/confirm` | pending_app
+          -roval | `{segment_version, content_version, channels}` |      
+     … 35 more lines (ctrl+o to expand)
+
+⏺ Docs updated. Now lint and the full test runs.
+
+  Listed 1 directory, ran 1 shell command (ctrl+o to expand)
+
+⏺ make lint fails only at the known TLS download step; the pinned staticcheck
+  v0.8.2 built offline is clean on all tags. Now the full race suites in the
+  background while Docker builds.
+
+  Ran 2 shell commands (ctrl+o to expand)
+
+⏺ Images built. Bringing the stack up in explicit demo mode (detached, same
+  flags).
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ Stack is healthy in demo mode. Now the real browser workflow through nginx.
+
+⏺ Skill(anthropic-skills:built-in-browser)  ⎿  Successfully loaded skill
+
+⏺ Background command "Full unit and integration race runs" completed (exit code
+0)
+
+  Ran 2 shell commands (ctrl+o to expand)
+
+⏺ A test that forced pending_approval with raw SQL is now flagged by the
+  expirer, since that state is impossible without an approval; I'm changing it
+  to create a real approval.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ Bash(python3 - <<'EOF'
+      p='test/integration/content_test.go'…)
+  ⎿  ok
+     github.com/fyusufayan/insider-campaign-composer-case/backend/cmd/m
+     igrate  1.303s
+     ok
+     github.com/fyusufayan/insider-campaign-composer-case/backend/cmd/s
+     … +18 lines (ctrl+o to expand)
+  ⎿  Updated backend/test/integration/content_test.go (+22 -2)
+      563          if _, err := e.svc.GenerateContent(context.Background(
+           ), mustID(t, draft.ID)); !errors.Is(err, campaign.ErrInvalidSt
+           ate) {
+      564                  t.Errorf("draft: err = %v", err)
+      565          }
+      566 +        // pending_approval / approved through real approvals 
+          +(a raw status                                                 
+      567 +        // update would fabricate a live status without an app
+          +roval, which lazy                                             
+      568 +        // expiry rightly reports as inconsistent).           
+      569 +        r := e.readyViaAPI(prepSMS, prepSubject, prepBody)    
+      570 +        prep := e.prepareViaAPI(r.ID, r.Version)              
+      571 +        check := func(name, id string) {                      
+      572 +                t.Helper()                                    
+      573 +                calls := e.llm.Calls()                        
+      574 +                _, err := e.svc.GenerateContent(context.Backgr
+          +ound(), mustID(t, id))                                        
+      575 +                if !errors.Is(err, campaign.ErrInvalidState) |
+          +| e.llm.Calls() != calls {                                    
+      576 +                        t.Errorf("%s: err = %v, model calls %d
+          + → %d", name, err, calls, e.llm.Calls())                      
+      577 +                }                                             
+      578 +        }                                                     
+      579 +        check("pending_approval", r.ID)                       
+      580 +        must[apiApprovalResp](t, e.call("POST", approvalPath(r
+          +.ID, prep.Approval.ApprovalID, "confirm"), confirmBody(prep.Ca
+          +mpaign.Version, prep.Approval)), 200)                         
+      581 +        check("approved", r.ID)                               
+      582 +        if n := len(e.contentRows(r.ID)); n != 1 {            
+      583 +                t.Errorf("approval campaign content rows = %d"
+          +, n)                                                          
+      584 +        }                                                     
+      585 +                                                              
+      586          c := e.create("States")
+      587          e.interpret(c.ID, replyIstanbul)
+      568 -        for _, st := range []string{"pending_approval", "appro
+          -ved", "sending", "completed", "cancelled"} {                  
+      588 +        for _, st := range []string{"sending", "completed", "c
+          +ancelled"} {                                                  
+      589                  if _, err := e.pool.Exec(context.Background(),
+            `UPDATE campaigns SET status = $2 WHERE id = $1::uuid`, c.ID,
+            st); err != nil {
+      590                          t.Fatal(err)
+      591                  }
+     ...
+      595                          t.Errorf("%s: err = %v, model calls %d
+            → %d", st, err, calls, e.llm.Calls())
+      596                  }
+      597          }
+      578 -        if n := e.totalContentRows(); n != 0 {                
+      598 +        if n := len(e.contentRows(c.ID)); n != 0 {            
+      599                  t.Errorf("%d content rows", n)
+      600          }
+      601          if _, cv, err := e.svc.CurrentContent(context.Backgrou
+           nd(), mustID(t, c.ID)); err != nil || cv != nil {
+
+⏺ Full integration suite with -race is green. Now the browser smoke.
+
+⏺ Dialog renders the frozen snapshot (209 deliveries: SMS 101, Email 108). Now
+  acknowledging and confirming.
+
+⏺ Approved state persists after refresh. Verifying in the database that nothing
+  was sent and counts match:
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ DB confirms: approved, 209 held rows, 24 h TTL from approved_at, zero non-held
+  rows, zero attempts, no worker running. Now withdrawing the approved approval
+  (two-step).
+
+⏺ Approved withdrawal works. Now pending withdrawal (prepare again, withdraw
+  from the dialog) and a mobile-size check of the dialog.
+⏺ Mobile layout is full-screen and readable. Checking for horizontal overflow,
+  then withdrawing the pending approval.
+
+⏺ Browser flow verified with no console errors. Last: a curl smoke through nginx
+  for error codes and expiry (expiry forced by moving expires_at in the dev
+  DB).
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ Script bug (zsh echo expands \n inside the JSON); the prepare itself
+  succeeded. Redoing with files instead of echo.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ The smoke run passed on every check, including expiry and PII. One small thing
+  I noticed: numeric column headers in the approval table are left-aligned over
+  right-aligned numbers.
+
+⏺ Bash(python3 - <<'EOF'
+      p='frontend/src/components/composer/ApprovalSummary.vue'…)
+  ⎿        Tests  202 passed (202)
+     typecheck-ok
+     ✓ built in 192ms
+     … +3 lines (ctrl+o to expand)
+  ⎿  Updated frontend/src/components/composer/ApprovalSummary.vue (+4 -3)
+      105          <thead>
+      106            <tr>
+      107              <th scope="col">Channel</th>
+      108 -            <th scope="col">Frozen recipients</th>            
+      109 -            <th scope="col">No consent</th>                   
+      110 -            <th scope="col">No contact</th>                   
+      108 +            <th scope="col" class="num">Frozen recipients</th>
+      109 +            <th scope="col" class="num">No consent</th>       
+      110 +            <th scope="col" class="num">No contact</th>       
+      111            </tr>
+      112          </thead>
+      113          <tbody>
+     ...
+      202    border-bottom: 1px solid var(--c-border, #e2e8f0);
+      203    text-align: left;
+      204  }
+      205 +.audience th.num,                                             
+      206  .audience .num {
+      207    text-align: right;
+      208    font-variant-numeric: tabular-nums;
+
+  Ran 1 shell command (ctrl+o to expand)
+  ⎿  Error: MCP error -32602: Input validation error: Invalid arguments for tool
+     wrap_up: Invalid option: expected one of 
+     "commit"|"create_pr"|"merge"|"fix_ci"|"address_comments"|"resolve_conflicts
+     "|"verify"|"archive"|"new_session" at actions[0].action
+
+⏺ CP15 is done: you can now prepare, review, confirm and withdraw approvals from
+  the browser, and expiry behaves the same everywhere. Every requested check
+  passed except make lint, which still fails only at the known TLS download.
+  Nothing is committed, no worker or provider exists, and no paid Anthropic
+  calls were made.
+
+  1. Routes and contracts. These follow the documented /approvals/{aid}/… paths.
+  Every response is {campaign, approval, server_time}.
+
+  ┌─────────────────────────────────┬───────────────────────────┬───────────┐
+  │              Route              │           Body            │  Success  │
+  ├─────────────────────────────────┼───────────────────────────┼───────────┤
+  │ POST /campaigns/{id}/approvals  │ {expected_version}        │ 201 +     │
+  │                                 │                           │ Location  │
+  ├─────────────────────────────────┼───────────────────────────┼───────────┤
+  │ GET                             │ –                         │ 200       │
+  │ /campaigns/{id}/approvals/{aid} │                           │           │
+  ├─────────────────────────────────┼───────────────────────────┼───────────┤
+  │                                 │ {expected_version,        │           │
+  │ POST …/{aid}/confirm            │ segment_version,          │ 200       │
+  │                                 │ content_version,          │           │
+  │                                 │ channels}                 │           │
+  ├─────────────────────────────────┼───────────────────────────┼───────────┤
+  │ POST …/{aid}/withdraw           │ {expected_version}        │ 200       │
+  └─────────────────────────────────┴───────────────────────────┴───────────┘
+
+  - What I added to the documented contract:
+    - expected_version on confirm and withdraw.
+    - The GET route, which reloads use to restore the dialog.
+    - active_approval_id on the campaign response.
+  - Strict JSON: request bodies are capped at 64 KiB; unknown or duplicate
+    properties and non-integer numbers get 422; the wrong media type gets 415.
+  - Errors:
+    - 404 for an unknown approval, or one belonging to another campaign.
+    - 409 version_conflict, invalid_state, approval_expired or
+      approval_mismatch; a mismatch lists the differing fields.
+    - 422 validation_failed or empty_audience.
+    - 409 audience_changed and 503 campaign_busy, both marked retryable.
+    - A plain 500 for anything unexpected, with no SQL or customer data in the
+      message.
+  - Privacy: responses never contain user ids, names, cities, contacts, frozen
+    personalization values, destinations or idempotency keys.
+
+  2. Confirm and withdraw transactions (approval/decision.go). Each one locks
+  the campaign row, then the target approval, then applies expiry under that
+  lock using the database clock. If the approval turns out to be due, the expiry
+  is committed and the request returns approval_expired; it is never rolled
+  back with the rejected request.
+  - Confirm checks, in order:
+    - the approval's own status;
+    - the expected version and campaign state;
+    - the binding (segment version, content version, channels), against both the
+      request and the campaign;
+    - a fresh content review against the current brief;
+    - the held rows: per-channel counts and digest must match what was stored.
+
+    It then promotes the approval to approved and moves the campaign to
+    approved. Held rows and content are untouched.
+  - Withdraw marks the approval revoked (withdrawn), deletes its held rows
+    (their count must equal the stored snapshot count) and returns the campaign
+    to content_ready.
+
+  3. States and versions. Every real transition raises the campaign version by
+  exactly one: prepare, confirm, withdraw and expiry. Of two simultaneous
+  confirms, one wins and the other gets invalid_state; of confirm racing
+  withdraw, exactly one applies. Sending and finished campaigns are never
+  changed, even when their used approval's old expiry time has passed. Lazy
+  expiry now also runs, committed, before campaign reads and edits, so an edit
+  based on the pre-expiry view gets a 409.
+
+  4. TTLs. A pending approval expires 15 minutes after preparation. An approved
+  one expires 24 hours after confirmation (approved_at); the 15-minute limit
+  never applies to it. Both are configurable (APPROVAL_PENDING_TTL, 1s–24h;
+  APPROVAL_APPROVED_TTL, 1s–7 days), along with APPROVER_NAME, in .env.example
+  and Compose.
+
+  5. Offer findings. The documented contract has no acknowledgement field, so I
+  did not invent one (ADR-023). Prepare, read and confirm each recompute the
+  findings from the stored content and the current brief. The dialog lists each
+  finding individually, says the check is keyword-based and advisory, and
+  requires ticking an acknowledgement, plus a second one when there are
+  findings. That checkbox is a UI control only; the server-side guarantee is the
+  version-and-binding check.
+
+  6. Approval UI. A new step 5 offers Prepare approval, and says why it is
+  unavailable (unsaved or invalid draft, no channel). The review dialog shows:
+  - per-channel frozen recipients with no-consent/no-contact counts and reach;
+  - content version and origin, segment version and snapshot digest;
+  - a countdown and render issues;
+  - the rendered previews and the offer findings;
+  - an explanation that consent and contact are re-checked at delivery.
+
+  From there you can Confirm approval, Withdraw approval, or Close without 
+  confirming. An approved campaign shows a read-only summary, and withdrawing it
+  takes a second click. There is no send button. No v-html is used, and
+  approval responses are decoded strictly: unknown properties are rejected, with
+  cross-field consistency checks.
+
+  7. Frontend concurrency. Late responses after switching campaigns are dropped,
+  repeated clicks send one request, and a 409 is shown with a reload path and
+  never retried. When the countdown reaches zero, Confirm is disabled and the
+  server is asked to re-check. A refresh while pending reopens the dialog; a
+  refresh while approved shows the summary.
+
+  8. Tests.
+  - Backend: unit tests and go test -race ./... pass without an API key. The
+    full PostgreSQL integration suite passes with -race. It adds 19 tests
+    covering all 14 requested categories, including the lock-wait expiry case
+    for confirm and withdraw, trigger-injected rollback, and privacy checks on
+    responses and logs.
+  - Frontend: 202 tests pass (40 new); typecheck and production build pass.
+  - Lint: make lint passes gofmt and vet, then fails at the same TLS certificate
+    error when downloading staticcheck. The pinned staticcheck v0.8.2, built
+    offline from the local module cache, is clean on the default, integration
+    and live build tags.
+  - One existing test changed: TestContentGenerationRefusedStatuses set
+    pending_approval with raw SQL and no approval, which lazy expiry now
+    correctly reports as inconsistent. It now uses a real prepared, then
+    confirmed, approval.
+
+  9. Docker and browser smoke. I ran docker compose up --build detached, in demo
+  mode (LLM_PROVIDER=demo, empty key). In the browser through nginx: create →
+  interpret → generate → prepare (209 deliveries: SMS 101, email 108) → confirm
+  → refresh still shows approved. The database shows 209 held rows with no
+  destinations and zero delivery attempts. I also withdrew the confirmed
+  approval and a fresh pending one, and checked the dialog at mobile width (no
+  horizontal overflow). There were no console errors. A curl pass through nginx
+  confirmed 422, version_conflict and approval_expired with the expiry
+  committed, and no emails or phone numbers in the API logs.
+
+  10. Limitations and decisions.
+  - Editing content, channels or the brief while an approval is live is still
+    refused with "withdraw it first"; revoking the approval automatically on
+    edit is not built yet.
+  - The background expiry sweeper waits for the Slice 4 worker; until then
+    expiry is lazy, applied on API requests.
+  - Re-preparing an approved campaign stays two explicit steps: withdraw, then
+    prepare.
+  - approval_expired is reported before version_conflict, so a client still
+    holding the pre-expiry state learns why.
+  - Every approval read re-scans the held rows, which is fine at this data size.
+
+  The design is recorded in docs/ARCHITECTURE.md (§9.2, §11.3, §14) and ADR-023.
+  Untracked ai-sessions/case-session-14.txt is left as it was.
+
+❯ CP15 implementation and completion report have been reviewed. CP15 is         
+  approved for commit, subject to a final focused Git and invariant check.      
+  Do not expand scope or add new features.                                      
+  Final verification                                                            
+                                                                                
+  1. Confirm that expiry detected during a failed Confirm or Withdraw request   
+  is independently committed, including the campaign version increment, even    
+  though the request returns approval_expired. Verify the existing PostgreSQL   
+  integration test covers this behavior.                                        
+  2. Confirm that a successful Confirm changes only the approval/campaign       
+  lifecycle and TTL, not the frozen recipient set, content version, segment     
+  version or snapshot digest.                                                   
+  3. Confirm that a successful Withdraw atomically revokes the approval and     
+  releases held deliveries, and that a rollback leaves both unchanged.          
+  4. Confirm no delivery attempt, mock-provider request or worker is triggered  
+  by Confirm.                                                                   
+  5. Confirm all approval HTTP responses and logs exclude recipient PII and     
+  frozen personalization values.                                                
+  6. Verify that the offer-acknowledgment checkbox is accurately documented as  
+  a frontend interaction, not a server-enforced security guarantee.             
+                                                                                
+  Git safety                                                                    
+  Inspect git status --short carefully.                                         
+  There is an untracked ai-sessions/case-session-14.txt file. Do not            
+  accidentally include it or delete it. Preserve it unless the repository's     
+  documented session-log policy clearly requires including that specific file.  
+  Stage only the intended CP15 source, tests, configuration and documentation   
+  files.                                                                        
+  Run:                                                                          
+                                                                                
+  - git diff --check                                                            
+  - git diff --cached --check                                                   
+  - A staged-diff secrets and sensitive-data review                             
+                                                                                
+  Do not include .env, API credentials, recipient data, database dumps or       
+  runtime logs.                                                                 
+                                                                                
+  Do not run live Anthropic API requests.                                       
+  Do not begin CP16 or implement any worker functionality. Stop here for now    
+
+⏺ I'll check each invariant against the code and tests first, then stage.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ No session-log policy exists, so case-session-14.txt stays untracked, and no
+  worker, mock-provider binary or Compose service exists. I'm now tightening the
+  invariant tests for confirm and withdraw, assertions only.
+
+⏺ Bash(cd /Users/bilgem/Desktop/devel/leet/insider-case/insider-campaign-compose
+      r-case/backend && python3 - <<'EOF'
+      p='test/integration/approval_decision_test.go'…)
+  ⎿  --- PASS: TestApprovalAPIFlow (0.20s)
+     --- PASS: TestApprovalAPIExpiry (0.14s)
+     --- PASS: TestApprovalAPIOfferFindings (0.13s)
+     … +30 lines (ctrl+o to expand)
+  ⎿  Updated backend/test/integration/approval_decision_test.go (+67 -27)
+      120          e := newDecisionEnv(t)
+      121          c, s := e.prepared()
+      122          heldBefore := e.deliveries(s.ApprovalID)
+      123 +        rowBefore := e.approvalRow(s.ApprovalID)              
+      124          contentBefore := e.count(`SELECT count(*) FROM campaig
+           n_contents`)
+      125  
+      126          out, err := e.approvals.Confirm(ctxBG, c.ID, s.Approva
+           lID, confirmReq(c, s))
+     ...
+      148          if n := e.count(`SELECT count(*) FROM campaign_approva
+           ls WHERE id = $1::uuid AND approved_by = 'reviewer@test'`, s.A
+           pprovalID.String()); n != 1 {
+      149                  t.Errorf("approved_by not recorded")
+      150          }
+      151 +        // Only lifecycle and TTL changed: the frozen binding 
+          +is byte-identical.                                            
+      152 +        if row.SegmentVersion != rowBefore.SegmentVersion || r
+          +ow.ContentID != rowBefore.ContentID ||                        
+      153 +                !slices.Equal(row.Channels, rowBefore.Channels
+          +) || row.SnapshotCount != rowBefore.SnapshotCount ||          
+      154 +                row.Digest != rowBefore.Digest || string(row.R
+          +ule) != string(rowBefore.Rule) || string(row.Stats) != string(
+          +rowBefore.Stats) {                                            
+      155 +                t.Errorf("binding changed: %+v → %+v", rowBefo
+          +re, row)                                                      
+      156 +        }                                                     
+      157 +        if got.SegmentVersion != c.SegmentVersion || *got.Curr
+          +entContentID != *c.CurrentContentID ||                        
+      158 +                !slices.Equal(got.Channels, c.Channels) {     
+      159 +                t.Errorf("campaign binding changed: %+v", got)
+      160 +        }                                                     
+      161 +        if d := mustDigest(t, recipientsOf(e.deliveries(s.Appr
+          +ovalID))); d != s.SnapshotDigest {                            
+      162 +                t.Errorf("recomputed digest %s differs", d)   
+      163 +        }                                                     
+      164          // The frozen snapshot and the content are untouched; 
+           nothing is sent.
+      165          if got := e.deliveries(s.ApprovalID); !slices.Equal(go
+           t, heldBefore) {
+      166                  t.Errorf("held rows changed: %v", got)
+     ...
+      575  }
+      576  
+      577  // §5.3 for withdraw: an approval that expires while the withd
+           rawal waits
+      564 -// for the campaign lock is expired, never withdrawn.         
+      578 +// for the campaign lock is expired, never withdrawn. In the r
+          +epository                                                     
+      579 +// variant the expiry is found inside the withdrawal transacti
+          +on itself and                                                 
+      580 +// must be committed (approval expired, held rows released, ve
+          +rsion + 1)                                                    
+      581 +// although the request returns ErrExpired.                   
+      582  func TestWithdrawLockWaitExpiry(t *testing.T) {
+      566 -        e := newDecisionEnv(t)                                
+      567 -        c, s := e.prepared()                                  
+      568 -        var expiresAt time.Time                               
+      569 -        if err := e.pool.QueryRow(ctxBG, `UPDATE campaign_appr
+          -ovals SET expires_at = clock_timestamp() + interval '300 milli
+          -seconds'                                                      
+      570 -            WHERE id = $1::uuid RETURNING expires_at`, s.Appro
+          -valID.String()).Scan(&expiresAt); err != nil {                
+     … 73 more lines (ctrl+o to expand)
+
+⏺ All pass. Now items 4–6: provider/worker reachability, PII coverage, and the
+  acknowledgement wording in the docs.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ Docs are accurate in ARCHITECTURE and ADR-023; the README step just says "Tick
+  the acknowledgement", so I'll make it explicit there too.
+
+⏺ Bash(python3 - <<'EOF'
+      p='README.md'…)
+  ⎿  ok
+     github.com/fyusufayan/insider-campaign-composer-case/backend/test/
+     integration     24.405s
+     ?
+     github.com/fyusufayan/insider-campaign-composer-case/backend/test/
+     … +2 lines (ctrl+o to expand)
+  ⎿  Updated README.md (+3 -1)
+       97     shows the frozen per-channel counts, the excluded `no_conse
+           nt / no_contact`
+       98     counts, reach, the content version and origin, the snapshot
+            digest, a
+       99     countdown to the 15-minute confirmation deadline, the rende
+           red content and
+      100 -   every advisory offer/price finding. Tick the acknowledgemen
+          -t and click                                                   
+      100 +   every advisory offer/price finding. Tick the acknowledgemen
+          +t (a browser-side                                             
+      101 +   confirmation step; the server does not record or enforce it
+          + — it enforces                                                
+      102 +   the version and the reviewed binding) and click            
+      103     **Confirm approval**: the campaign becomes *Approved* (vali
+           d 24 h) and the
+      104     read-only summary is shown after a reload too. Nothing is s
+           ent — there is no
+      105     send button in this version.
+
+⏺ Everything green. Now staging only the CP15 files.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ 43 files staged; .env is gitignored and unstaged, the session log stays
+  untracked, and both --checks pass. Now the staged-diff secrets and
+  sensitive-data scan:
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ The only match is a fake test value, +905551234567, in approvals_test.go, not
+  real customer data. No secrets are staged, so I'm committing now.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ CP15 is committed as 8e6499a and all six checks hold. Two of them needed
+  slightly stronger tests first, and I made the README clearer on point 6.
+
+  1. Expiry is committed even when the request fails. Confirm was already
+     covered at both levels: through the service, and through the bare confirm
+     transaction, which hits expiry itself and must commit it before returning
+     approval_expired. Withdraw was only covered through the service. I made
+     TestWithdrawLockWaitExpiry run both ways like the confirm test. Both pass
+     and assert that the approval is expired, the campaign is back to
+     content_ready with its version up by exactly one, and the held rows are
+     gone.
+  2. Confirm changes only state and TTL. TestConfirmBeforeExpiry now also checks
+     that the stored segment version, content id, channels, snapshot count,
+     digest, frozen rule and stats are unchanged, and that the campaign's
+     segment version, content and channels are unchanged. It recomputes the
+     digest from the actual rows and compares it too. The held rows themselves
+     were already compared in full.
+  3. Withdraw is atomic. TestWithdrawPendingAndApproved checks that the approval
+     is revoked as withdrawn, all held rows are deleted and the campaign
+     version goes up by one. TestConfirmAndWithdrawRollBack forces a failure on
+     the final campaign update and checks that the approval, the rows and the
+     campaign are all unchanged.
+  4. Confirm triggers no sending.
+     - The approval package makes no HTTP calls, and an existing test blocks it
+       from importing the AI, model client, delivery or provider packages.
+     - The repo has no worker or mock provider at all: cmd/ has only api,
+       migrate and seed.
+     - The tests check that confirm leaves zero delivery attempts and no
+       non-held or addressed rows. The database check after the browser run
+       showed the same.
+  5. No recipient data or frozen values in responses or logs.
+     TestApprovalAPIPrivacy plants unique test names and a city in the data. It
+     then checks that they, contacts, user ids, frozen values, destinations and
+     idempotency keys appear in none of the prepare, read, confirm or withdraw
+     responses, or in the logs. A shape test locks the response fields, and the
+     frontend rejects any field it doesn't expect. The running stack's API logs
+     had no emails or phone numbers.
+  6. The acknowledgement is described as frontend-only. ARCHITECTURE §9.2 calls
+     it "a UI control, not a server-side guarantee", and ADR-023 says it isn't
+     recorded server-side. The README step only said "Tick the acknowledgement",
+     so I added that the browser asks for it and the server neither records nor
+     enforces it; what the server enforces is the version and the reviewed
+     approval.
+
+  Checks after these edits: unit tests with -race (no API key) and the full
+  PostgreSQL integration suite with -race pass. gofmt and the pinned staticcheck
+  v0.8.2 (built offline) are clean. git diff --check and git diff --cached 
+  --check pass.
+
+  What went into the commit: 43 files — the CP15 source, tests, Compose and
+  .env.example changes, and the docs.
+  - .env exists locally but is gitignored and was not staged.
+  - The secrets scan of the staged changes found no keys, connection strings,
+    dumps or logs.
+  - Its one hit is the fake test phone number +905551234567, which an
+    error-handling test checks never appears in responses.
+
+  ai-sessions/case-session-14.txt is still untracked and untouched. Earlier
+  checkpoints happened to commit their session logs, but nothing in the repo
+  requires it, so I left it out. Nothing is pushed, no Anthropic calls were
+  made, and CP16 has not been started.
