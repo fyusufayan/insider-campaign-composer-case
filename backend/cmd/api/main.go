@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/fyusufayan/insider-campaign-composer-case/backend/internal/ai"
+	"github.com/fyusufayan/insider-campaign-composer-case/backend/internal/approval"
 	"github.com/fyusufayan/insider-campaign-composer-case/backend/internal/campaign"
 	"github.com/fyusufayan/insider-campaign-composer-case/backend/internal/httpapi"
 	"github.com/fyusufayan/insider-campaign-composer-case/backend/internal/llm"
@@ -75,7 +76,8 @@ func run(log *slog.Logger) error {
 		"segment_timeout", cfg.Segment.Timeout.String(), "segment_max_tokens", cfg.Segment.MaxTokens,
 		"segment_prompt_version", ai.SegmentPromptVersion, "content_model", cfg.Content.Model,
 		"content_effort", cfg.Content.Effort, "content_timeout", cfg.Content.Timeout.String(),
-		"content_max_tokens", cfg.Content.MaxTokens, "content_prompt_version", ai.ContentPromptVersion)
+		"content_max_tokens", cfg.Content.MaxTokens, "content_prompt_version", ai.ContentPromptVersion,
+		"approval_pending_ttl", cfg.Approval.PendingTTL.String(), "approval_approved_ttl", cfg.Approval.ApprovedTTL.String())
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
@@ -86,7 +88,16 @@ func run(log *slog.Logger) error {
 	}
 	defer pool.Close()
 
-	campaigns, err := campaign.NewService(campaign.NewRepository(pool), segment.NewAudienceRepository(pool), interpreter, generator, log)
+	approvals, err := approval.NewService(approval.NewRepository(pool), approval.Config{
+		PendingTTL: cfg.Approval.PendingTTL, ApprovedTTL: cfg.Approval.ApprovedTTL, ApprovedBy: cfg.Approval.ApproverName,
+	}, log)
+	if err != nil {
+		return err
+	}
+	// Lazy approval expiry (§5.3) on every campaign read/mutation of a
+	// campaign with a live approval.
+	campaigns, err := campaign.NewService(campaign.NewRepository(pool), segment.NewAudienceRepository(pool), interpreter, generator, log,
+		campaign.WithApprovalExpirer(approvals))
 	if err != nil {
 		return err
 	}
@@ -103,7 +114,7 @@ func run(log *slog.Logger) error {
 
 	srv := &http.Server{
 		Addr:              cfg.HTTPAddr,
-		Handler:           httpapi.NewRouter(log, httpapi.Deps{Campaigns: campaigns, Readiness: readiness}),
+		Handler:           httpapi.NewRouter(log, httpapi.Deps{Campaigns: campaigns, Approvals: approvals, Readiness: readiness}),
 		ReadHeaderTimeout: readHeaderTimeout,
 		IdleTimeout:       idleTimeout,
 		// No WriteTimeout: SSE responses are long-lived.

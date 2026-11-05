@@ -96,7 +96,7 @@ func (s *Service) GenerateContentStream(ctx context.Context, id ID, observe Gene
 	if observe == nil {
 		observe = func(GenerationEvent) error { return nil }
 	}
-	observed, err := s.store.Get(ctx, id)
+	observed, err := s.load(ctx, id)
 	if err != nil {
 		return ContentResult{}, err
 	}
@@ -188,7 +188,7 @@ type DraftValidation struct {
 // without saving anything (debounced editor validation). Content problems
 // are part of the result, not an error.
 func (s *Service) ValidateContent(ctx context.Context, id ID, d content.Draft) (DraftValidation, error) {
-	c, err := s.store.Get(ctx, id)
+	c, err := s.load(ctx, id)
 	if err != nil {
 		return DraftValidation{}, err
 	}
@@ -209,6 +209,9 @@ func (s *Service) ValidateContent(ctx context.Context, id ID, d content.Draft) (
 // content a *ValidationError. No approval is touched (pending_approval and
 // approved are refused until Slice 3).
 func (s *Service) EditContent(ctx context.Context, id ID, d content.Draft, expectedVersion int) (ContentResult, error) {
+	if _, err := s.load(ctx, id); err != nil { // lazy expiry first (committed)
+		return ContentResult{}, err
+	}
 	created := false
 	saved, v, err := s.store.SaveContent(ctx, id, func(cur Campaign, current *content.Version) (Campaign, content.Version, bool, error) {
 		next, v, ok, err := cur.WithEditedContent(expectedVersion, current, d)
@@ -232,7 +235,7 @@ func (s *Service) EditContent(ctx context.Context, id ID, d content.Draft, expec
 // if it has none). The version is read after the campaign; versions are
 // immutable, so it is exactly the version the campaign pointed at.
 func (s *Service) CurrentContent(ctx context.Context, id ID) (Campaign, *content.Version, error) {
-	c, err := s.store.Get(ctx, id)
+	c, err := s.load(ctx, id)
 	if err != nil {
 		return Campaign{}, nil, err
 	}

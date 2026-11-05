@@ -35,17 +35,38 @@ type AudienceCounter interface {
 	Stats(ctx context.Context, rule segment.Validated, channels []segment.Channel) (segment.AudienceStats, error)
 }
 
+// ApprovalExpirer performs lazy approval expiry (ARCHITECTURE §5.3 (b)):
+// if the campaign's live approval is due it is expired in its own committed
+// transaction (campaign row lock, clock_timestamp(), held rows deleted,
+// version + 1) and its id returned; otherwise nothing is written.
+// *approval.Service implements it.
+type ApprovalExpirer interface {
+	ExpireDue(ctx context.Context, id ID) (*ID, error)
+}
+
+// Option configures optional service dependencies.
+type Option func(*Service)
+
+// WithApprovalExpirer makes every API operation on a campaign with a live
+// approval run lazy expiry first (§5.3), so the API never presents or
+// mutates a stale approval state. Without it (unit tests of earlier
+// slices) no expiry runs.
+func WithApprovalExpirer(e ApprovalExpirer) Option {
+	return func(s *Service) { s.expirer = e }
+}
+
 // Service implements the campaign authoring use cases.
 type Service struct {
 	store       Store
 	audience    AudienceCounter
 	interpreter *ai.Interpreter
 	generator   *ai.Generator
+	expirer     ApprovalExpirer
 	log         *slog.Logger
 }
 
 // NewService wires the service.
-func NewService(store Store, audience AudienceCounter, interpreter *ai.Interpreter, generator *ai.Generator, log *slog.Logger) (*Service, error) {
+func NewService(store Store, audience AudienceCounter, interpreter *ai.Interpreter, generator *ai.Generator, log *slog.Logger, opts ...Option) (*Service, error) {
 	switch {
 	case store == nil:
 		return nil, errors.New("campaign: nil store")
@@ -58,7 +79,33 @@ func NewService(store Store, audience AudienceCounter, interpreter *ai.Interpret
 	case log == nil:
 		return nil, errors.New("campaign: nil logger")
 	}
-	return &Service{store: store, audience: audience, interpreter: interpreter, generator: generator, log: log}, nil
+	s := &Service{store: store, audience: audience, interpreter: interpreter, generator: generator, log: log}
+	for _, o := range opts {
+		o(s)
+	}
+	return s, nil
+}
+
+// load reads the campaign after lazy approval expiry (§5.3 (b)): when the
+// campaign has a live approval (pending_approval/approved) and an expirer
+// is configured, a due approval is expired in its own committed transaction
+// first and the campaign re-read, so callers see — and version-check
+// against — the post-expiry state. Campaigns without a live approval
+// (including sending/finished ones with a consumed approval) are never
+// touched.
+func (s *Service) load(ctx context.Context, id ID) (Campaign, error) {
+	c, err := s.store.Get(ctx, id)
+	if err != nil || s.expirer == nil || (c.Status != StatusPendingApproval && c.Status != StatusApproved) {
+		return c, err
+	}
+	expired, err := s.expirer.ExpireDue(ctx, id)
+	if err != nil {
+		return Campaign{}, err
+	}
+	if expired == nil {
+		return c, nil
+	}
+	return s.store.Get(ctx, id)
 }
 
 // Create validates and stores a new draft campaign.
@@ -75,14 +122,18 @@ func (s *Service) Create(ctx context.Context, name, brief string) (Campaign, err
 	return c, nil
 }
 
-// Get returns a campaign. Reads never change the campaign.
+// Get returns a campaign. Reads never change the campaign, except that a
+// due live approval is expired first (lazy expiry, §5.3).
 func (s *Service) Get(ctx context.Context, id ID) (Campaign, error) {
-	return s.store.Get(ctx, id)
+	return s.load(ctx, id)
 }
 
 // SetChannels replaces the channel selection if the campaign is still at
 // expectedVersion (compare-and-set under the campaign row lock).
 func (s *Service) SetChannels(ctx context.Context, id ID, channels []segment.Channel, expectedVersion int) (Campaign, error) {
+	if _, err := s.load(ctx, id); err != nil { // lazy expiry first (committed)
+		return Campaign{}, err
+	}
 	c, err := s.store.Update(ctx, id, func(cur Campaign) (Campaign, bool, error) {
 		return cur.WithChannels(expectedVersion, channels)
 	})
@@ -117,7 +168,7 @@ type InterpretResult struct {
 // If the campaign changed while the model was working, the result is
 // discarded with a *ConflictError.
 func (s *Service) Interpret(ctx context.Context, id ID) (InterpretResult, error) {
-	observed, err := s.store.Get(ctx, id)
+	observed, err := s.load(ctx, id)
 	if err != nil {
 		return InterpretResult{}, err
 	}
@@ -177,7 +228,7 @@ type AudiencePreview struct {
 // Audience recomputes the audience statistics of the stored rule for the
 // stored channels. Read-only.
 func (s *Service) Audience(ctx context.Context, id ID) (AudiencePreview, error) {
-	c, err := s.store.Get(ctx, id)
+	c, err := s.load(ctx, id)
 	if err != nil {
 		return AudiencePreview{}, err
 	}

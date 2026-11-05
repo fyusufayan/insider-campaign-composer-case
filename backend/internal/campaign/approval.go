@@ -177,6 +177,74 @@ func (c Campaign) WithApprovalClosed(approvalID ID) (Campaign, error) {
 	return next, nil
 }
 
+// ---- Confirmation and withdrawal (CP15, §5.2, §5.5) ----
+
+// Operations of the approval decisions.
+const (
+	OpConfirmApproval  Operation = "confirm_approval"
+	OpWithdrawApproval Operation = "withdraw_approval"
+)
+
+// CheckConfirmAt reports whether the approval approvalID may be confirmed
+// on top of expectedVersion (§5.2 pending_approval → confirm → approved):
+// the version matches (optimistic concurrency) and the campaign is
+// pending_approval with approvalID as its active approval. The approval
+// row's own state, expiry and binding are checked by the approval
+// transaction under the same lock.
+func (c Campaign) CheckConfirmAt(expectedVersion int, approvalID ID) error {
+	if c.Version != expectedVersion {
+		return &ConflictError{Expected: expectedVersion, Current: c.Version}
+	}
+	active := c.ActiveApprovalID != nil && *c.ActiveApprovalID == approvalID
+	switch {
+	case c.Status == StatusPendingApproval && active:
+		return nil
+	case c.Status == StatusApproved && active:
+		return &StateError{Op: OpConfirmApproval, Status: c.Status, Reason: "the approval is already confirmed"}
+	case c.Status == StatusPendingApproval || c.Status == StatusApproved:
+		return &StateError{Op: OpConfirmApproval, Status: c.Status, Reason: "this is not the campaign's current approval; reload the campaign"}
+	case c.Status == StatusContentReady || c.Status == StatusSegmented || c.Status == StatusDraft:
+		return &StateError{Op: OpConfirmApproval, Status: c.Status, Reason: "no approval is pending; prepare a new one"}
+	default:
+		return &StateError{Op: OpConfirmApproval, Status: c.Status, Reason: "the campaign can no longer be approved"}
+	}
+}
+
+// WithConfirmedApproval applies a successful confirmation (§5.2 confirm):
+// status → approved, version +1; the active approval is unchanged. The
+// checks of CheckConfirmAt are repeated. It is pure.
+func (c Campaign) WithConfirmedApproval(expectedVersion int, approvalID ID) (Campaign, error) {
+	if err := c.CheckConfirmAt(expectedVersion, approvalID); err != nil {
+		return Campaign{}, err
+	}
+	next := c.clone()
+	next.Status = StatusApproved
+	next.Version++
+	return next, nil
+}
+
+// CheckWithdrawAt reports whether the live approval approvalID may be
+// withdrawn on top of expectedVersion (§5.2 pending_approval/approved →
+// withdraw → content_ready). A consumed approval (sending and finished
+// campaigns) is never withdrawn: cancellation of a send is a different
+// operation (§10.8). The transition itself is WithApprovalClosed.
+func (c Campaign) CheckWithdrawAt(expectedVersion int, approvalID ID) error {
+	if c.Version != expectedVersion {
+		return &ConflictError{Expected: expectedVersion, Current: c.Version}
+	}
+	active := c.ActiveApprovalID != nil && *c.ActiveApprovalID == approvalID
+	switch {
+	case (c.Status == StatusPendingApproval || c.Status == StatusApproved) && active:
+		return nil
+	case c.Status == StatusPendingApproval || c.Status == StatusApproved:
+		return &StateError{Op: OpWithdrawApproval, Status: c.Status, Reason: "this is not the campaign's current approval; reload the campaign"}
+	case c.Status == StatusContentReady || c.Status == StatusSegmented || c.Status == StatusDraft:
+		return &StateError{Op: OpWithdrawApproval, Status: c.Status, Reason: "the campaign has no live approval to withdraw"}
+	default:
+		return &StateError{Op: OpWithdrawApproval, Status: c.Status, Reason: "the approval has been used for sending and can no longer be withdrawn"}
+	}
+}
+
 // ---- Statements run inside the approval transaction ----
 
 const (
@@ -198,6 +266,30 @@ func LockTx(ctx context.Context, tx pgx.Tx, id ID) (Campaign, error) {
 		return Campaign{}, fmt.Errorf("campaign %s: lock: %w", id, err)
 	}
 	return c, nil
+}
+
+// GetTx reads the campaign in tx without locking it (consistent reads in a
+// REPEATABLE READ transaction).
+func GetTx(ctx context.Context, tx pgx.Tx, id ID) (Campaign, error) {
+	c, err := scanCampaign(tx.QueryRow(ctx, sqlSelectCampaign, uuidArg(id)))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Campaign{}, ErrNotFound
+	}
+	if err != nil {
+		return Campaign{}, fmt.Errorf("campaign %s: select: %w", id, err)
+	}
+	return c, nil
+}
+
+// ContentTx reads one (re-validated) content version of the campaign in tx.
+// Versions are immutable; it is used for the version an approval is bound
+// to, which is not necessarily the current one.
+func ContentTx(ctx context.Context, tx pgx.Tx, campaignID ID, contentID int64) (content.Version, error) {
+	v, err := scanContent(tx.QueryRow(ctx, sqlSelectContent, contentID, uuidArg(campaignID)))
+	if err != nil {
+		return content.Version{}, fmt.Errorf("campaign %s: content %d: %w", campaignID, contentID, err)
+	}
+	return v, nil
 }
 
 // CurrentContentTx reads the campaign's current content version (re-validated)

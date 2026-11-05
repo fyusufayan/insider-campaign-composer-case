@@ -31,11 +31,21 @@
 //      the commit) changes the campaign and its content. Any failure,
 //      interruption or cancellation reloads the campaign and its content,
 //      because a commit may have happened just before the connection ended.
+//   7. Approval (CP15): the approval summary is applied only together with
+//      the campaign returned in the same response (same version), so the
+//      dialog never shows an approval for another campaign state. Prepare,
+//      confirm and withdraw are version-guarded mutations like the others
+//      (one at a time, never retried automatically; a 409 is shown with a
+//      reload path). The expiry countdown is display only: when it elapses
+//      the store re-reads the approval (the server performs the expiry) and
+//      Confirm is disabled; the server's decision is authoritative.
 
 import { defineStore } from 'pinia'
 import { computed, ref, shallowRef } from 'vue'
 import { ApiError, api, isApiError } from '@/api/client'
 import type {
+  ApprovalResponse,
+  ApprovalSummary,
   AudienceStats,
   Campaign,
   CampaignStatus,
@@ -77,6 +87,11 @@ export interface GenerationView {
 }
 
 export type Draft = Record<ContentField, string>
+
+export type ApprovalAction = 'prepareApproval' | 'confirmApproval' | 'withdrawApproval'
+/** How the approval shown last ended, or that it was just confirmed. */
+export type ApprovalNotice = 'expired' | 'withdrawn' | 'replaced' | 'confirmed'
+
 
 const IDLE_GENERATION: GenerationView = {
   phase: 'idle',
@@ -163,6 +178,22 @@ export const useCampaignStore = defineStore('campaign', () => {
   const saveNotice = ref<'saved' | 'unchanged' | null>(null)
   const generation = shallowRef<GenerationView>(IDLE_GENERATION)
 
+  // ---- approval (CP15) ----
+  const approval = shallowRef<ApprovalSummary | null>(null)
+  const approvalLoading = ref(false)
+  /** Reading the approval failed. */
+  const approvalError = shallowRef<ApiError | null>(null)
+  /** The last prepare/confirm/withdraw failed (kept until reload or the next action). */
+  const approvalActionError = shallowRef<{ op: ApprovalAction; error: ApiError } | null>(null)
+  const preparing = ref(false)
+  const confirming = ref(false)
+  const withdrawing = ref(false)
+  const approvalDialogOpen = ref(false)
+  /** What happened to the approval shown last (banner). */
+  const approvalNotice = ref<ApprovalNotice | null>(null)
+  /** server clock − client clock (ms), from the last approval response. */
+  const serverOffsetMs = ref(0)
+
   let epoch = 0
   const controllers = new Set<AbortController>()
   let audienceController: AbortController | null = null
@@ -170,10 +201,14 @@ export const useCampaignStore = defineStore('campaign', () => {
   let validateController: AbortController | null = null
   let generationController: AbortController | null = null
   let generationCancelled = false
+  let approvalController: AbortController | null = null
 
   // ---- derived ----
   const generating = computed(() => !['idle', 'done', 'failed', 'cancelled'].includes(generation.value.phase))
-  const busy = computed(() => interpreting.value || savingChannels.value || generating.value || savingContent.value)
+  const approvalBusy = computed(() => preparing.value || confirming.value || withdrawing.value)
+  const busy = computed(
+    () => interpreting.value || savingChannels.value || generating.value || savingContent.value || approvalBusy.value,
+  )
   const status = computed(() => campaign.value?.status ?? null)
   const canInterpret = computed(() => !!status.value && INTERPRET_STATUSES.includes(status.value))
   const canEditChannels = computed(() => !!status.value && CHANNEL_STATUSES.includes(status.value))
@@ -216,6 +251,38 @@ export const useCampaignStore = defineStore('campaign', () => {
     return contentCurrent.value ? (content.value?.validation ?? null) : null
   })
 
+  /** The approval shown belongs to the campaign version shown. */
+  const approvalCurrent = computed(
+    () =>
+      !!campaign.value &&
+      !!approval.value &&
+      approval.value.campaign_id === campaign.value.id &&
+      approval.value.campaign_version === campaign.value.version,
+  )
+  /** The campaign's live approval, as currently shown. */
+  const liveApproval = computed<ApprovalSummary | null>(() => {
+    const a = approval.value
+    const c = campaign.value
+    if (!a || !c || !approvalCurrent.value || c.active_approval_id !== a.approval_id) return null
+    return a.status === 'pending' || a.status === 'approved' ? a : null
+  })
+  /** Why Prepare Approval is unavailable (null: it is available). */
+  const prepareBlockedReason = computed<string | null>(() => {
+    const c = campaign.value
+    if (!c) return 'Loading…'
+    if (c.status !== 'content_ready') {
+      if (c.status === 'pending_approval') return 'An approval is already prepared.'
+      if (c.status === 'approved') return 'The campaign is approved. Withdraw the approval to prepare a new one.'
+      return 'Write and save content first.'
+    }
+    if (c.channels.length === 0) return 'Select at least one channel.'
+    if (dirty.value) return 'Save or discard your content edits first.'
+    if (!contentCurrent.value) return 'Loading the current content…'
+    if (!content.value?.validation?.valid) return 'Fix the content errors first.'
+    return null
+  })
+  const canPrepare = computed(() => !busy.value && prepareBlockedReason.value === null)
+
   // ---- helpers ----
   function track(): { controller: AbortController; myEpoch: number } {
     const controller = new AbortController()
@@ -234,6 +301,7 @@ export const useCampaignStore = defineStore('campaign', () => {
     contentController = null
     validateController = null
     generationController = null
+    approvalController = null
   }
 
   function resetState() {
@@ -268,6 +336,16 @@ export const useCampaignStore = defineStore('campaign', () => {
     saveNotice.value = null
     generation.value = IDLE_GENERATION
     generationCancelled = false
+    approval.value = null
+    approvalLoading.value = false
+    approvalError.value = null
+    approvalActionError.value = null
+    preparing.value = false
+    confirming.value = false
+    withdrawing.value = false
+    approvalDialogOpen.value = false
+    approvalNotice.value = null
+    serverOffsetMs.value = 0
   }
 
   /** Replaces the draft with the saved version's text (discarding edits). */
@@ -337,7 +415,7 @@ export const useCampaignStore = defineStore('campaign', () => {
     epoch++
     resetState()
     campaignId.value = id
-    await fetchCampaign({ refreshAudience: true })
+    await fetchCampaign({ refreshAudience: true, restoreDialog: true })
   }
 
   /** Leaves the campaign: aborts pending requests and drops their results. */
@@ -357,7 +435,7 @@ export const useCampaignStore = defineStore('campaign', () => {
     campaign.value = c
   }
 
-  async function fetchCampaign(opts: { refreshAudience: boolean }): Promise<void> {
+  async function fetchCampaign(opts: { refreshAudience: boolean; restoreDialog?: boolean }): Promise<void> {
     const id = campaignId.value
     if (!id) return
     const { controller, myEpoch } = track()
@@ -374,6 +452,7 @@ export const useCampaignStore = defineStore('campaign', () => {
         void refreshAudience()
       }
       if (c.segment_rule) void refreshContent()
+      syncApproval(c, { restoreDialog: opts.restoreDialog === true })
     } catch (e) {
       const err = toApiError(e)
       if (err.isAbort || myEpoch !== epoch) return
@@ -390,6 +469,7 @@ export const useCampaignStore = defineStore('campaign', () => {
     channelsError.value = null
     interpretError.value = null
     saveError.value = null
+    approvalActionError.value = null
     if (generation.value.phase === 'failed') generation.value = IDLE_GENERATION
     await fetchCampaign({ refreshAudience: true })
   }
@@ -750,6 +830,202 @@ export const useCampaignStore = defineStore('campaign', () => {
     if (!generating.value) generation.value = IDLE_GENERATION
   }
 
+  // ---- approval actions (CP15) ----
+
+  function isLive(a: ApprovalSummary | null): boolean {
+    return !!a && (a.status === 'pending' || a.status === 'approved')
+  }
+
+  /**
+   * Applies an approval response: the campaign first (dropped if older than
+   * the one shown), then the approval of exactly that campaign version.
+   * Reports how a previously shown live approval ended.
+   */
+  function applyApproval(res: ApprovalResponse): boolean {
+    const prev = approval.value
+    const prevVersion = campaign.value?.version ?? 0
+    if (!applyCampaign(res.campaign)) return false
+    approval.value = res.approval
+    approvalError.value = null
+    const offset = Date.parse(res.server_time) - Date.now()
+    if (Number.isFinite(offset)) serverOffsetMs.value = offset
+    const a = res.approval
+    if (isLive(prev) && prev!.approval_id === a.approval_id && !isLive(a)) {
+      approvalDialogOpen.value = false
+      if (a.status === 'expired') approvalNotice.value = 'expired'
+      else if (a.revoke_reason === 'withdrawn') approvalNotice.value = 'withdrawn'
+      else approvalNotice.value = 'replaced'
+    }
+    if (res.campaign.version !== prevVersion) {
+      // Content validation and audience are bound to the campaign version.
+      if (res.campaign.segment_rule) void refreshContent()
+      if (AUDIENCE_STATUSES.includes(res.campaign.status)) void refreshAudience()
+    }
+    return true
+  }
+
+  /**
+   * Keeps the shown approval in step with a freshly loaded campaign: loads
+   * its live approval, or — if the approval shown is no longer live (it
+   * expired, or another tab withdrew it) — re-reads it to show how it ended.
+   */
+  function syncApproval(c: Campaign, opts: { restoreDialog: boolean }): void {
+    const shown = approval.value
+    if (c.active_approval_id && (c.status === 'pending_approval' || c.status === 'approved')) {
+      if (!shown || shown.approval_id !== c.active_approval_id || shown.campaign_version !== c.version) {
+        void refreshApproval(c.active_approval_id, { openDialog: opts.restoreDialog && c.status === 'pending_approval' })
+      }
+      return
+    }
+    if (shown && isLive(shown) && shown.campaign_id === c.id) void refreshApproval(shown.approval_id)
+  }
+
+  /** GET …/approvals/{aid}. The server applies lazy expiry first. */
+  async function refreshApproval(approvalId?: string, opts: { openDialog?: boolean } = {}): Promise<void> {
+    const id = campaignId.value
+    const aid = approvalId ?? approval.value?.approval_id ?? campaign.value?.active_approval_id ?? null
+    if (!id || !aid) return
+    approvalController?.abort()
+    const { controller, myEpoch } = track()
+    approvalController = controller
+    approvalLoading.value = true
+    approvalError.value = null
+    try {
+      const res = await api.getApproval(id, aid, controller.signal)
+      if (myEpoch !== epoch || controller.signal.aborted) return
+      if (!applyApproval(res)) return
+      if (opts.openDialog && res.approval.status === 'pending') approvalDialogOpen.value = true
+    } catch (e) {
+      const err = toApiError(e)
+      if (err.isAbort || myEpoch !== epoch || controller.signal.aborted) return
+      approvalError.value = err
+    } finally {
+      untrack(controller)
+      if (approvalController === controller) {
+        approvalController = null
+        approvalLoading.value = false
+      }
+    }
+  }
+
+  /**
+   * POST /approvals on top of the version shown: freezes the audience into a
+   * pending approval and opens the review dialog. Refused while anything
+   * else is pending or the content is not saved and valid.
+   */
+  async function prepareApproval(): Promise<void> {
+    const id = campaignId.value
+    const cur = campaign.value
+    if (!id || !cur || !canPrepare.value) return
+    approvalController?.abort()
+    const { controller, myEpoch } = track()
+    preparing.value = true
+    approvalActionError.value = null
+    approvalNotice.value = null
+    try {
+      const res = await api.prepareApproval(id, cur.version, controller.signal)
+      if (myEpoch !== epoch) return
+      if (!applyApproval(res)) return
+      approvalDialogOpen.value = true
+    } catch (e) {
+      const err = toApiError(e)
+      if (err.isAbort || myEpoch !== epoch) return
+      approvalActionError.value = { op: 'prepareApproval', error: err }
+    } finally {
+      untrack(controller)
+      if (myEpoch === epoch) preparing.value = false
+    }
+  }
+
+  /**
+   * POST …/confirm with exactly the binding shown (approval id, campaign
+   * version, segment version, content version, channels). Allowed only for
+   * the live pending approval of the version shown.
+   */
+  async function confirmApproval(): Promise<void> {
+    const id = campaignId.value
+    const cur = campaign.value
+    const a = liveApproval.value
+    if (!id || !cur || !a || a.status !== 'pending' || busy.value) return
+    const { controller, myEpoch } = track()
+    confirming.value = true
+    approvalActionError.value = null
+    try {
+      const res = await api.confirmApproval(
+        id,
+        a.approval_id,
+        {
+          expected_version: cur.version,
+          segment_version: a.segment_version,
+          content_version: a.content_version,
+          channels: a.channels,
+        },
+        controller.signal,
+      )
+      if (myEpoch !== epoch) return
+      if (!applyApproval(res)) return
+      approvalDialogOpen.value = false
+      approvalNotice.value = 'confirmed'
+    } catch (e) {
+      const err = toApiError(e)
+      if (err.isAbort || myEpoch !== epoch) return
+      approvalActionError.value = { op: 'confirmApproval', error: err }
+      // An expiry is final and already committed: show it (a read, not a retry).
+      if (err.code === 'approval_expired') void refreshApproval(a.approval_id)
+    } finally {
+      untrack(controller)
+      if (myEpoch === epoch) confirming.value = false
+    }
+  }
+
+  /** POST …/withdraw for the live approval shown (pending or approved). */
+  async function withdrawApproval(): Promise<void> {
+    const id = campaignId.value
+    const cur = campaign.value
+    const a = liveApproval.value
+    if (!id || !cur || !a || busy.value) return
+    const { controller, myEpoch } = track()
+    withdrawing.value = true
+    approvalActionError.value = null
+    try {
+      const res = await api.withdrawApproval(id, a.approval_id, cur.version, controller.signal)
+      if (myEpoch !== epoch) return
+      applyApproval(res)
+    } catch (e) {
+      const err = toApiError(e)
+      if (err.isAbort || myEpoch !== epoch) return
+      approvalActionError.value = { op: 'withdrawApproval', error: err }
+      if (err.code === 'approval_expired') void refreshApproval(a.approval_id)
+    } finally {
+      untrack(controller)
+      if (myEpoch === epoch) withdrawing.value = false
+    }
+  }
+
+  function openApprovalDialog(): void {
+    if (liveApproval.value?.status === 'pending') approvalDialogOpen.value = true
+  }
+
+  /** Closes the dialog without deciding: the approval stays pending until it expires. */
+  function closeApprovalDialog(): void {
+    approvalDialogOpen.value = false
+  }
+
+  /** The local countdown reached expires_at: let the server decide. */
+  function approvalDeadlinePassed(): void {
+    const a = liveApproval.value
+    if (!a || approvalLoading.value || approvalBusy.value) return
+    void refreshApproval(a.approval_id)
+  }
+
+  function dismissApprovalNotice(): void {
+    approvalNotice.value = null
+  }
+
+  function dismissApprovalError(): void {
+    approvalActionError.value = null
+  }
+
   return {
     // state
     campaignId,
@@ -780,8 +1056,23 @@ export const useCampaignStore = defineStore('campaign', () => {
     saveError,
     saveNotice,
     generation,
+    approval,
+    approvalLoading,
+    approvalError,
+    approvalActionError,
+    preparing,
+    confirming,
+    withdrawing,
+    approvalDialogOpen,
+    approvalNotice,
+    serverOffsetMs,
     // derived
     busy,
+    approvalBusy,
+    approvalCurrent,
+    liveApproval,
+    prepareBlockedReason,
+    canPrepare,
     status,
     canInterpret,
     canEditChannels,
@@ -816,5 +1107,14 @@ export const useCampaignStore = defineStore('campaign', () => {
     generateContent,
     cancelGeneration,
     dismissGeneration,
+    refreshApproval,
+    prepareApproval,
+    confirmApproval,
+    withdrawApproval,
+    openApprovalDialog,
+    closeApprovalDialog,
+    approvalDeadlinePassed,
+    dismissApprovalNotice,
+    dismissApprovalError,
   }
 })

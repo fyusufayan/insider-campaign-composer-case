@@ -20,6 +20,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/fyusufayan/insider-campaign-composer-case/backend/internal/ai"
+	"github.com/fyusufayan/insider-campaign-composer-case/backend/internal/approval"
 	"github.com/fyusufayan/insider-campaign-composer-case/backend/internal/campaign"
 	"github.com/fyusufayan/insider-campaign-composer-case/backend/internal/httpapi"
 	"github.com/fyusufayan/insider-campaign-composer-case/backend/internal/llm"
@@ -37,6 +38,7 @@ const (
 	apiIstanbulRule = `{"version":1,"match":"all","conditions":[{"type":"attribute","field":"city","op":"eq","value":"istanbul"},{"type":"behavior","predicate":"abandoned_cart","within_days":30}]}`
 	apiAnkaraRule   = `{"version":1,"match":"all","conditions":[{"type":"attribute","field":"city","op":"eq","value":"ankara"}]}`
 	apiDeadline     = 10 * time.Second
+	apiApprovedTTL  = 2 * time.Hour
 )
 
 func scriptedReply(segmentJSON string, channels string) string {
@@ -78,6 +80,8 @@ type apiEnv struct {
 	srv    *httptest.Server
 	llm    *llm.Scripted
 	svc    *campaign.Service
+	appr   *approval.Service
+	logs   *lockedBuffer
 	dbURL  string
 	tracer *sqlRecorder
 }
@@ -103,13 +107,22 @@ func newAPIEnv(t *testing.T, client llm.Client) *apiEnv {
 	if err != nil {
 		t.Fatal(err)
 	}
-	log := logging.New(io.Discard, slog.LevelInfo)
-	svc, err := campaign.NewService(campaign.NewRepository(e.pool), segment.NewAudienceRepository(e.pool), it, gen, log)
+	// Wired as in cmd/api: approvals with lazy expiry on every campaign
+	// operation (§5.3).
+	e.logs = &lockedBuffer{}
+	log := logging.New(e.logs, slog.LevelInfo)
+	e.appr, err = approval.NewService(approval.NewRepository(e.pool), approval.Config{
+		PendingTTL: prepTTL, ApprovedTTL: apiApprovedTTL, ApprovedBy: "reviewer@test"}, log)
+	if err != nil {
+		t.Fatal(err)
+	}
+	svc, err := campaign.NewService(campaign.NewRepository(e.pool), segment.NewAudienceRepository(e.pool), it, gen, log,
+		campaign.WithApprovalExpirer(e.appr))
 	if err != nil {
 		t.Fatal(err)
 	}
 	e.svc = svc
-	e.srv = httptest.NewServer(httpapi.NewRouter(log, httpapi.Deps{Campaigns: svc}))
+	e.srv = httptest.NewServer(httpapi.NewRouter(log, httpapi.Deps{Campaigns: svc, Approvals: e.appr}))
 	t.Cleanup(e.srv.Close)
 	return e
 }

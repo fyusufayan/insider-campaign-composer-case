@@ -1,5 +1,6 @@
 // Real-shaped API payloads (field names and shapes from the CP6 DTOs).
 import type {
+  ApprovalSummary,
   AudienceStats,
   Campaign,
   Channel,
@@ -55,6 +56,7 @@ export function draftCampaign(overrides: Partial<Campaign> = {}): Campaign {
     interpretation: null,
     content_brief: null,
     current_content_id: null,
+    active_approval_id: null,
     version: 1,
     created_at: '2026-11-04T10:00:00Z',
     updated_at: '2026-11-04T10:00:00Z',
@@ -237,5 +239,46 @@ function storedForChannels(v: ContentVersion, chs: Channel[]): Partial<Record<Co
     sms_body: chs.includes('sms') ? v.sms_body : null,
     email_subject: chs.includes('email') ? v.email_subject : null,
     email_body: chs.includes('email') ? v.email_body : null,
+  }
+}
+
+// ---- Approval (CP15) ----
+
+export const APPROVAL_ID = 'a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d'
+export const DIGEST = 'ab'.repeat(32)
+export const SERVER_TIME = '2026-11-04T10:20:00Z'
+
+/** A pending approval of campaign c (which must already be pending_approval) bound to content v. */
+export function approvalFor(c: Campaign, v: ContentVersion, overrides: Partial<ApprovalSummary> = {}): ApprovalSummary {
+  const stats = audienceFor(c.channels)
+  const snapshot: ApprovalSummary['snapshot'] = {}
+  for (const ch of c.channels) snapshot[ch] = { recipients: stats.by_channel[ch]!.eligible, render_issues: {} }
+  const validation = fakeValidate(storedForChannels(v, c.channels), c.channels)
+  return {
+    approval_id: APPROVAL_ID,
+    campaign_id: c.id,
+    status: 'pending',
+    revoke_reason: null,
+    campaign_version: c.version,
+    segment_version: c.segment_version,
+    content_id: v.id,
+    content_version: v.version,
+    content_origin: v.origin,
+    content_model: v.model,
+    content_prompt_version: v.prompt_version,
+    channels: [...c.channels],
+    audience_stats: stats,
+    snapshot_count: stats.messages,
+    snapshot_digest: DIGEST,
+    snapshot,
+    prepared_at: '2026-11-04T10:15:00Z',
+    expires_at: '2026-11-04T10:30:00Z',
+    approved_at: null,
+    approved_by: null,
+    closed_at: null,
+    review: { validation, offer_findings: [], offer: { kind: 'percent_discount', value: 30 } },
+    rendered_content: validation.rendered_example,
+    superseded_approval_id: null,
+    ...overrides,
   }
 }

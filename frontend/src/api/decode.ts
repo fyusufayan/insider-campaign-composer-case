@@ -25,6 +25,13 @@ import type {
   ErrorBody,
   ExampleValues,
   FieldError,
+  ApprovalChannelSnapshot,
+  ApprovalResponse,
+  ApprovalReview,
+  ApprovalStatus,
+  ApprovalSummary,
+  Offer,
+  RevokeReason,
   GenerationDelta,
   GenerationErrorEvent,
   GenerationEvent,
@@ -77,6 +84,37 @@ function nullableInt(v: unknown, path: string): number | null {
 function nullableStr(v: unknown, path: string): string | null {
   if (v === null) return null
   return str(v, path)
+}
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
+
+function uuid(v: unknown, path: string): string {
+  const s = str(v, path)
+  if (!UUID_RE.test(s)) throw new DecodeError(path, 'a lower-case UUID')
+  return s
+}
+
+function nullableUuid(v: unknown, path: string): string | null {
+  if (v === null) return null
+  return uuid(v, path)
+}
+
+function timestamp(v: unknown, path: string): string {
+  const s = str(v, path)
+  if (Number.isNaN(Date.parse(s))) throw new DecodeError(path, 'an RFC 3339 timestamp')
+  return s
+}
+
+function nullableTimestamp(v: unknown, path: string): string | null {
+  if (v === null) return null
+  return timestamp(v, path)
+}
+
+/** Rejects properties outside the closed set (strict DTOs; also a privacy guard). */
+function closed(o: Obj, allowed: readonly string[], path: string): void {
+  for (const k of Object.keys(o)) {
+    if (!allowed.includes(k)) throw new DecodeError(`${path}.${k}`, 'no such property')
+  }
 }
 
 function bool(v: unknown, path: string): boolean {
@@ -160,6 +198,7 @@ export function decodeCampaign(v: unknown, path = 'campaign'): Campaign {
     interpretation: interpretation(o.interpretation, `${path}.interpretation`),
     content_brief: o.content_brief ?? null,
     current_content_id: nullableInt(o.current_content_id, `${path}.current_content_id`),
+    active_approval_id: nullableUuid(o.active_approval_id, `${path}.active_approval_id`),
     version: int(o.version, `${path}.version`),
     created_at: str(o.created_at, `${path}.created_at`),
     updated_at: str(o.updated_at, `${path}.updated_at`),
@@ -491,4 +530,174 @@ export function decodeGenerationEvent(name: string, data: unknown): GenerationEv
     default:
       throw new DecodeError('event', 'a known event name')
   }
+}
+
+// ---- Approval (CP15) ----
+
+const APPROVAL_STATUSES: readonly ApprovalStatus[] = ['pending', 'approved', 'consumed', 'revoked', 'expired']
+const REVOKE_REASONS: readonly RevokeReason[] = ['superseded', 'edited', 'withdrawn', 'campaign_cancelled']
+const DIGEST_RE = /^[0-9a-f]{64}$/
+
+const APPROVAL_KEYS = [
+  'approval_id',
+  'campaign_id',
+  'status',
+  'revoke_reason',
+  'campaign_version',
+  'segment_version',
+  'content_id',
+  'content_version',
+  'content_origin',
+  'content_model',
+  'content_prompt_version',
+  'channels',
+  'audience_stats',
+  'snapshot_count',
+  'snapshot_digest',
+  'snapshot',
+  'prepared_at',
+  'expires_at',
+  'approved_at',
+  'approved_by',
+  'closed_at',
+  'review',
+  'rendered_content',
+  'superseded_approval_id',
+] as const
+
+function nonNegative(v: unknown, path: string): number {
+  const n = int(v, path)
+  if (n < 0) throw new DecodeError(path, 'a non-negative integer')
+  return n
+}
+
+function offer(v: unknown, path: string): Offer {
+  const o = obj(v, path)
+  if (o.kind === 'none' || o.kind === 'free_shipping') {
+    closed(o, ['kind'], path)
+    return { kind: o.kind }
+  }
+  if (o.kind === 'percent_discount') {
+    closed(o, ['kind', 'value'], path)
+    return { kind: 'percent_discount', value: int(o.value, `${path}.value`) }
+  }
+  throw new DecodeError(`${path}.kind`, 'a known offer kind')
+}
+
+function channelSnapshot(v: unknown, path: string): ApprovalChannelSnapshot {
+  const o = obj(v, path)
+  closed(o, ['recipients', 'render_issues'], path)
+  let issues: Record<string, number> | null = null
+  if (o.render_issues !== null) {
+    const r = obj(o.render_issues, `${path}.render_issues`)
+    issues = {}
+    for (const [k, n] of Object.entries(r)) issues[k] = nonNegative(n, `${path}.render_issues.${k}`)
+  }
+  return { recipients: nonNegative(o.recipients, `${path}.recipients`), render_issues: issues }
+}
+
+function approvalReview(v: unknown, path: string): ApprovalReview | null {
+  if (v === null) return null
+  const o = obj(v, path)
+  closed(o, ['validation', 'offer_findings', 'offer'], path)
+  const review: ApprovalReview = {
+    validation: decodeContentValidation(o.validation, `${path}.validation`),
+    offer_findings: fieldErrors(o.offer_findings, `${path}.offer_findings`),
+    offer: offer(o.offer, `${path}.offer`),
+  }
+  // A prepared approval's content is valid for its channels.
+  if (!review.validation.valid) throw new DecodeError(`${path}.validation.valid`, 'true for a prepared approval')
+  return review
+}
+
+export function decodeApproval(v: unknown, path = 'approval'): ApprovalSummary {
+  const o = obj(v, path)
+  closed(o, APPROVAL_KEYS, path)
+  const status = str(o.status, `${path}.status`)
+  if (!(APPROVAL_STATUSES as readonly string[]).includes(status)) throw new DecodeError(`${path}.status`, 'a known status')
+  let revokeReason: RevokeReason | null = null
+  if (o.revoke_reason !== null) {
+    const r = str(o.revoke_reason, `${path}.revoke_reason`)
+    if (!(REVOKE_REASONS as readonly string[]).includes(r)) throw new DecodeError(`${path}.revoke_reason`, 'a known reason')
+    revokeReason = r as RevokeReason
+  }
+  const origin = o.content_origin
+  if (origin !== 'ai' && origin !== 'edited') throw new DecodeError(`${path}.content_origin`, '"ai" or "edited"')
+  const snapRaw = obj(o.snapshot, `${path}.snapshot`)
+  const snapshot: ApprovalSummary['snapshot'] = {}
+  for (const [k, val] of Object.entries(snapRaw)) snapshot[channel(k, `${path}.snapshot key`)] = channelSnapshot(val, `${path}.snapshot.${k}`)
+  const a: ApprovalSummary = {
+    approval_id: uuid(o.approval_id, `${path}.approval_id`),
+    campaign_id: uuid(o.campaign_id, `${path}.campaign_id`),
+    status: status as ApprovalStatus,
+    revoke_reason: revokeReason,
+    campaign_version: int(o.campaign_version, `${path}.campaign_version`),
+    segment_version: int(o.segment_version, `${path}.segment_version`),
+    content_id: int(o.content_id, `${path}.content_id`),
+    content_version: int(o.content_version, `${path}.content_version`),
+    content_origin: origin,
+    content_model: nullableStr(o.content_model, `${path}.content_model`),
+    content_prompt_version: nullableStr(o.content_prompt_version, `${path}.content_prompt_version`),
+    channels: channels(o.channels, `${path}.channels`),
+    audience_stats: decodeAudienceStats(o.audience_stats, `${path}.audience_stats`),
+    snapshot_count: nonNegative(o.snapshot_count, `${path}.snapshot_count`),
+    snapshot_digest: str(o.snapshot_digest, `${path}.snapshot_digest`),
+    snapshot,
+    prepared_at: timestamp(o.prepared_at, `${path}.prepared_at`),
+    expires_at: timestamp(o.expires_at, `${path}.expires_at`),
+    approved_at: nullableTimestamp(o.approved_at, `${path}.approved_at`),
+    approved_by: nullableStr(o.approved_by, `${path}.approved_by`),
+    closed_at: nullableTimestamp(o.closed_at, `${path}.closed_at`),
+    review: approvalReview(o.review, `${path}.review`),
+    rendered_content: renderedExample(o.rendered_content, `${path}.rendered_content`),
+    superseded_approval_id: nullableUuid(o.superseded_approval_id, `${path}.superseded_approval_id`),
+  }
+  // Contract consistency.
+  if (!DIGEST_RE.test(a.snapshot_digest)) throw new DecodeError(`${path}.snapshot_digest`, 'a SHA-256 hex digest')
+  if (a.channels.length === 0) throw new DecodeError(`${path}.channels`, 'at least one channel')
+  if (a.snapshot_count < 1) throw new DecodeError(`${path}.snapshot_count`, 'a positive count')
+  if ((a.status === 'revoked') !== (a.revoke_reason !== null)) throw new DecodeError(`${path}.revoke_reason`, 'set iff revoked')
+  const live = a.status === 'pending' || a.status === 'approved'
+  if (live !== (a.review !== null)) throw new DecodeError(`${path}.review`, 'present iff the approval is live')
+  if ((a.status === 'approved' || a.status === 'consumed') && (a.approved_at === null || a.approved_by === null)) {
+    throw new DecodeError(`${path}.approved_at`, 'set for a confirmed approval')
+  }
+  if (a.status === 'pending' && a.approved_at !== null) throw new DecodeError(`${path}.approved_at`, 'null while pending')
+  const keys = Object.keys(a.snapshot)
+  if (keys.length !== a.channels.length || !a.channels.every((c) => a.snapshot[c] !== undefined)) {
+    throw new DecodeError(`${path}.snapshot`, 'one entry per bound channel')
+  }
+  let total = 0
+  for (const c of a.channels) {
+    const cs = a.snapshot[c]!
+    total += cs.recipients
+    if (live !== (cs.render_issues !== null)) throw new DecodeError(`${path}.snapshot.${c}.render_issues`, 'present iff live')
+    if (cs.recipients !== (a.audience_stats.by_channel[c]?.eligible ?? -1)) {
+      throw new DecodeError(`${path}.snapshot.${c}.recipients`, 'the frozen eligible count')
+    }
+  }
+  if (total !== a.snapshot_count || a.audience_stats.messages !== a.snapshot_count) {
+    throw new DecodeError(`${path}.snapshot_count`, 'the sum of the frozen recipients')
+  }
+  return a
+}
+
+export function decodeApprovalResponse(v: unknown, path = 'response'): ApprovalResponse {
+  const o = obj(v, path)
+  closed(o, ['campaign', 'approval', 'server_time'], path)
+  const res: ApprovalResponse = {
+    campaign: decodeCampaign(o.campaign, `${path}.campaign`),
+    approval: decodeApproval(o.approval, `${path}.approval`),
+    server_time: timestamp(o.server_time, `${path}.server_time`),
+  }
+  const { campaign: c, approval: a } = res
+  if (a.campaign_id !== c.id) throw new DecodeError(`${path}.approval.campaign_id`, 'the campaign id')
+  if (a.campaign_version !== c.version) throw new DecodeError(`${path}.approval.campaign_version`, 'the campaign version')
+  const live = a.status === 'pending' || a.status === 'approved'
+  if (live && c.active_approval_id !== a.approval_id) {
+    throw new DecodeError(`${path}.campaign.active_approval_id`, 'the live approval')
+  }
+  if (a.status === 'pending' && c.status !== 'pending_approval') throw new DecodeError(`${path}.campaign.status`, 'pending_approval')
+  if (a.status === 'approved' && c.status !== 'approved') throw new DecodeError(`${path}.campaign.status`, 'approved')
+  return res
 }

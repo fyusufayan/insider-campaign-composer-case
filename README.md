@@ -3,15 +3,18 @@
 AI-assisted campaign composer: a marketer writes a brief, the AI proposes a
 typed audience rule, the backend validates it and shows a live,
 database-backed audience preview; the AI then writes SMS/email content that
-the backend validates and stores as immutable versions the marketer can edit.
-No real messages are sent.
+the backend validates and stores as immutable versions the marketer can edit;
+the marketer then prepares an approval (a frozen recipient snapshot), reviews
+it and confirms or withdraws it. No real messages are sent.
 
 Design and rationale: `docs/ARCHITECTURE.md`, `DECISIONS.md`, `docs/ROADMAP.md`,
 `CLAUDE.md`. Current scope: **Slices 1a, 1b and 2** — brief →
 interpretation (demo, or real Claude when a key is configured) → validated
 segment → audience preview → streamed content generation, editing,
-validation and immutable content versions. Approval and sending come in
-later slices.
+validation and immutable content versions, plus Slice 3's approval
+preparation, review, confirmation, withdrawal and expiry (CP14–CP15).
+Sending (worker, provider, rate limiting) comes in Slice 4: an approved
+campaign stays approved and nothing is sent.
 
 ## Quick start (Docker only)
 
@@ -88,6 +91,24 @@ make smoke
    (*Edited manually*); saving unchanged text reports *No changes* and creates
    no version.
 6. Reload or share `/campaigns/{id}` — campaign and content are stored in PostgreSQL.
+7. In **Review & approval**, click **Prepare approval**. The backend freezes
+   the eligible recipients (rule match + contact + consent, per selected
+   channel) and the content version into a pending approval; the review dialog
+   shows the frozen per-channel counts, the excluded `no_consent / no_contact`
+   counts, reach, the content version and origin, the snapshot digest, a
+   countdown to the 15-minute confirmation deadline, the rendered content and
+   every advisory offer/price finding. Tick the acknowledgement (a browser-side
+   confirmation step; the server does not record or enforce it — it enforces
+   the version and the reviewed binding) and click
+   **Confirm approval**: the campaign becomes *Approved* (valid 24 h) and the
+   read-only summary is shown after a reload too. Nothing is sent — there is no
+   send button in this version.
+8. **Withdraw approval** (pending: one click in the dialog or panel; approved:
+   a second confirmation step) releases the snapshot and returns the campaign to
+   *Content ready*. To see expiry, start the stack with short TTLs, e.g.
+   `APPROVAL_PENDING_TTL=30s APPROVAL_APPROVED_TTL=1m docker compose up -d`;
+   an expired approval cannot be confirmed (`409 approval_expired`) and the UI
+   shows *Approval expired — review again*.
 
 ### Restart, keep data
 

@@ -61,6 +61,8 @@ type prepEnv struct {
 	campaigns *campaign.Service
 	approvals *approval.Service
 	logs      *lockedBuffer
+	it        *ai.Interpreter
+	gen       *ai.Generator
 }
 
 // newPrepEnv uses a fresh migrated database with the 30-user fixture.
@@ -84,6 +86,7 @@ func newPrepEnvWithPool(t *testing.T, pool *pgxpool.Pool) *prepEnv {
 	if err != nil {
 		t.Fatal(err)
 	}
+	e.it, e.gen = it, gen
 	log := logging.New(e.logs, slog.LevelDebug)
 	e.campaigns, err = campaign.NewService(campaign.NewRepository(pool), segment.NewAudienceRepository(pool), it, gen, log)
 	if err != nil {
@@ -169,11 +172,14 @@ func (e *prepEnv) get(id campaign.ID) campaign.Campaign {
 
 func (e *prepEnv) prepare(c campaign.Campaign) approval.Summary {
 	e.t.Helper()
-	s, err := e.approvals.Prepare(ctxBG, c.ID, c.Version)
+	o, err := e.approvals.Prepare(ctxBG, c.ID, c.Version)
 	if err != nil {
 		e.t.Fatalf("prepare: %v", err)
 	}
-	return s
+	if o.Campaign.Version != o.Summary.CampaignVersion || o.Campaign.Status != campaign.StatusPendingApproval {
+		e.t.Fatalf("prepare outcome campaign = %+v", o.Campaign)
+	}
+	return o.Summary
 }
 
 func (e *prepEnv) exec(sql string, args ...any) {
@@ -813,8 +819,8 @@ type prepResult struct {
 func (e *prepEnv) prepareAsync(id campaign.ID, version int) <-chan prepResult {
 	ch := make(chan prepResult, 1)
 	go func() {
-		s, err := e.approvals.Prepare(ctxBG, id, version)
-		ch <- prepResult{s, err}
+		o, err := e.approvals.Prepare(ctxBG, id, version)
+		ch <- prepResult{o.Summary, err}
 	}()
 	return ch
 }
@@ -1219,12 +1225,12 @@ func TestPrepareConcurrentWithExpiry(t *testing.T) {
 				defer wg.Done()
 				<-start
 				if i%2 == 0 {
-					s, err := e.approvals.Prepare(ctxBG, c.ID, version)
+					o, err := e.approvals.Prepare(ctxBG, c.ID, version)
 					if err != nil {
 						results <- out{err: err}
 						return
 					}
-					results <- out{prep: &s}
+					results <- out{prep: &o.Summary}
 					return
 				}
 				id, err := e.approvals.ExpireDue(ctxBG, c.ID)

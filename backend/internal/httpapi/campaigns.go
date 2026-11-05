@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/fyusufayan/insider-campaign-composer-case/backend/internal/ai"
+	"github.com/fyusufayan/insider-campaign-composer-case/backend/internal/approval"
 	"github.com/fyusufayan/insider-campaign-composer-case/backend/internal/campaign"
 	"github.com/fyusufayan/insider-campaign-composer-case/backend/internal/segment"
 )
@@ -215,8 +216,33 @@ func (h *campaignHandlers) toAPIErrorOp(r *http.Request, err error, op aiOperati
 		valErr      *campaign.ValidationError
 		stateErr    *campaign.StateError
 		conflictErr *campaign.ConflictError
+		mismatchErr *approval.MismatchError
+		emptyErr    *approval.EmptyAudienceError
 	)
 	switch {
+	case errors.Is(err, approval.ErrNotFound):
+		return &APIError{Status: http.StatusNotFound, Code: CodeNotFound, Message: "approval not found"}
+	case errors.Is(err, approval.ErrExpired):
+		return &APIError{Status: http.StatusConflict, Code: CodeApprovalExpired,
+			Message: "the approval has expired; its recipient snapshot was released — reload the campaign and prepare a new approval"}
+	case errors.As(err, &mismatchErr):
+		details := make([]FieldError, len(mismatchErr.Fields))
+		for i, f := range mismatchErr.Fields {
+			details[i] = FieldError{Path: f, Code: CodeApprovalMismatch, Message: "differs from the prepared approval"}
+		}
+		return &APIError{Status: http.StatusConflict, Code: CodeApprovalMismatch,
+			Message: "the approval no longer matches what was reviewed; reload the campaign and review it again", Details: details}
+	case errors.As(err, &emptyErr):
+		return &APIError{Status: http.StatusUnprocessableEntity, Code: CodeEmptyAudience,
+			Message: "no selected channel has an eligible recipient (contact and consent are required); nothing was prepared"}
+	case errors.Is(err, approval.ErrAudienceChanged):
+		h.log.WarnContext(ctx, "audience changed during approval preparation", logAttrs...)
+		return &APIError{Status: http.StatusConflict, Code: CodeAudienceChanged,
+			Message: "customer data changed while the snapshot was being frozen; nothing was prepared, try again", Retryable: true}
+	case errors.Is(err, approval.ErrBusy):
+		h.log.WarnContext(ctx, "campaign busy", logAttrs...)
+		return &APIError{Status: http.StatusServiceUnavailable, Code: CodeCampaignBusy,
+			Message: "the campaign is busy with another operation; try again", Retryable: true}
 	case errors.As(err, &valErr):
 		return &APIError{Status: http.StatusUnprocessableEntity, Code: CodeValidationFailed,
 			Message: "request is invalid", Details: fieldErrors(valErr.Problems)}

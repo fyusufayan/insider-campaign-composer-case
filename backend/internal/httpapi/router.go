@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net/http"
 
+	"github.com/fyusufayan/insider-campaign-composer-case/backend/internal/approval"
 	"github.com/fyusufayan/insider-campaign-composer-case/backend/internal/campaign"
 )
 
@@ -13,6 +14,9 @@ import (
 // routes unregistered (used by middleware tests).
 type Deps struct {
 	Campaigns *campaign.Service
+	// Approvals serves the approval routes (registered only together with
+	// Campaigns).
+	Approvals *approval.Service
 	Readiness ReadinessFunc
 }
 
@@ -26,7 +30,11 @@ func NewRouter(log *slog.Logger, deps Deps) http.Handler {
 		mux.HandleFunc("GET /readyz", handleReadyz(deps.Readiness, log))
 	}
 	if deps.Campaigns != nil {
-		(&campaignHandlers{svc: deps.Campaigns, log: log}).register(mux)
+		ch := &campaignHandlers{svc: deps.Campaigns, log: log}
+		ch.register(mux)
+		if deps.Approvals != nil {
+			(&approvalHandlers{campaignHandlers: ch, svc: deps.Approvals}).register(mux)
+		}
 	}
 
 	var h http.Handler = envelopeUnmatched(mux)

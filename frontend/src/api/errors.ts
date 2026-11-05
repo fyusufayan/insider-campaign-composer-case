@@ -14,6 +14,10 @@ export type Operation =
   | 'generate'
   | 'saveContent'
   | 'validateContent'
+  | 'prepareApproval'
+  | 'approval'
+  | 'confirmApproval'
+  | 'withdrawApproval'
 
 export interface ErrorPresentation {
   title: string
@@ -55,6 +59,10 @@ export function presentError(err: ApiError, op: Operation): ErrorPresentation {
   if (op === 'generate') {
     const g = presentGenerationError(err, base)
     if (g) return g
+  }
+  if (op === 'prepareApproval' || op === 'approval' || op === 'confirmApproval' || op === 'withdrawApproval') {
+    const a = presentApprovalError(err, op, base)
+    if (a) return a
   }
 
   switch (err.code) {
@@ -156,6 +164,68 @@ function presentGenerationError(err: ApiError, base: ErrorPresentation): ErrorPr
         canRetry: false,
         canReload: true,
       }
+    default:
+      return null
+  }
+}
+
+/** Approval-specific wording (CP15). Nothing is retried automatically. */
+function presentApprovalError(err: ApiError, op: Operation, base: ErrorPresentation): ErrorPresentation | null {
+  switch (err.code) {
+    case 'approval_expired':
+      return {
+        ...base,
+        title: 'The approval has expired',
+        message:
+          'Its time limit passed, so it can no longer be confirmed and its recipient snapshot was released. Nothing was sent.',
+        hint: 'Reload the campaign and prepare a new approval to review a fresh snapshot.',
+        canRetry: false,
+        canReload: true,
+      }
+    case 'approval_mismatch':
+      return {
+        ...base,
+        title: 'The approval no longer matches what you reviewed',
+        hint: 'Nothing was confirmed. Reload the campaign and review the approval again.',
+        canRetry: false,
+        canReload: true,
+      }
+    case 'empty_audience':
+      return {
+        ...base,
+        title: 'Nobody can be messaged',
+        hint: 'No matched user has both a contact and consent for the selected channels. Nothing was prepared.',
+        canRetry: false,
+      }
+    case 'audience_changed':
+      return { ...base, title: 'Customer data changed during preparation', canRetry: true }
+    case 'campaign_busy':
+      return { ...base, title: 'The campaign is busy', canRetry: true }
+    case 'not_found':
+      return op === 'prepareApproval'
+        ? null
+        : {
+            ...base,
+            title: 'Approval not found',
+            message: 'This approval does not exist for this campaign. Reload the campaign.',
+            canRetry: false,
+            canReload: true,
+          }
+    case 'version_conflict':
+      return {
+        ...base,
+        title: 'This campaign was changed elsewhere',
+        message:
+          op === 'confirmApproval'
+            ? 'Nothing was confirmed: the campaign changed since you opened this review (another tab, an expiry or a withdrawal). Reload and review the current state.'
+            : op === 'withdrawApproval'
+              ? 'Nothing was withdrawn: the campaign changed since you loaded it. Reload and check the current approval.'
+              : 'Nothing was prepared: the campaign changed since you loaded it. Reload the latest version first.',
+        canRetry: false,
+        canReload: true,
+      }
+    case 'invalid_state':
+      return { ...base, title: 'This approval action is not allowed right now', canRetry: false, canReload: true }
     default:
       return null
   }

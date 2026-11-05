@@ -4,8 +4,10 @@
 // route (e.g. to delay, reorder or fail responses).
 
 import { vi } from 'vitest'
-import type { Campaign, Channel, ContentField, ContentVersion } from '@/api/types'
+import type { ApprovalSummary, Campaign, Channel, ContentField, ContentVersion, FieldError } from '@/api/types'
 import {
+  APPROVAL_ID,
+  approvalFor,
   CAMPAIGN_ID,
   CONTENT_LIMITS,
   EXAMPLE_CONTENT_BRIEF,
@@ -115,6 +117,13 @@ export class FakeBackend {
   /** Writes the generation stream (default: a successful demo generation). */
   generation: GenerationScript = (c, s) => this.defaultGeneration(c, s)
   streams: FakeSseStream[] = []
+  /** Approvals by id (the fake keeps every approval, like the database). */
+  approvals = new Map<string, ApprovalSummary>()
+  nextApprovalSeq = 0
+  pendingTtlMs = 15 * 60_000
+  approvedTtlMs = 24 * 3_600_000
+  /** Offer findings attached to the next prepared approval. */
+  nextFindings: FieldError[] = []
 
   constructor() {
     vi.stubGlobal('fetch', this.fetch)
@@ -167,13 +176,18 @@ export class FakeBackend {
       this.campaigns.set(c.id, c)
       return json(201, c)
     }
+    const am = path.match(/^\/api\/v1\/campaigns\/([^/]+)\/approvals(?:\/([^/]+)(?:\/([a-z]+))?)?$/)
+    if (am) return this.approvalRoute(method, am[1]!, am[2], am[3], body)
     const m = path.match(/^\/api\/v1\/campaigns\/([^/]+)(\/[a-z]+(?:\/[a-z]+)?)?$/)
     if (!m) return json(404, errorEnvelope('not_found', 'resource not found'))
     const [, id, sub] = m
     const c = this.campaigns.get(id!)
     if (!c) return json(404, errorEnvelope('not_found', 'campaign not found'))
 
-    if (method === 'GET' && !sub) return json(200, c)
+    if (method === 'GET' && !sub) {
+      this.lazyExpire(c.id)
+      return json(200, this.campaigns.get(c.id))
+    }
     if (method === 'POST' && sub === '/interpret') return this.interpretResult(c)
     if (method === 'GET' && sub === '/audience') {
       if (c.status === 'draft') {
@@ -334,6 +348,116 @@ export class FakeBackend {
       })
     }
     return json(200, { campaign: next, audience: audienceFor(next.channels) })
+  }
+
+  // ---- approvals (CP15) ----
+
+  private approvalResponse(status: number, c: Campaign, a: ApprovalSummary): Response {
+    return json(status, { campaign: c, approval: a, server_time: new Date().toISOString() })
+  }
+
+  /** Expires the campaign's live approval if due (like approval.ExpireDue): version + 1. */
+  lazyExpire(id: string): string | null {
+    const c = this.campaigns.get(id)
+    if (!c?.active_approval_id || (c.status !== 'pending_approval' && c.status !== 'approved')) return null
+    const a = this.approvals.get(c.active_approval_id)!
+    if (Date.parse(a.expires_at) > Date.now()) return null
+    const next: Campaign = { ...c, status: 'content_ready', active_approval_id: null, version: c.version + 1 }
+    this.campaigns.set(id, next)
+    this.approvals.set(a.approval_id, this.closed(a, next, { status: 'expired' }))
+    return a.approval_id
+  }
+
+  private closed(a: ApprovalSummary, c: Campaign, patch: Partial<ApprovalSummary>): ApprovalSummary {
+    const snapshot: ApprovalSummary['snapshot'] = {}
+    for (const ch of a.channels) snapshot[ch] = { recipients: a.snapshot[ch]!.recipients, render_issues: null }
+    return { ...a, ...patch, campaign_version: c.version, snapshot, review: null, rendered_content: null, closed_at: new Date().toISOString() }
+  }
+
+  /** Puts a campaign into pending_approval with an approval (test setup). */
+  seedPending(c: Campaign, v: ContentVersion, overrides: Partial<ApprovalSummary> = {}): { campaign: Campaign; approval: ApprovalSummary } {
+    const list = this.contents.get(c.id) ?? []
+    if (!list.some((x) => x.id === v.id)) this.contents.set(c.id, [...list, v])
+    const campaign: Campaign = { ...c, status: 'pending_approval', current_content_id: v.id, active_approval_id: overrides.approval_id ?? APPROVAL_ID }
+    this.campaigns.set(c.id, campaign)
+    const now = Date.now()
+    const a = approvalFor(campaign, v, {
+      prepared_at: new Date(now).toISOString(),
+      expires_at: new Date(now + this.pendingTtlMs).toISOString(),
+      ...overrides,
+    })
+    this.approvals.set(a.approval_id, a)
+    return { campaign, approval: a }
+  }
+
+  private approvalRoute(method: string, id: string, aid: string | undefined, action: string | undefined, body: unknown): Response {
+    const conflict = () => json(409, errorEnvelope('version_conflict', 'the campaign was changed by another request; reload it and try again'))
+    if (!this.campaigns.has(id)) return json(404, errorEnvelope('not_found', 'campaign not found'))
+    const expiredNow = this.lazyExpire(id)
+    const c = this.campaigns.get(id)!
+    const b = (body ?? {}) as Record<string, unknown>
+
+    if (method === 'POST' && !aid) {
+      if (b.expected_version !== c.version) return conflict()
+      if (c.status !== 'content_ready') {
+        return json(409, errorEnvelope('invalid_state', `prepare_approval is not allowed while the campaign is ${c.status}`))
+      }
+      const v = this.current(c)!
+      const approvalId = this.nextApprovalSeq++ === 0 ? APPROVAL_ID : `a1b2c3d4-e5f6-4a7b-8c9d-${String(this.nextApprovalSeq).padStart(12, '0')}`
+      const next: Campaign = { ...c, status: 'pending_approval', active_approval_id: approvalId, version: c.version + 1 }
+      this.campaigns.set(id, next)
+      const now = Date.now()
+      const a = approvalFor(next, v, {
+        approval_id: approvalId,
+        prepared_at: new Date(now).toISOString(),
+        expires_at: new Date(now + this.pendingTtlMs).toISOString(),
+      })
+      a.review!.offer_findings = this.nextFindings
+      this.approvals.set(approvalId, a)
+      return this.approvalResponse(201, next, a)
+    }
+    const a = aid ? this.approvals.get(aid) : undefined
+    if (!a || a.campaign_id !== id) return json(404, errorEnvelope('not_found', 'approval not found'))
+    if (method === 'GET' && !action) {
+      return this.approvalResponse(200, c, { ...a, campaign_version: c.version })
+    }
+    if (method !== 'POST' || (action !== 'confirm' && action !== 'withdraw')) {
+      return json(405, errorEnvelope('method_not_allowed', 'method not allowed'))
+    }
+    if (a.status === 'expired' || expiredNow === a.approval_id) {
+      return json(409, errorEnvelope('approval_expired', 'the approval has expired; its recipient snapshot was released — reload the campaign and prepare a new approval'))
+    }
+    if (action === 'confirm') {
+      if (a.status !== 'pending') return json(409, errorEnvelope('invalid_state', 'confirm_approval is not allowed: the approval is already confirmed'))
+      if (b.expected_version !== c.version) return conflict()
+      const chs = b.channels as Channel[]
+      if (b.segment_version !== a.segment_version || b.content_version !== a.content_version || chs.join() !== a.channels.join()) {
+        return json(409, errorEnvelope('approval_mismatch', 'the approval no longer matches what was reviewed', { details: [{ path: 'content_version', code: 'approval_mismatch', message: 'differs from the prepared approval' }] }))
+      }
+      const next: Campaign = { ...c, status: 'approved', version: c.version + 1 }
+      this.campaigns.set(id, next)
+      const now = Date.now()
+      const approved: ApprovalSummary = {
+        ...a,
+        status: 'approved',
+        campaign_version: next.version,
+        approved_at: new Date(now).toISOString(),
+        approved_by: 'marketer@demo',
+        expires_at: new Date(now + this.approvedTtlMs).toISOString(),
+      }
+      this.approvals.set(a.approval_id, approved)
+      return this.approvalResponse(200, next, approved)
+    }
+    // withdraw
+    if (a.status === 'revoked' || a.status === 'consumed') {
+      return json(409, errorEnvelope('invalid_state', 'withdraw_approval is not allowed: the approval was already withdrawn or replaced'))
+    }
+    if (b.expected_version !== c.version) return conflict()
+    const next: Campaign = { ...c, status: 'content_ready', active_approval_id: null, version: c.version + 1 }
+    this.campaigns.set(id, next)
+    const w = this.closed(a, next, { status: 'revoked', revoke_reason: 'withdrawn' })
+    this.approvals.set(a.approval_id, w)
+    return this.approvalResponse(200, next, w)
   }
 
   /** Simulates a change made by another tab/request (version bump). */

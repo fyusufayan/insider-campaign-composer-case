@@ -8,6 +8,7 @@
 
 import {
   DecodeError,
+  decodeApprovalResponse,
   decodeAudienceResponse,
   decodeCampaign,
   decodeContentSaved,
@@ -20,6 +21,10 @@ import {
 } from './decode'
 import { SseLimitError, SseParser } from './sse'
 import type {
+  ApprovalResponse,
+  ConfirmApprovalRequest,
+  PrepareApprovalRequest,
+  WithdrawApprovalRequest,
   AudienceResponse,
   Campaign,
   Channel,
@@ -308,6 +313,10 @@ function campaignUrl(id: string): string {
   return `${API_BASE}/campaigns/${encodeURIComponent(id)}`
 }
 
+function approvalUrl(id: string, approvalId: string): string {
+  return `${campaignUrl(id)}/approvals/${encodeURIComponent(approvalId)}`
+}
+
 export const api = {
   /** POST /api/v1/campaigns → 201 campaign. */
   createCampaign(req: CreateCampaignRequest, signal?: AbortSignal): Promise<Campaign> {
@@ -354,6 +363,28 @@ export const api = {
   /** POST /api/v1/campaigns/{id}/content/generations (SSE). Resolves after the commit. */
   generateContent(id: string, onEvent: (ev: GenerationEvent) => void, signal?: AbortSignal): Promise<ContentSaved> {
     return generationStream(`${campaignUrl(id)}/content/generations`, signal, onEvent)
+  },
+
+  /** POST /api/v1/campaigns/{id}/approvals {expected_version} → 201 {campaign, approval}. */
+  prepareApproval(id: string, expectedVersion: number, signal?: AbortSignal): Promise<ApprovalResponse> {
+    const body: PrepareApprovalRequest = { expected_version: expectedVersion }
+    return request('POST', `${campaignUrl(id)}/approvals`, (v) => decodeApprovalResponse(v), { body, signal })
+  },
+
+  /** GET /api/v1/campaigns/{id}/approvals/{aid} → {campaign, approval} (lazy expiry first). */
+  getApproval(id: string, approvalId: string, signal?: AbortSignal): Promise<ApprovalResponse> {
+    return request('GET', approvalUrl(id, approvalId), (v) => decodeApprovalResponse(v), { signal })
+  },
+
+  /** POST …/approvals/{aid}/confirm {expected_version, segment_version, content_version, channels}. */
+  confirmApproval(id: string, approvalId: string, req: ConfirmApprovalRequest, signal?: AbortSignal): Promise<ApprovalResponse> {
+    return request('POST', `${approvalUrl(id, approvalId)}/confirm`, (v) => decodeApprovalResponse(v), { body: req, signal })
+  },
+
+  /** POST …/approvals/{aid}/withdraw {expected_version}. */
+  withdrawApproval(id: string, approvalId: string, expectedVersion: number, signal?: AbortSignal): Promise<ApprovalResponse> {
+    const body: WithdrawApprovalRequest = { expected_version: expectedVersion }
+    return request('POST', `${approvalUrl(id, approvalId)}/withdraw`, (v) => decodeApprovalResponse(v), { body, signal })
   },
 
   /** GET /readyz → readiness incl. the LLM provider selected at startup. */

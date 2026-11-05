@@ -5,8 +5,8 @@
 // the campaign row, re-validates content and channels and computes the
 // audience partition.
 //
-// CP14 implements preparation and expiry. Confirmation, withdrawal, sending
-// and the HTTP surface follow in later checkpoints.
+// CP14 implements preparation and expiry; CP15 adds confirmation,
+// withdrawal and the reviewable summary read. Sending follows in Slice 4.
 //
 // Privacy boundary: recipient rows (user ids, names, cities) are read only
 // inside the preparation transaction and written only to campaign_deliveries.
@@ -47,9 +47,10 @@ func (s Status) Live() bool { return s == StatusPending || s == StatusApproved }
 // RevokeReason is campaign_approvals.revoke_reason.
 type RevokeReason string
 
-// Revoke reasons used by preparation.
+// Revoke reasons used by preparation and withdrawal.
 const (
 	RevokeSuperseded RevokeReason = "superseded"
+	RevokeWithdrawn  RevokeReason = "withdrawn"
 )
 
 // Pending TTL bounds. The default is ARCHITECTURE §16's APPROVAL_PENDING_TTL.
@@ -61,6 +62,19 @@ const (
 	// need an imminent expiry set expires_at directly.
 	MinPendingTTL = time.Second
 )
+
+// Approved TTL bounds. The default is ARCHITECTURE §16's
+// APPROVAL_APPROVED_TTL: a confirmed approval may be consumed until
+// approved_at + TTL (§5.3), both from one clock_timestamp() value taken
+// after the campaign lock.
+const (
+	DefaultApprovedTTL = 24 * time.Hour
+	MinApprovedTTL     = time.Second
+	MaxApprovedTTL     = 7 * 24 * time.Hour
+)
+
+// MaxApproverRunes bounds campaign_approvals.approved_by (APPROVER_NAME).
+const MaxApproverRunes = 100
 
 var (
 	// ErrEmptyAudience: no selected channel has an eligible recipient
@@ -78,7 +92,32 @@ var (
 	// (e.g. held rows that do not match the approval's snapshot_count). It
 	// indicates a bug; the transaction is rolled back.
 	ErrInconsistent = errors.New("approval: inconsistent approval state")
+	// ErrNotFound: no approval with the id belongs to the campaign (404).
+	ErrNotFound = errors.New("approval: not found")
+	// ErrExpired: the approval is expired — it was already, or it became
+	// due and was expired (committed) by this request after the campaign
+	// lock (409 approval_expired). It can never be confirmed or reactivated.
+	ErrExpired = errors.New("approval: expired")
+	// ErrMismatch: the approval's binding (segment version, content version,
+	// channels) differs from the request or from the campaign (409
+	// approval_mismatch); see *MismatchError.
+	ErrMismatch = errors.New("approval: binding mismatch")
 )
+
+// MismatchError lists which bound values differ. Paths name request fields
+// (segment_version, content_version, channels) or, for a difference between
+// the approval and the current campaign, campaign.<field>. Messages never
+// echo values.
+type MismatchError struct {
+	Fields []string
+}
+
+func (e *MismatchError) Error() string {
+	return fmt.Sprintf("approval: binding mismatch (%v)", e.Fields)
+}
+
+// Is matches ErrMismatch.
+func (e *MismatchError) Is(target error) bool { return target == ErrMismatch }
 
 // EmptyAudienceError carries the partition that was computed, so the
 // marketer can see why nobody is eligible (counts only).
@@ -105,18 +144,26 @@ type ChannelSnapshot struct {
 	RenderIssues map[string]int64
 }
 
-// Summary is the reviewable result of a preparation. It never contains
-// customer data. It is a domain type; the HTTP DTO (CP15) is defined in
+// Summary is the reviewable state of an approval: the result of a
+// preparation, or an approval read back / confirmed / withdrawn. It never
+// contains customer data. It is a domain type; the HTTP DTO is defined in
 // httpapi.
 type Summary struct {
-	ApprovalID      campaign.ID
-	CampaignID      campaign.ID
-	Status          Status
+	ApprovalID campaign.ID
+	CampaignID campaign.ID
+	Status     Status
+	// RevokeReason is set iff Status is revoked.
+	RevokeReason *RevokeReason
+	// CampaignVersion is the campaign version this summary was read or
+	// written at.
 	CampaignVersion int
 	SegmentVersion  int
 	ContentID       int64
 	ContentVersion  int
-	Channels        []segment.Channel
+	// ContentProvenance is the origin (ai/edited) and, for AI versions, the
+	// model and prompt version of the bound content version.
+	ContentProvenance content.Provenance
+	Channels          []segment.Channel
 	// AudienceStats is the exact partition stored in the approval row,
 	// computed in the transaction that wrote the held rows.
 	AudienceStats  segment.AudienceStats
@@ -124,8 +171,18 @@ type Summary struct {
 	SnapshotDigest string
 	PreparedAt     time.Time
 	ExpiresAt      time.Time
-	// Snapshot has one entry per selected channel.
+	ApprovedAt     *time.Time
+	ApprovedBy     string
+	ClosedAt       *time.Time
+	// Snapshot has one entry per selected channel. For a live approval the
+	// counts and render issues come from its held rows, verified against
+	// the stored count and digest; for a closed approval (held rows deleted)
+	// Recipients is the stored eligible count and RenderIssues is nil.
 	Snapshot map[segment.Channel]ChannelSnapshot
+	// Reviewed reports whether Review was computed: always for a live
+	// approval; never for a closed one (its content and brief may no longer
+	// be current, and nothing can be decided on it any more).
+	Reviewed bool
 	// Review is the content re-validation for the selected channels against
 	// the current content brief, including offer findings.
 	Review campaign.ApprovalReview

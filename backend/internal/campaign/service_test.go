@@ -38,6 +38,8 @@ type fixture struct {
 	audience *campaigntest.Audience
 	llm      *llm.Scripted
 	logs     *bytes.Buffer
+	it       *ai.Interpreter
+	gen      *ai.Generator
 }
 
 func newFixture(t *testing.T) *fixture {
@@ -51,6 +53,7 @@ func newFixture(t *testing.T) *fixture {
 	if err != nil {
 		t.Fatal(err)
 	}
+	f.it, f.gen = it, gen
 	f.svc, err = campaign.NewService(f.store, f.audience, it, gen, logging.New(f.logs, slog.LevelDebug))
 	if err != nil {
 		t.Fatal(err)

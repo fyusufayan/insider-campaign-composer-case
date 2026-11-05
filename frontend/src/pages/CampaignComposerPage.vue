@@ -10,6 +10,7 @@ import { useCampaignStore } from '@/stores/campaign'
 import { isCampaignId, useRecentCampaigns } from '@/composables/useRecentCampaigns'
 import { formatDateTime } from '@/composables/format'
 import type { Channel } from '@/api/types'
+import ApprovalPanel from '@/components/composer/ApprovalPanel.vue'
 import AudienceCard from '@/components/composer/AudienceCard.vue'
 import BriefCard from '@/components/composer/BriefCard.vue'
 import ContentPanel from '@/components/composer/ContentPanel.vue'
@@ -233,6 +234,7 @@ async function copyLink() {
       </div>
 
       <ContentPanel v-if="hasContentStep" class="content-step" @revise="revise" />
+      <ApprovalPanel v-if="hasContentStep" class="content-step" />
     </template>
   </div>
 </template>

@@ -135,6 +135,8 @@ export interface Campaign {
   content_brief: unknown
   /** Immutable content version the campaign points at; null without content. */
   current_content_id: number | null
+  /** The live (pending/approved) approval, or the consumed one once sending; null otherwise. */
+  active_approval_id: string | null
   version: number
   created_at: string
   updated_at: string
@@ -386,6 +388,11 @@ export type ErrorCode =
   | 'llm_refused'
   | 'llm_truncated'
   | 'invalid_brief'
+  | 'approval_expired'
+  | 'approval_mismatch'
+  | 'empty_audience'
+  | 'audience_changed'
+  | 'campaign_busy'
 
 export interface ErrorBody {
   /** One of ErrorCode for this API version; unknown codes are tolerated. */
@@ -399,6 +406,78 @@ export interface ErrorBody {
 
 export interface ErrorEnvelope {
   error: ErrorBody
+}
+
+// ---- Approval (CP15, backend httpapi/approvals.go approvalDTO) ----
+
+export type ApprovalStatus = 'pending' | 'approved' | 'consumed' | 'revoked' | 'expired'
+export type RevokeReason = 'superseded' | 'edited' | 'withdrawn' | 'campaign_cancelled'
+
+/** Frozen recipients of one channel (counts only, never recipients). */
+export interface ApprovalChannelSnapshot {
+  recipients: number
+  /** Held rows whose frozen values cannot be rendered, by code; null for a closed approval. */
+  render_issues: Record<string, number> | null
+}
+
+/** Re-validation of the bound content against the current content brief (live approvals). */
+export interface ApprovalReview {
+  validation: ContentValidation
+  /** Advisory keyword findings (unauthorized_offer / unauthorized_claim); never blocking for marketer text. */
+  offer_findings: FieldError[]
+  offer: Offer
+}
+
+export interface ApprovalSummary {
+  approval_id: string
+  campaign_id: string
+  status: ApprovalStatus
+  revoke_reason: RevokeReason | null
+  campaign_version: number
+  segment_version: number
+  content_id: number
+  content_version: number
+  content_origin: ContentOrigin
+  content_model: string | null
+  content_prompt_version: string | null
+  channels: Channel[]
+  audience_stats: AudienceStats
+  snapshot_count: number
+  snapshot_digest: string
+  snapshot: Partial<Record<Channel, ApprovalChannelSnapshot>>
+  prepared_at: string
+  expires_at: string
+  approved_at: string | null
+  approved_by: string | null
+  closed_at: string | null
+  /** null for a closed approval. */
+  review: ApprovalReview | null
+  /** The documented prepare field: review.validation.rendered_example (fictional values). */
+  rendered_content: RenderedExample | null
+  superseded_approval_id: string | null
+}
+
+/** Response of every approval endpoint. */
+export interface ApprovalResponse {
+  campaign: Campaign
+  approval: ApprovalSummary
+  /** Server clock at response time (aligns the expiry countdown). */
+  server_time: string
+}
+
+export interface PrepareApprovalRequest {
+  expected_version: number
+}
+
+export interface ConfirmApprovalRequest {
+  expected_version: number
+  segment_version: number
+  content_version: number
+  channels: Channel[]
+}
+
+export interface WithdrawApprovalRequest {
+  expected_version: number
 }
 
 // ---- Field limits (backend campaign.NewDraft; runes after NFC + trim) ----

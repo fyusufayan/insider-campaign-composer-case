@@ -314,3 +314,17 @@ A request is never issued after its slot deadline: `gatedSender.Attempt` aborts 
 **Reasoning.** Core contains everything the requirements demand plus the mechanisms needed to *prove* reliability claims. Items that improve polish or catch rarer bugs follow only when core is complete.
 
 **Trade-offs.** Some valuable test techniques (property-based testing) are deferred in favour of fixture-based tests with hand-computed expectations.
+
+---
+
+## ADR-023 — Approval decision contract (CP15): version-guarded confirm/withdraw, committed lazy expiry, UI-level acknowledgement
+
+**Context.** CP15 makes prepare/confirm/withdraw usable from the browser. §11 documented `confirm {segment_version, content_version, channels}` and `withdraw` without a body and no read route; CP14 left open whether confirming advisory offer findings needs an explicit acknowledgement, and whether an approved campaign can be re-prepared in one step.
+
+**Alternatives.** (a) Confirm bound only to the approval binding; (b) additionally require `expected_version` (optimistic concurrency like every other mutation). For the findings: (i) a new `acknowledge_offer_findings` field enforced server-side; (ii) an explicit UI acknowledgement with the findings always shown. For expiry discovered inside a decision: roll it back with the rejected request, or commit it. For reading: embed the full summary in every campaign response, or a dedicated `GET …/approvals/{aid}`.
+
+**Decision.** (b): every approval mutation carries `expected_version`; confirm additionally binds approval id, segment version, content version and channels. (ii): no acknowledgement field was invented; the dialog lists every finding and requires explicit checkboxes. Expiry found under the decision's lock is **committed** and the request ends `409 approval_expired`. A dedicated `GET …/approvals/{aid}` (lazy expiry, then a REPEATABLE READ re-verification of the held rows) and `campaign.active_approval_id`. Re-preparing an approved campaign stays two explicit steps (withdraw, then prepare). Responses are `{campaign, approval, server_time}`.
+
+**Reasoning.** `expected_version` makes stale tabs deterministic (`409 version_conflict`) even when the binding is unchanged, and matches the rest of the API. The keyword checker is advisory and conservative; a server-side flag would only prove that a checkbox was ticked, while the binding already proves the marketer confirmed exactly the reviewed approval — and a flag would change the documented contract solely for UX. Committing a due expiry keeps it final (an expired approval can never be reactivated or confirmed, invariant 8) and avoids clients looping on a state that is never closed. A dedicated read keeps campaign responses cheap and lets reload restore the dialog from server truth, not client state.
+
+**Trade-offs.** The acknowledgement is not recorded server-side (no audit of who ticked what beyond `approved_by`). `approval_expired` takes precedence over `version_conflict`, so a pre-expiry client learns why. The read re-scans the held rows (≤ 2 × users); acceptable at this scale. Revoke-on-edit (editing a pending/approved campaign revokes its approval in the same transaction) is still deferred: edits are refused with "withdraw it first".

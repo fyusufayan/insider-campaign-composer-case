@@ -34,7 +34,10 @@ type campaignDTO struct {
 	ContentBrief json.RawMessage `json:"content_brief"`
 	// CurrentContentID is the immutable content version the campaign points
 	// at (null without content); GET /content returns it.
-	CurrentContentID *int64    `json:"current_content_id"`
+	CurrentContentID *int64 `json:"current_content_id"`
+	// ActiveApprovalID is the pending/approved approval (or, once sending,
+	// the consumed one); null otherwise. GET …/approvals/{id} reads it.
+	ActiveApprovalID *string   `json:"active_approval_id"`
 	Version          int       `json:"version"`
 	CreatedAt        time.Time `json:"created_at"`
 	UpdatedAt        time.Time `json:"updated_at"`
@@ -54,6 +57,10 @@ func toCampaignDTO(c campaign.Campaign) (campaignDTO, error) {
 		CurrentContentID: c.CurrentContentID,
 		CreatedAt:        c.CreatedAt,
 		UpdatedAt:        c.UpdatedAt,
+	}
+	if c.ActiveApprovalID != nil {
+		a := c.ActiveApprovalID.String()
+		dto.ActiveApprovalID = &a
 	}
 	if !c.Segment.IsZero() {
 		rule, err := json.Marshal(c.Segment)

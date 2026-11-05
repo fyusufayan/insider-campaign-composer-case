@@ -91,6 +91,10 @@ services:
       CLAUDE_CONTENT_EFFORT: ${CLAUDE_CONTENT_EFFORT:-medium}
       CLAUDE_CONTENT_TIMEOUT: ${CLAUDE_CONTENT_TIMEOUT:-90s}
       CLAUDE_CONTENT_MAX_TOKENS: ${CLAUDE_CONTENT_MAX_TOKENS:-8000}
+      # Approval expiry (ADR-006) and the recorded approver (no auth).
+      APPROVAL_PENDING_TTL: ${APPROVAL_PENDING_TTL:-15m}
+      APPROVAL_APPROVED_TTL: ${APPROVAL_APPROVED_TTL:-24h}
+      APPROVER_NAME: ${APPROVER_NAME:-marketer@demo}
     depends_on:
       seed:
         condition: service_completed_successfully

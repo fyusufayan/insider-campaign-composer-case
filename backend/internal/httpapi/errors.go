@@ -17,6 +17,12 @@ const (
 	CodeVersionConflict      = "version_conflict"
 	CodeAudienceUnavailable  = "audience_unavailable"
 	CodeRequestCancelled     = "request_cancelled"
+	// Approval codes (ARCHITECTURE §11).
+	CodeApprovalExpired  = "approval_expired"
+	CodeApprovalMismatch = "approval_mismatch"
+	CodeEmptyAudience    = "empty_audience"
+	CodeAudienceChanged  = "audience_changed"
+	CodeCampaignBusy     = "campaign_busy"
 	// AI codes; identical to ai.Code* (asserted by a test).
 	CodeAIOutputInvalid = "ai_output_invalid"
 	CodeLLMUnavailable  = "llm_unavailable"

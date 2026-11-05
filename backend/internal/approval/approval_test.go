@@ -270,6 +270,7 @@ func TestNoStatementReactivatesAnApproval(t *testing.T) {
 		"lock": sqlLockApproval, "expire": sqlExpireApproval, "revoke": sqlRevokeApproval,
 		"delete": sqlDeleteHeld, "count": sqlCountApprovalRows, "insert approval": sqlInsertApproval,
 		"insert held": sqlInsertHeldTail, "read": sqlReadSnapshot,
+		"select": sqlSelectApproval, "select for update": sqlSelectApprovalForUpdate,
 	}
 	for name, stmt := range stmts {
 		low := strings.ToLower(stmt)
@@ -290,5 +291,10 @@ func TestNoStatementReactivatesAnApproval(t *testing.T) {
 	}
 	if !strings.Contains(sqlInsertApproval, "'pending'") {
 		t.Error("new approvals must start pending")
+	}
+	// The only forward move into approved is the confirming CAS, and it
+	// applies only to a pending approval (never to expired/revoked ones).
+	if !strings.Contains(sqlConfirmApproval, "status = 'approved'") || !strings.Contains(sqlConfirmApproval, "a.status = 'pending'") {
+		t.Error("confirm CAS must move pending → approved only")
 	}
 }

@@ -11,6 +11,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 )
 
 // LLMProvider is the LLM implementation selected once at startup.
@@ -96,6 +98,30 @@ const (
 	maxLLMMaxRetries     = 5
 )
 
+// Approval configures the approval workflow (ARCHITECTURE §5.3, §16;
+// ADR-006). The bounds mirror internal/approval's (asserted by a test).
+type Approval struct {
+	// PendingTTL is APPROVAL_PENDING_TTL: a prepared approval may be
+	// confirmed until prepared_at + PendingTTL.
+	PendingTTL time.Duration
+	// ApprovedTTL is APPROVAL_APPROVED_TTL: a confirmed approval may be
+	// consumed until approved_at + ApprovedTTL.
+	ApprovedTTL time.Duration
+	// ApproverName is APPROVER_NAME, recorded as approved_by (no auth).
+	ApproverName string
+}
+
+// Approval defaults and bounds.
+const (
+	DefaultApprovalPendingTTL  = 15 * time.Minute
+	DefaultApprovalApprovedTTL = 24 * time.Hour
+	DefaultApproverName        = "marketer@demo"
+	MinApprovalTTL             = time.Second
+	MaxApprovalPendingTTL      = 24 * time.Hour
+	MaxApprovalApprovedTTL     = 7 * 24 * time.Hour
+	MaxApproverNameRunes       = 100
+)
+
 // Config is the validated configuration of the api process.
 type Config struct {
 	DatabaseURL Secret // may contain credentials
@@ -105,6 +131,8 @@ type Config struct {
 	Segment AITask
 	// Content configures content generation (CLAUDE_CONTENT_*).
 	Content AITask
+	// Approval configures approval expiry and the recorded approver.
+	Approval Approval
 }
 
 // Load reads configuration through getenv (os.Getenv in production) and
@@ -155,6 +183,10 @@ func Load(getenv func(string) string) (Config, error) {
 	})
 	errs = append(errs, cntErrs...)
 	cfg.Content = cnt
+
+	appr, apprErrs := loadApproval(get)
+	errs = append(errs, apprErrs...)
+	cfg.Approval = appr
 
 	if len(errs) > 0 {
 		return Config{}, fmt.Errorf("invalid configuration: %w", errors.Join(errs...))
@@ -222,6 +254,35 @@ func loadAITask(get func(string) string, prefix string, def AITask) (AITask, []e
 		}
 	}
 	return t, errs
+}
+
+// loadApproval reads APPROVAL_PENDING_TTL, APPROVAL_APPROVED_TTL and
+// APPROVER_NAME.
+func loadApproval(get func(string) string) (Approval, []error) {
+	var errs []error
+	a := Approval{PendingTTL: DefaultApprovalPendingTTL, ApprovedTTL: DefaultApprovalApprovedTTL, ApproverName: DefaultApproverName}
+	ttl := func(key string, maxTTL time.Duration, dst *time.Duration) {
+		v := get(key)
+		if v == "" {
+			return
+		}
+		d, err := time.ParseDuration(v)
+		if err != nil || d < MinApprovalTTL || d > maxTTL {
+			errs = append(errs, fmt.Errorf("%s must be a duration in [%s, %s] (got %q)", key, MinApprovalTTL, maxTTL, v))
+			return
+		}
+		*dst = d
+	}
+	ttl("APPROVAL_PENDING_TTL", MaxApprovalPendingTTL, &a.PendingTTL)
+	ttl("APPROVAL_APPROVED_TTL", MaxApprovalApprovedTTL, &a.ApprovedTTL)
+	if v := get("APPROVER_NAME"); v != "" {
+		if !utf8.ValidString(v) || utf8.RuneCountInString(v) > MaxApproverNameRunes || strings.IndexFunc(v, unicode.IsControl) >= 0 {
+			errs = append(errs, fmt.Errorf("APPROVER_NAME must be at most %d printable characters", MaxApproverNameRunes))
+		} else {
+			a.ApproverName = v
+		}
+	}
+	return a, errs
 }
 
 func contains(set []string, s string) bool {

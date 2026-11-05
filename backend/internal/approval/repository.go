@@ -134,18 +134,18 @@ type PrepareParams struct {
 // points at an incomplete snapshot and a superseded approval stays live
 // when preparation fails. No network I/O other than the database happens
 // while the transaction is open.
-func (r *Repository) Prepare(ctx context.Context, p PrepareParams) (Summary, error) {
+func (r *Repository) Prepare(ctx context.Context, p PrepareParams) (Outcome, error) {
 	if p.PendingTTL < MinPendingTTL || p.PendingTTL > MaxPendingTTL {
-		return Summary{}, fmt.Errorf("approval: pending TTL %s out of range", p.PendingTTL)
+		return Outcome{}, fmt.Errorf("approval: pending TTL %s out of range", p.PendingTTL)
 	}
-	var out Summary
+	var out Outcome
 	err := r.inLockedTx(ctx, p.CampaignID, func(ctx context.Context, tx pgx.Tx, cur campaign.Campaign) error {
-		s, err := prepareTx(ctx, tx, cur, p)
-		out = s
+		o, err := prepareTx(ctx, tx, cur, p)
+		out = o
 		return err
 	})
 	if err != nil {
-		return Summary{}, err
+		return Outcome{}, err
 	}
 	return out, nil
 }
@@ -323,44 +323,44 @@ func expireIfDue(ctx context.Context, tx pgx.Tx, cur campaign.Campaign) (campaig
 	return saved, &id, nil
 }
 
-func prepareTx(ctx context.Context, tx pgx.Tx, cur campaign.Campaign, p PrepareParams) (Summary, error) {
+func prepareTx(ctx context.Context, tx pgx.Tx, cur campaign.Campaign, p PrepareParams) (Outcome, error) {
 	// 2. A due approval is never superseded: expiring it advances the
 	// version, so the version check below rejects this preparation.
 	cur, _, err := expireIfDue(ctx, tx, cur)
 	if err != nil {
-		return Summary{}, err
+		return Outcome{}, err
 	}
 
 	// 3. Version, state machine, content.
 	if err := cur.CheckPrepareAt(p.ExpectedVersion); err != nil {
-		return Summary{}, err
+		return Outcome{}, err
 	}
 	v, err := campaign.CurrentContentTx(ctx, tx, cur)
 	if err != nil {
-		return Summary{}, err
+		return Outcome{}, err
 	}
 	if v == nil {
-		return Summary{}, fmt.Errorf("%w: campaign %s has no content version", ErrInconsistent, cur.ID)
+		return Outcome{}, fmt.Errorf("%w: campaign %s has no content version", ErrInconsistent, cur.ID)
 	}
 	review, err := cur.ReviewForApproval(*v)
 	if err != nil {
-		return Summary{}, err
+		return Outcome{}, err
 	}
 
 	// 4. Supersede a still-live approval.
 	live, err := lockActiveApproval(ctx, tx, cur)
 	if err != nil {
-		return Summary{}, err
+		return Outcome{}, err
 	}
 	var superseded *campaign.ID
 	if live != nil {
 		// Only a pending approval is ever superseded; an approved one was
 		// refused by the state check (defence in depth).
 		if live.status != StatusPending {
-			return Summary{}, fmt.Errorf("%w: refusing to supersede %s approval %s", ErrInconsistent, live.status, live.id)
+			return Outcome{}, fmt.Errorf("%w: refusing to supersede %s approval %s", ErrInconsistent, live.status, live.id)
 		}
 		if err := closeApproval(ctx, tx, cur, live, sqlRevokeApproval, string(RevokeSuperseded)); err != nil {
-			return Summary{}, err
+			return Outcome{}, err
 		}
 		id := live.id
 		superseded = &id
@@ -370,24 +370,24 @@ func prepareTx(ctx context.Context, tx pgx.Tx, cur campaign.Campaign, p PrepareP
 	// snapshot), recomputed now: preview counts are never reused.
 	stats, want, err := segment.ComputeSnapshotAudience(ctx, tx, cur.Segment, cur.Channels)
 	if err != nil {
-		return Summary{}, fmt.Errorf("campaign %s: audience: %w", cur.ID, err)
+		return Outcome{}, fmt.Errorf("campaign %s: audience: %w", cur.ID, err)
 	}
 	if stats.Messages == 0 {
-		return Summary{}, &EmptyAudienceError{Stats: stats}
+		return Outcome{}, &EmptyAudienceError{Stats: stats}
 	}
 	eq, err := segment.CompileEligible(cur.Segment, cur.Channels)
 	if err != nil {
-		return Summary{}, fmt.Errorf("campaign %s: compile eligible: %w", cur.ID, err)
+		return Outcome{}, fmt.Errorf("campaign %s: compile eligible: %w", cur.ID, err)
 	}
 
 	// 6. The approval row.
 	rule, err := json.Marshal(cur.Segment)
 	if err != nil {
-		return Summary{}, fmt.Errorf("campaign %s: encode rule: %w", cur.ID, err)
+		return Outcome{}, fmt.Errorf("campaign %s: encode rule: %w", cur.ID, err)
 	}
 	statsJSON, err := json.Marshal(stats)
 	if err != nil {
-		return Summary{}, fmt.Errorf("campaign %s: encode audience stats: %w", cur.ID, err)
+		return Outcome{}, fmt.Errorf("campaign %s: encode audience stats: %w", cur.ID, err)
 	}
 	channels := make([]string, len(cur.Channels))
 	for i, ch := range cur.Channels {
@@ -400,7 +400,7 @@ func prepareTx(ctx context.Context, tx pgx.Tx, cur campaign.Campaign, p PrepareP
 	if err := tx.QueryRow(ctx, sqlInsertApproval, uuidArg(cur.ID), cur.SegmentVersion, rule, v.ID, channels,
 		statsJSON, stats.Messages, want.Digest, p.PendingTTL.Microseconds()).
 		Scan(&approvalUUID, &preparedAt, &expiresAt); err != nil {
-		return Summary{}, fmt.Errorf("campaign %s: insert approval: %w", cur.ID, err)
+		return Outcome{}, fmt.Errorf("campaign %s: insert approval: %w", cur.ID, err)
 	}
 	approvalID := campaign.ID(approvalUUID.Bytes)
 
@@ -409,21 +409,21 @@ func prepareTx(ctx context.Context, tx pgx.Tx, cur campaign.Campaign, p PrepareP
 		"%C", "$"+strconv.Itoa(eq.NextParam), "%A", "$"+strconv.Itoa(eq.NextParam+1)).Replace(sqlInsertHeldTail)
 	tag, err := tx.Exec(ctx, insertSQL, append(eq.Args, uuidArg(cur.ID), approvalUUID)...)
 	if err != nil {
-		return Summary{}, fmt.Errorf("approval %s: insert held rows: %w", approvalID, err)
+		return Outcome{}, fmt.Errorf("approval %s: insert held rows: %w", approvalID, err)
 	}
 	if tag.RowsAffected() != stats.Messages {
-		return Summary{}, fmt.Errorf("%w: inserted %d held rows, partition has %d messages",
+		return Outcome{}, fmt.Errorf("%w: inserted %d held rows, partition has %d messages",
 			ErrAudienceChanged, tag.RowsAffected(), stats.Messages)
 	}
 
 	// 8. Read back, verify and review the frozen values.
 	snap, digest, err := readSnapshot(ctx, tx, approvalID, v.Content, cur.Channels)
 	if err != nil {
-		return Summary{}, err
+		return Outcome{}, err
 	}
 	if digest != want.Digest || snap[segment.ChannelSMS].Recipients != want.SMS ||
 		snap[segment.ChannelEmail].Recipients != want.Email {
-		return Summary{}, fmt.Errorf("%w: held rows differ from the expected snapshot", ErrAudienceChanged)
+		return Outcome{}, fmt.Errorf("%w: held rows differ from the expected snapshot", ErrAudienceChanged)
 	}
 	for _, ch := range []segment.Channel{segment.ChannelSMS, segment.ChannelEmail} {
 		if _, selected := stats.ByChannel[ch]; !selected {
@@ -434,30 +434,32 @@ func prepareTx(ctx context.Context, tx pgx.Tx, cur campaign.Campaign, p PrepareP
 	// 9. Campaign state.
 	next, err := cur.WithPreparedApproval(p.ExpectedVersion, approvalID)
 	if err != nil {
-		return Summary{}, err
+		return Outcome{}, err
 	}
 	saved, err := campaign.WriteApprovalStateTx(ctx, tx, cur, next)
 	if err != nil {
-		return Summary{}, err
+		return Outcome{}, err
 	}
-	return Summary{
-		ApprovalID:      approvalID,
-		CampaignID:      saved.ID,
-		Status:          StatusPending,
-		CampaignVersion: saved.Version,
-		SegmentVersion:  saved.SegmentVersion,
-		ContentID:       v.ID,
-		ContentVersion:  v.Number,
-		Channels:        append([]segment.Channel{}, saved.Channels...),
-		AudienceStats:   stats,
-		SnapshotCount:   stats.Messages,
-		SnapshotDigest:  want.Digest,
-		PreparedAt:      preparedAt.UTC(),
-		ExpiresAt:       expiresAt.UTC(),
-		Snapshot:        snap,
-		Review:          review,
-		Superseded:      superseded,
-	}, nil
+	return Outcome{Campaign: saved, Summary: Summary{
+		ApprovalID:        approvalID,
+		CampaignID:        saved.ID,
+		Status:            StatusPending,
+		CampaignVersion:   saved.Version,
+		SegmentVersion:    saved.SegmentVersion,
+		ContentID:         v.ID,
+		ContentVersion:    v.Number,
+		ContentProvenance: v.Provenance,
+		Channels:          append([]segment.Channel{}, saved.Channels...),
+		AudienceStats:     stats,
+		SnapshotCount:     stats.Messages,
+		SnapshotDigest:    want.Digest,
+		PreparedAt:        preparedAt.UTC(),
+		ExpiresAt:         expiresAt.UTC(),
+		Snapshot:          snap,
+		Reviewed:          true,
+		Review:            review,
+		Superseded:        superseded,
+	}}, nil
 }
 
 // readSnapshot streams the approval's delivery rows in digest order,

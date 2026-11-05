@@ -563,9 +563,29 @@ func TestContentGenerationRefusedStatuses(t *testing.T) {
 	if _, err := e.svc.GenerateContent(context.Background(), mustID(t, draft.ID)); !errors.Is(err, campaign.ErrInvalidState) {
 		t.Errorf("draft: err = %v", err)
 	}
+	// pending_approval / approved through real approvals (a raw status
+	// update would fabricate a live status without an approval, which lazy
+	// expiry rightly reports as inconsistent).
+	r := e.readyViaAPI(prepSMS, prepSubject, prepBody)
+	prep := e.prepareViaAPI(r.ID, r.Version)
+	check := func(name, id string) {
+		t.Helper()
+		calls := e.llm.Calls()
+		_, err := e.svc.GenerateContent(context.Background(), mustID(t, id))
+		if !errors.Is(err, campaign.ErrInvalidState) || e.llm.Calls() != calls {
+			t.Errorf("%s: err = %v, model calls %d → %d", name, err, calls, e.llm.Calls())
+		}
+	}
+	check("pending_approval", r.ID)
+	must[apiApprovalResp](t, e.call("POST", approvalPath(r.ID, prep.Approval.ApprovalID, "confirm"), confirmBody(prep.Campaign.Version, prep.Approval)), 200)
+	check("approved", r.ID)
+	if n := len(e.contentRows(r.ID)); n != 1 {
+		t.Errorf("approval campaign content rows = %d", n)
+	}
+
 	c := e.create("States")
 	e.interpret(c.ID, replyIstanbul)
-	for _, st := range []string{"pending_approval", "approved", "sending", "completed", "cancelled"} {
+	for _, st := range []string{"sending", "completed", "cancelled"} {
 		if _, err := e.pool.Exec(context.Background(), `UPDATE campaigns SET status = $2 WHERE id = $1::uuid`, c.ID, st); err != nil {
 			t.Fatal(err)
 		}
@@ -575,7 +595,7 @@ func TestContentGenerationRefusedStatuses(t *testing.T) {
 			t.Errorf("%s: err = %v, model calls %d → %d", st, err, calls, e.llm.Calls())
 		}
 	}
-	if n := e.totalContentRows(); n != 0 {
+	if n := len(e.contentRows(c.ID)); n != 0 {
 		t.Errorf("%d content rows", n)
 	}
 	if _, cv, err := e.svc.CurrentContent(context.Background(), mustID(t, c.ID)); err != nil || cv != nil {
