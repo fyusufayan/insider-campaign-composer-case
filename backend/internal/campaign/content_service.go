@@ -11,19 +11,61 @@ import (
 	"github.com/fyusufayan/insider-campaign-composer-case/backend/internal/segment"
 )
 
-// ContentResult is the outcome of a successful content generation.
+// ContentResult is the outcome of a successful content generation or edit.
 type ContentResult struct {
 	// Campaign is the committed campaign (status content_ready, pointing at
 	// Version).
 	Campaign Campaign
-	// Version is the inserted immutable content version.
+	// Version is the current immutable content version: the inserted one,
+	// or for an unchanged edit the existing one.
 	Version content.Version
 	// Validation is the content validation result for the campaign's
-	// channels (statistics, warnings, rendered example).
+	// channels (statistics, warnings, rendered example); identical to what
+	// Content returns for the committed state.
 	Validation content.Result
+	// Created is false for an edit whose canonical text equals the current
+	// version (nothing was written; the campaign version did not move).
+	Created bool
 	// Notes are display notes of the generator (e.g. demo output).
 	Notes []string
 }
+
+// GenerationEventKind distinguishes the events of GenerateContentStream.
+type GenerationEventKind string
+
+// Generation events, in the order they can occur.
+const (
+	// GenerationStarted: the state checks passed and the model is about to
+	// be called (Start is set). Errors before this event are plain request
+	// errors (not found, invalid state, no channels).
+	GenerationStarted GenerationEventKind = "started"
+	// GenerationProgress: an ai.Progress event (Progress is set). Deltas are
+	// unvalidated previews.
+	GenerationProgress GenerationEventKind = "progress"
+	// GenerationPersisting: validated content is being written in the
+	// campaign-locked transaction.
+	GenerationPersisting GenerationEventKind = "persisting"
+)
+
+// GenerationStart describes the campaign state a generation is based on.
+type GenerationStart struct {
+	CampaignID      ID
+	CampaignVersion int
+	Channels        []segment.Channel
+	PromptVersion   string
+}
+
+// GenerationEvent is one event of GenerateContentStream.
+type GenerationEvent struct {
+	Kind     GenerationEventKind
+	Start    GenerationStart
+	Progress ai.Progress
+}
+
+// GenerationObserver receives generation events synchronously and in order.
+// Returning an error stops the generation (no model call or write follows)
+// and GenerateContentStream returns it unchanged.
+type GenerationObserver func(GenerationEvent) error
 
 // GenerateContent generates SMS/email templates for the campaign's selected
 // channels and stores them as a new immutable content version.
@@ -43,6 +85,17 @@ type ContentResult struct {
 // If the campaign changed while the model was working, the result is
 // discarded with a *ConflictError and no row is inserted.
 func (s *Service) GenerateContent(ctx context.Context, id ID) (ContentResult, error) {
+	return s.GenerateContentStream(ctx, id, nil)
+}
+
+// GenerateContentStream is GenerateContent with events reported to observe
+// (nil = none): started (after the state checks), the generator's progress,
+// and persisting (before the transaction). Success is returned only after
+// the transaction committed.
+func (s *Service) GenerateContentStream(ctx context.Context, id ID, observe GenerationObserver) (ContentResult, error) {
+	if observe == nil {
+		observe = func(GenerationEvent) error { return nil }
+	}
 	observed, err := s.store.Get(ctx, id)
 	if err != nil {
 		return ContentResult{}, err
@@ -55,9 +108,18 @@ func (s *Service) GenerateContent(ctx context.Context, id ID) (ContentResult, er
 		return ContentResult{}, fmt.Errorf("campaign %s: stored content brief is invalid: %w", id, problems)
 	}
 
+	if err := observe(GenerationEvent{Kind: GenerationStarted, Start: GenerationStart{
+		CampaignID: observed.ID, CampaignVersion: observed.Version,
+		Channels: append([]segment.Channel(nil), observed.Channels...), PromptVersion: ai.ContentPromptVersion,
+	}}); err != nil {
+		return ContentResult{}, err
+	}
+
 	start := time.Now()
-	gen, err := s.generator.Generate(ctx, ai.GenerationInput{
+	gen, err := s.generator.GenerateStream(ctx, ai.GenerationInput{
 		Brief: brief, Rule: observed.Segment, Channels: observed.Channels,
+	}, func(p ai.Progress) error {
+		return observe(GenerationEvent{Kind: GenerationProgress, Progress: p})
 	})
 	if err != nil {
 		s.logGenerateFailure(ctx, id, err, time.Since(start))
@@ -69,6 +131,9 @@ func (s *Service) GenerateContent(ctx context.Context, id ID) (ContentResult, er
 		"output_tokens", gen.Meta.Usage.OutputTokens, "channels", channelNames(gen.Channels),
 		"warnings", len(gen.Validation.Warnings), "duration_ms", time.Since(start).Milliseconds())
 
+	if err := observe(GenerationEvent{Kind: GenerationPersisting}); err != nil {
+		return ContentResult{}, err
+	}
 	prov := content.Provenance{Origin: content.OriginAI, Model: gen.Meta.Model, PromptVersion: gen.Meta.PromptVersion}
 	saved, v, err := s.store.SaveContent(ctx, id, func(cur Campaign, current *content.Version) (Campaign, content.Version, bool, error) {
 		next, v, err := cur.WithAIContent(observed.Version, observed.Channels, current, gen.Content, prov)
@@ -83,7 +148,84 @@ func (s *Service) GenerateContent(ctx context.Context, id ID) (ContentResult, er
 	}
 	s.log.InfoContext(ctx, "content version saved", "campaign_id", id.String(), "content_id", v.ID,
 		"content_version", v.Number, "version", saved.Version, "status", string(saved.Status))
-	return ContentResult{Campaign: saved, Version: v, Validation: gen.Validation, Notes: gen.Notes}, nil
+	return ContentResult{Campaign: saved, Version: v, Validation: saved.ValidateStored(v), Created: true, Notes: gen.Notes}, nil
+}
+
+// ContentView is the current content of a campaign: the version it points
+// at (nil if none) and its validation for the current channel selection.
+type ContentView struct {
+	Campaign   Campaign
+	Version    *content.Version
+	Validation *content.Result
+}
+
+// Content returns the campaign's current content version (re-validated when
+// read) with its validation for the selected channels. Read-only; allowed in
+// every status. A campaign without content has Version and Validation nil.
+func (s *Service) Content(ctx context.Context, id ID) (ContentView, error) {
+	c, v, err := s.CurrentContent(ctx, id)
+	if err != nil {
+		return ContentView{}, err
+	}
+	view := ContentView{Campaign: c, Version: v}
+	if v != nil {
+		res := c.ValidateStored(*v)
+		view.Validation = &res
+	}
+	return view, nil
+}
+
+// DraftValidation is the read-only validation of a draft against a campaign
+// state (CampaignVersion and Channels identify it).
+type DraftValidation struct {
+	CampaignID      ID
+	CampaignVersion int
+	Channels        []segment.Channel
+	Result          content.Result
+}
+
+// ValidateContent validates a draft for the campaign's selected channels
+// without saving anything (debounced editor validation). Content problems
+// are part of the result, not an error.
+func (s *Service) ValidateContent(ctx context.Context, id ID, d content.Draft) (DraftValidation, error) {
+	c, err := s.store.Get(ctx, id)
+	if err != nil {
+		return DraftValidation{}, err
+	}
+	if err := c.CheckValidateContent(); err != nil {
+		return DraftValidation{}, err
+	}
+	_, res := c.ValidateDraft(d)
+	return DraftValidation{CampaignID: c.ID, CampaignVersion: c.Version,
+		Channels: append([]segment.Channel{}, c.Channels...), Result: res}, nil
+}
+
+// EditContent saves marketer-edited content on top of expectedVersion: one
+// short transaction locks the campaign row, re-checks version and status,
+// validates the whole draft for the selected channels and inserts a new
+// immutable version (origin edited) — or, if the canonical text equals the
+// current version, writes nothing and returns the current version with
+// Created = false. A stale expectedVersion is a *ConflictError; invalid
+// content a *ValidationError. No approval is touched (pending_approval and
+// approved are refused until Slice 3).
+func (s *Service) EditContent(ctx context.Context, id ID, d content.Draft, expectedVersion int) (ContentResult, error) {
+	created := false
+	saved, v, err := s.store.SaveContent(ctx, id, func(cur Campaign, current *content.Version) (Campaign, content.Version, bool, error) {
+		next, v, ok, err := cur.WithEditedContent(expectedVersion, current, d)
+		created = ok
+		return next, v, ok, err
+	})
+	if err != nil {
+		return ContentResult{}, err
+	}
+	if created {
+		s.log.InfoContext(ctx, "content version saved", "campaign_id", id.String(), "content_id", v.ID,
+			"content_version", v.Number, "origin", string(v.Provenance.Origin), "version", saved.Version)
+	} else {
+		s.log.InfoContext(ctx, "content unchanged; no version created", "campaign_id", id.String(),
+			"content_id", v.ID, "content_version", v.Number, "version", saved.Version)
+	}
+	return ContentResult{Campaign: saved, Version: v, Validation: saved.ValidateStored(v), Created: created}, nil
 }
 
 // CurrentContent returns the campaign and its current content version (nil

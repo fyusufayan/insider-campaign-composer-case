@@ -272,3 +272,17 @@ func (b *body) stringArray(key string) ([]string, bool) {
 	}
 	return out, valid
 }
+
+// optionalString returns an optional string property: absent or null → nil.
+func (b *body) optionalString(key string) *string {
+	v, ok := b.fields[key]
+	if !ok || string(bytes.TrimSpace(v)) == "null" {
+		return nil
+	}
+	var s string
+	if v[0] != '"' || json.Unmarshal(v, &s) != nil {
+		b.add(key, fieldWrongType, "must be a string or null")
+		return nil
+	}
+	return &s
+}

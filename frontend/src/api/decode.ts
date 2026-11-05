@@ -15,12 +15,28 @@ import type {
   Channel,
   ChannelStats,
   ContentBrief,
+  ContentField,
+  ContentLimits,
+  ContentSaved,
+  ContentValidation,
+  ContentVersion,
+  CurrentContent,
+  DraftValidation,
   ErrorBody,
+  ExampleValues,
   FieldError,
+  GenerationDelta,
+  GenerationErrorEvent,
+  GenerationEvent,
+  GenerationMeta,
+  GenerationPhase,
+  GenerationStatus,
   InterpretResponse,
   InterpretationRecord,
+  LengthStats,
   ReachStats,
   ReadinessReport,
+  RenderedExample,
   SegmentRule,
 } from './types'
 
@@ -50,6 +66,17 @@ function str(v: unknown, path: string): string {
 function int(v: unknown, path: string): number {
   if (typeof v !== 'number' || !Number.isInteger(v)) throw new DecodeError(path, 'an integer')
   return v
+}
+
+function nullableInt(v: unknown, path: string): number | null {
+  // Absent is tolerated for older payloads; present must be int or null.
+  if (v === null || v === undefined) return null
+  return int(v, path)
+}
+
+function nullableStr(v: unknown, path: string): string | null {
+  if (v === null) return null
+  return str(v, path)
 }
 
 function bool(v: unknown, path: string): boolean {
@@ -132,6 +159,7 @@ export function decodeCampaign(v: unknown, path = 'campaign'): Campaign {
     segment_version: int(o.segment_version, `${path}.segment_version`),
     interpretation: interpretation(o.interpretation, `${path}.interpretation`),
     content_brief: o.content_brief ?? null,
+    current_content_id: nullableInt(o.current_content_id, `${path}.current_content_id`),
     version: int(o.version, `${path}.version`),
     created_at: str(o.created_at, `${path}.created_at`),
     updated_at: str(o.updated_at, `${path}.updated_at`),
@@ -249,4 +277,218 @@ export function parseContentBrief(v: unknown): ContentBrief | null {
     return { goal, tone, length, offer: { kind: 'percent_discount', value: offer.value } }
   }
   return null
+}
+
+// ---- Content (CP13) ----
+
+const CONTENT_FIELD_NAMES: readonly ContentField[] = ['sms_body', 'email_subject', 'email_body']
+
+function contentField(v: unknown, path: string): ContentField {
+  if (typeof v !== 'string' || !(CONTENT_FIELD_NAMES as readonly string[]).includes(v)) {
+    throw new DecodeError(path, 'a content field name')
+  }
+  return v as ContentField
+}
+
+function fieldErrors(v: unknown, path: string): FieldError[] {
+  if (!Array.isArray(v)) throw new DecodeError(path, 'an array')
+  return v.map((d, i) => fieldError(d, `${path}[${i}]`))
+}
+
+function lengthStats(v: unknown, path: string): LengthStats | null {
+  if (v === null || v === undefined) return null
+  const o = obj(v, path)
+  return { chars_worst_case: int(o.chars_worst_case, `${path}.chars_worst_case`), limit: int(o.limit, `${path}.limit`) }
+}
+
+function renderedExample(v: unknown, path: string): RenderedExample | null {
+  if (v === null || v === undefined) return null
+  const o = obj(v, path)
+  let email: RenderedExample['email'] = null
+  if (o.email !== null && o.email !== undefined) {
+    const e = obj(o.email, `${path}.email`)
+    email = {
+      subject: str(e.subject, `${path}.email.subject`),
+      body: str(e.body, `${path}.email.body`),
+      footer: str(e.footer, `${path}.email.footer`),
+    }
+  }
+  return { sms: o.sms === undefined ? null : nullableStr(o.sms, `${path}.sms`), email }
+}
+
+export function decodeContentValidation(v: unknown, path = 'validation'): ContentValidation {
+  const o = obj(v, path)
+  const res: ContentValidation = {
+    valid: bool(o.valid, `${path}.valid`),
+    errors: fieldErrors(o.errors, `${path}.errors`),
+    warnings: fieldErrors(o.warnings, `${path}.warnings`),
+    sms: lengthStats(o.sms, `${path}.sms`),
+    subject: lengthStats(o.subject, `${path}.subject`),
+    body: lengthStats(o.body, `${path}.body`),
+    rendered_example: renderedExample(o.rendered_example, `${path}.rendered_example`),
+  }
+  // Consistency of the contract: valid ⇔ no errors; examples only when valid.
+  if (res.valid !== (res.errors.length === 0)) throw new DecodeError(`${path}.valid`, 'valid iff errors is empty')
+  if (!res.valid && res.rendered_example !== null) throw new DecodeError(`${path}.rendered_example`, 'null when invalid')
+  return res
+}
+
+export function decodeContentVersion(v: unknown, path = 'content'): ContentVersion {
+  const o = obj(v, path)
+  const origin = o.origin
+  if (origin !== 'ai' && origin !== 'edited') throw new DecodeError(`${path}.origin`, '"ai" or "edited"')
+  const cv: ContentVersion = {
+    id: int(o.id, `${path}.id`),
+    version: int(o.version, `${path}.version`),
+    origin,
+    model: nullableStr(o.model, `${path}.model`),
+    prompt_version: nullableStr(o.prompt_version, `${path}.prompt_version`),
+    created_at: str(o.created_at, `${path}.created_at`),
+    sms_body: nullableStr(o.sms_body, `${path}.sms_body`),
+    email_subject: nullableStr(o.email_subject, `${path}.email_subject`),
+    email_body: nullableStr(o.email_body, `${path}.email_body`),
+  }
+  if (cv.version < 1) throw new DecodeError(`${path}.version`, 'a positive integer')
+  if (origin === 'ai' && (cv.model === null || cv.prompt_version === null)) {
+    throw new DecodeError(`${path}.model`, 'model and prompt_version for AI content')
+  }
+  if (origin === 'edited' && (cv.model !== null || cv.prompt_version !== null)) {
+    throw new DecodeError(`${path}.model`, 'null model and prompt_version for edited content')
+  }
+  return cv
+}
+
+function exampleValues(v: unknown, path: string): ExampleValues {
+  const o = obj(v, path)
+  return {
+    first_name: str(o.first_name, `${path}.first_name`),
+    last_name: str(o.last_name, `${path}.last_name`),
+    city: str(o.city, `${path}.city`),
+  }
+}
+
+function contentLimits(v: unknown, path: string): ContentLimits {
+  const o = obj(v, path)
+  return {
+    sms_body: int(o.sms_body, `${path}.sms_body`),
+    email_subject: int(o.email_subject, `${path}.email_subject`),
+    email_body: int(o.email_body, `${path}.email_body`),
+  }
+}
+
+export function decodeCurrentContent(v: unknown, path = 'current_content'): CurrentContent {
+  const o = obj(v, path)
+  const res: CurrentContent = {
+    campaign_id: str(o.campaign_id, `${path}.campaign_id`),
+    campaign_version: int(o.campaign_version, `${path}.campaign_version`),
+    channels: channels(o.channels, `${path}.channels`),
+    content: o.content === null ? null : decodeContentVersion(o.content, `${path}.content`),
+    validation: o.validation === null ? null : decodeContentValidation(o.validation, `${path}.validation`),
+    example_values: exampleValues(o.example_values, `${path}.example_values`),
+    limits: contentLimits(o.limits, `${path}.limits`),
+  }
+  if ((res.content === null) !== (res.validation === null)) {
+    throw new DecodeError(`${path}.validation`, 'present exactly when content is present')
+  }
+  return res
+}
+
+export function decodeDraftValidation(v: unknown): DraftValidation {
+  const o = obj(v, 'response')
+  return {
+    campaign_id: str(o.campaign_id, 'campaign_id'),
+    campaign_version: int(o.campaign_version, 'campaign_version'),
+    channels: channels(o.channels, 'channels'),
+    validation: decodeContentValidation(o.validation),
+    example_values: exampleValues(o.example_values, 'example_values'),
+    limits: contentLimits(o.limits, 'limits'),
+  }
+}
+
+export function decodeContentSaved(v: unknown, path = 'response'): ContentSaved {
+  const o = obj(v, path)
+  const res: ContentSaved = {
+    campaign: decodeCampaign(o.campaign, `${path}.campaign`),
+    content: decodeCurrentContent(o.content, `${path}.content`),
+    created: bool(o.created, `${path}.created`),
+    notes: strArray(o.notes, `${path}.notes`),
+  }
+  if (res.content.content === null) throw new DecodeError(`${path}.content.content`, 'the saved version')
+  if (res.content.campaign_id !== res.campaign.id || res.content.campaign_version !== res.campaign.version) {
+    throw new DecodeError(`${path}.content.campaign_version`, 'the saved campaign version')
+  }
+  if (res.campaign.current_content_id !== res.content.content.id) {
+    throw new DecodeError(`${path}.campaign.current_content_id`, 'the saved content id')
+  }
+  return res
+}
+
+const PHASES: readonly GenerationPhase[] = ['generating', 'thinking', 'validating', 'repairing', 'persisting']
+
+/** Max text of one streamed delta (the server splits at 2 KiB). */
+const MAX_DELTA_CHARS = 4096
+
+/**
+ * Decodes one event of the generation stream by its name. Unknown event
+ * names are rejected (the contract is closed).
+ */
+export function decodeGenerationEvent(name: string, data: unknown): GenerationEvent {
+  switch (name) {
+    case 'meta': {
+      const o = obj(data, 'meta')
+      const meta: GenerationMeta = {
+        campaign_id: str(o.campaign_id, 'meta.campaign_id'),
+        campaign_version: int(o.campaign_version, 'meta.campaign_version'),
+        channels: channels(o.channels, 'meta.channels'),
+        fields: Array.isArray(o.fields)
+          ? o.fields.map((f, i) => contentField(f, `meta.fields[${i}]`))
+          : (() => {
+              throw new DecodeError('meta.fields', 'an array')
+            })(),
+        prompt_version: str(o.prompt_version, 'meta.prompt_version'),
+        limits: contentLimits(o.limits, 'meta.limits'),
+      }
+      return { type: 'meta', data: meta }
+    }
+    case 'status': {
+      const o = obj(data, 'status')
+      const phase = str(o.phase, 'status.phase')
+      if (!(PHASES as readonly string[]).includes(phase)) throw new DecodeError('status.phase', 'a known phase')
+      const st: GenerationStatus = { phase: phase as GenerationPhase }
+      if (o.attempt !== undefined) st.attempt = int(o.attempt, 'status.attempt')
+      if (o.reason !== undefined) {
+        if (o.reason !== 'initial' && o.reason !== 'truncation_retry' && o.reason !== 'repair') {
+          throw new DecodeError('status.reason', 'a known reason')
+        }
+        st.reason = o.reason
+      }
+      if (o.problems !== undefined) st.problems = int(o.problems, 'status.problems')
+      return { type: 'status', data: st }
+    }
+    case 'delta': {
+      const o = obj(data, 'delta')
+      if (o.preview !== true) throw new DecodeError('delta.preview', 'true')
+      const text = str(o.text, 'delta.text')
+      if (text.length > MAX_DELTA_CHARS) throw new DecodeError('delta.text', 'a bounded fragment')
+      const d: GenerationDelta = {
+        attempt: int(o.attempt, 'delta.attempt'),
+        field: contentField(o.field, 'delta.field'),
+        text,
+        preview: true,
+      }
+      return { type: 'delta', data: d }
+    }
+    case 'validated':
+      return { type: 'validated', data: decodeContentSaved(data, 'validated') }
+    case 'error': {
+      const o = obj(data, 'error_event')
+      const ev: GenerationErrorEvent = {
+        status: int(o.status, 'error_event.status'),
+        error: decodeErrorBody(o.error, 'error_event.error'),
+      }
+      return { type: 'error', data: ev }
+    }
+    default:
+      throw new DecodeError('event', 'a known event name')
+  }
 }

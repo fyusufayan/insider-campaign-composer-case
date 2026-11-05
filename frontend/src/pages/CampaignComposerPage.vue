@@ -12,6 +12,7 @@ import { formatDateTime } from '@/composables/format'
 import type { Channel } from '@/api/types'
 import AudienceCard from '@/components/composer/AudienceCard.vue'
 import BriefCard from '@/components/composer/BriefCard.vue'
+import ContentPanel from '@/components/composer/ContentPanel.vue'
 import InterpretationCard from '@/components/composer/InterpretationCard.vue'
 import SegmentRuleView from '@/components/composer/SegmentRuleView.vue'
 import ErrorNotice from '@/components/ui/ErrorNotice.vue'
@@ -41,6 +42,7 @@ const {
   canInterpret,
   canEditChannels,
   hasAudienceStep,
+  hasContentStep,
   selectedChannels,
   conflict,
 } = storeToRefs(store)
@@ -229,6 +231,8 @@ async function copyLink() {
           </section>
         </div>
       </div>
+
+      <ContentPanel v-if="hasContentStep" class="content-step" @revise="revise" />
     </template>
   </div>
 </template>
@@ -293,6 +297,9 @@ async function copyLink() {
   flex-direction: column;
   gap: var(--space-5);
   min-width: 0;
+}
+.content-step {
+  margin-top: var(--space-5);
 }
 .placeholder {
   border-style: dashed;

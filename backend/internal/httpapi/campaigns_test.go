@@ -38,9 +38,20 @@ type apiFixture struct {
 	store    *campaigntest.MemoryStore
 	audience *campaigntest.Audience
 	logs     *bytes.Buffer
+	gen      *ai.Generator
+	it       *ai.Interpreter
+	svc      *campaign.Service
 }
 
+func (f *apiFixture) svcForTest(*testing.T) *campaign.Service { return f.svc }
+
 func newAPIFixture(t *testing.T, client llm.Client) *apiFixture {
+	t.Helper()
+	return newAPIFixtureTimeout(t, client, 5*time.Second)
+}
+
+// newAPIFixtureTimeout is newAPIFixture with the content generation timeout.
+func newAPIFixtureTimeout(t *testing.T, client llm.Client, contentTimeout time.Duration) *apiFixture {
 	t.Helper()
 	log, logs := newTestLogger()
 	f := &apiFixture{t: t, store: campaigntest.NewMemoryStore(), audience: &campaigntest.Audience{}, logs: logs}
@@ -52,14 +63,16 @@ func newAPIFixture(t *testing.T, client llm.Client) *apiFixture {
 	if err != nil {
 		t.Fatal(err)
 	}
-	gen, err := ai.NewGenerator(client, ai.GeneratorConfig{Model: "cfg-content-model", Effort: llm.EffortMedium, Timeout: 5 * time.Second, MaxTokens: 2000})
+	gen, err := ai.NewGenerator(client, ai.GeneratorConfig{Model: "cfg-content-model", Effort: llm.EffortMedium, Timeout: contentTimeout, MaxTokens: 2000})
 	if err != nil {
 		t.Fatal(err)
 	}
+	f.gen, f.it = gen, it
 	svc, err := campaign.NewService(f.store, f.audience, it, gen, log)
 	if err != nil {
 		t.Fatal(err)
 	}
+	f.svc = svc
 	f.router = NewRouter(log, Deps{Campaigns: svc})
 	return f
 }

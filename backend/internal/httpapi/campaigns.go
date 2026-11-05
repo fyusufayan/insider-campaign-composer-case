@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strconv"
+	"time"
 
 	"github.com/fyusufayan/insider-campaign-composer-case/backend/internal/ai"
 	"github.com/fyusufayan/insider-campaign-composer-case/backend/internal/campaign"
@@ -21,6 +22,8 @@ const statusClientClosedRequest = 499
 type campaignHandlers struct {
 	svc *campaign.Service
 	log *slog.Logger
+	// heartbeat is the SSE keep-alive interval (sseHeartbeat; tests shorten it).
+	heartbeat time.Duration
 }
 
 func (h *campaignHandlers) register(mux *http.ServeMux) {
@@ -29,6 +32,7 @@ func (h *campaignHandlers) register(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/v1/campaigns/{id}/interpret", h.interpret)
 	mux.HandleFunc("GET /api/v1/campaigns/{id}/audience", h.audience)
 	mux.HandleFunc("PUT /api/v1/campaigns/{id}/channels", h.setChannels)
+	h.registerContent(mux)
 }
 
 // POST /api/v1/campaigns {name, brief} → 201 campaign.
@@ -184,12 +188,27 @@ func (h *campaignHandlers) fail(w http.ResponseWriter, r *http.Request, err erro
 // client are fixed texts and never contain SQL, connection strings, secrets,
 // raw provider errors or customer data.
 func (h *campaignHandlers) toAPIError(r *http.Request, err error) *APIError {
+	return h.toAPIErrorOp(r, err, opInterpret)
+}
+
+// aiOperation selects the wording of AI error messages.
+type aiOperation int
+
+const (
+	opInterpret aiOperation = iota
+	opGenerateContent
+)
+
+func (h *campaignHandlers) toAPIErrorOp(r *http.Request, err error, op aiOperation) *APIError {
 	ctx := r.Context()
 	logAttrs := []any{"err", err}
 	if id, perr := campaign.ParseID(r.PathValue("id")); perr == nil {
 		logAttrs = append(logAttrs, "campaign_id", id.String())
 	}
 	if e, ok := ai.AsError(err); ok {
+		if op == opGenerateContent {
+			return contentAIAPIError(e)
+		}
 		return aiAPIError(e)
 	}
 	var (
@@ -253,6 +272,23 @@ func aiAPIError(e *ai.Error) *APIError {
 	default:
 		return &APIError{Status: http.StatusInternalServerError, Code: CodeInternal, Message: "internal server error"}
 	}
+}
+
+// contentAIAPIError maps content generation failures (§7.5) with messages
+// about content rather than the brief. Nothing is saved in any case.
+func contentAIAPIError(e *ai.Error) *APIError {
+	apiErr := aiAPIError(e)
+	switch e.Kind {
+	case ai.ErrLLMRefused:
+		apiErr.Message = "the AI model declined to write this content; write it manually or adjust the brief"
+	case ai.ErrLLMTruncated:
+		apiErr.Message = "the AI answer was incomplete (output limit reached); nothing was saved, try again"
+	case ai.ErrOutputInvalid:
+		apiErr.Message = "the generated content was invalid after one repair attempt; nothing was saved"
+	case ai.ErrLLMUnavailable:
+		apiErr.Message = "the AI service is unavailable or timed out; nothing was saved, try again later"
+	}
+	return apiErr
 }
 
 func fieldErrors(errs segment.Errors) []FieldError {

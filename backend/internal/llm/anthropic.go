@@ -33,12 +33,11 @@ var (
 // before anything is sent: a malformed request is a programming or
 // configuration error, never retryable.
 var (
-	errNoModel          = errors.New("model is required")
-	errNoMaxTokens      = errors.New("max tokens must be positive")
-	errNoMessages       = errors.New("at least one message is required")
-	errLastNotUser      = errors.New("the last message must be a user message (assistant prefill is not used)")
-	errEmptyMessage     = errors.New("message content must not be empty")
-	errStreamNotEnabled = errors.New("anthropic streaming is not implemented yet (content generation, slice 2)")
+	errNoModel      = errors.New("model is required")
+	errNoMaxTokens  = errors.New("max tokens must be positive")
+	errNoMessages   = errors.New("at least one message is required")
+	errLastNotUser  = errors.New("the last message must be a user message (assistant prefill is not used)")
+	errEmptyMessage = errors.New("message content must not be empty")
 )
 
 // AnthropicConfig configures NewAnthropic.
@@ -146,14 +145,105 @@ func (a *Anthropic) Complete(ctx context.Context, req Request) (Response, error)
 	return resp, nil
 }
 
-// Stream implements Client. Streaming (content generation) arrives with
-// Slice 2; until then it fails without contacting the provider and never
-// substitutes another implementation.
-func (a *Anthropic) Stream(ctx context.Context, _ Request, _ func(StreamEvent) error) (Response, error) {
+// Stream implements Client with one streaming Messages API call
+// (client.Messages.NewStreaming; the SDK's bounded automatic retries apply to
+// establishing the stream, never to an interrupted one). Every event is
+// accumulated with Message.Accumulate; a thinking block start is reported as
+// EventThinking and each text delta as EventTextDelta. The accumulated message
+// goes through the same conversion as Complete, so callers see an identical
+// Response. A stream that ends without message_stop, an in-stream error event
+// or an Accumulate failure is ErrUnavailable and its partial output is never
+// returned. If onEvent fails, the stream (and the HTTP response) is closed and
+// that error is returned unchanged.
+func (a *Anthropic) Stream(ctx context.Context, req Request, onEvent func(StreamEvent) error) (Response, error) {
 	if err := ctx.Err(); err != nil {
 		return Response{}, err
 	}
-	return Response{}, &Error{Kind: ErrRejected, Err: errStreamNotEnabled}
+	params, err := buildMessageParams(req)
+	if err != nil {
+		e := &Error{Kind: ErrRejected, Err: fmt.Errorf("anthropic: invalid request: %w", err)}
+		a.logFailure(ctx, req, e, 0)
+		return Response{}, e
+	}
+
+	var httpResp *http.Response
+	start := a.now()
+	stream := a.client.Messages.NewStreaming(ctx, params, option.WithResponseInto(&httpResp))
+	defer func() { _ = stream.Close() }()
+
+	var (
+		msg      anthropic.Message
+		stopped  bool
+		eventErr error
+		thinking bool
+	)
+	for stream.Next() {
+		ev := stream.Current()
+		if err := msg.Accumulate(ev); err != nil {
+			eventErr = &Error{Kind: ErrUnavailable, RequestID: responseRequestID(httpResp),
+				Err: errors.New("anthropic: inconsistent stream events")}
+			break
+		}
+		switch v := ev.AsAny().(type) {
+		case anthropic.ContentBlockStartEvent:
+			switch v.ContentBlock.Type {
+			case "thinking", "redacted_thinking":
+				if !thinking { // reported once per message
+					thinking = true
+					if err := onEvent(StreamEvent{Kind: EventThinking}); err != nil {
+						eventErr = err
+					}
+				}
+			}
+		case anthropic.ContentBlockDeltaEvent:
+			if v.Delta.Type == "text_delta" && v.Delta.Text != "" {
+				if err := onEvent(StreamEvent{Kind: EventTextDelta, Text: v.Delta.Text}); err != nil {
+					eventErr = err
+				}
+			}
+		case anthropic.MessageStopEvent:
+			stopped = true
+		}
+		if eventErr != nil {
+			break
+		}
+	}
+	latency := a.now().Sub(start)
+	if eventErr != nil {
+		if cerr := ctx.Err(); cerr != nil {
+			eventErr = fmt.Errorf("llm: anthropic request: %w", cerr)
+		}
+		a.logFailure(ctx, req, eventErr, latency)
+		return Response{}, eventErr
+	}
+	if err := stream.Err(); err != nil {
+		e := classifyAnthropicError(ctx, err)
+		a.logFailure(ctx, req, e, latency)
+		return Response{}, e
+	}
+	if cerr := ctx.Err(); cerr != nil {
+		e := fmt.Errorf("llm: anthropic request: %w", cerr)
+		a.logFailure(ctx, req, e, latency)
+		return Response{}, e
+	}
+	if !stopped {
+		e := &Error{Kind: ErrUnavailable, RequestID: responseRequestID(httpResp),
+			Err: errors.New("anthropic: stream ended before message_stop")}
+		a.logFailure(ctx, req, e, latency)
+		return Response{}, e
+	}
+
+	resp, err := convertMessage(&msg, responseRequestID(httpResp), latency)
+	if err != nil {
+		a.logFailure(ctx, req, err, latency)
+		return Response{}, err
+	}
+	a.log.InfoContext(ctx, "llm stream completed", "provider", AnthropicProviderName,
+		"task", req.Task, "model_requested", req.Model, "model", resp.Model,
+		"effort", string(req.Effort), "max_tokens", req.MaxTokens, "stop_reason", string(resp.StopReason),
+		"input_tokens", resp.Usage.InputTokens, "output_tokens", resp.Usage.OutputTokens,
+		"latency_ms", latency.Milliseconds(), "provider_request_id", resp.RequestID)
+	return resp, nil
 }
 
 func (a *Anthropic) logFailure(ctx context.Context, req Request, err error, latency time.Duration) {
@@ -319,14 +409,25 @@ func classifyAnthropicError(ctx context.Context, err error) error {
 	var apiErr *anthropic.Error
 	if errors.As(err, &apiErr) {
 		e := &Error{StatusCode: apiErr.StatusCode, RequestID: apiErr.RequestID}
-		if retryableStatus(apiErr.StatusCode) {
-			e.Kind = ErrUnavailable
-		} else {
-			e.Kind = ErrRejected
-		}
 		typ := string(apiErr.Type())
 		if typ == "" {
 			typ = "unknown_error"
+		}
+		switch {
+		case apiErr.StatusCode < http.StatusBadRequest:
+			// An error event inside a 200 stream (e.g. overloaded_error
+			// after the response started): the HTTP status says nothing,
+			// so the API error type decides. The SDK does not retry it.
+			e.StatusCode = 0
+			if retryableStreamErrorType(typ) {
+				e.Kind = ErrUnavailable
+			} else {
+				e.Kind = ErrRejected
+			}
+		case retryableStatus(apiErr.StatusCode):
+			e.Kind = ErrUnavailable
+		default:
+			e.Kind = ErrRejected
 		}
 		e.Err = fmt.Errorf("anthropic %s", typ)
 		return e
@@ -354,4 +455,16 @@ func classifyAnthropicError(ctx context.Context, err error) error {
 func retryableStatus(code int) bool {
 	return code == http.StatusRequestTimeout || code == http.StatusConflict ||
 		code == http.StatusTooManyRequests || code >= http.StatusInternalServerError
+}
+
+// retryableStreamErrorType classifies an in-stream error event by its API
+// error type: overload, rate limiting, timeouts and internal errors are
+// transient; anything else (invalid_request_error, authentication, …) is not.
+func retryableStreamErrorType(typ string) bool {
+	switch typ {
+	case "overloaded_error", "rate_limit_error", "api_error", "timeout_error":
+		return true
+	default:
+		return false
+	}
 }

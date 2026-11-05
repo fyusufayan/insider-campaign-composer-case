@@ -163,3 +163,28 @@ func checkOfferPolicy(fields []offerField, o Offer) (errs segment.Errors, warns 
 	}
 	return nil, warns
 }
+
+// OfferPolicyAdvisories applies the same offer policy to validated content
+// that the marketer wrote or edited, and returns every finding as a
+// non-blocking warning (codes unauthorized_offer, unauthorized_claim,
+// offer_not_mentioned). The policy blocks only model output: the marketer is
+// the author and the approver, and the keyword check is conservative (it can
+// flag harmless text such as "100% cotton"), so it informs instead of
+// refusing a human edit. AI versions read back pass it without findings
+// other than offer_not_mentioned, because they were blocked on generation.
+func OfferPolicyAdvisories(c content.Content, o Offer) []segment.FieldError {
+	var fields []offerField
+	if t, ok := c.SMSBody(); ok {
+		fields = append(fields, offerField{path: content.FieldSMSBody, text: t.String()})
+	}
+	if t, ok := c.EmailSubject(); ok {
+		fields = append(fields, offerField{path: content.FieldEmailSubject, text: t.String()})
+	}
+	if t, ok := c.EmailBody(); ok {
+		fields = append(fields, offerField{path: content.FieldEmailBody, text: t.String()})
+	}
+	errs, warns := checkOfferPolicy(fields, o)
+	out := make([]segment.FieldError, 0, len(errs)+len(warns))
+	out = append(out, errs...)
+	return append(out, warns...)
+}

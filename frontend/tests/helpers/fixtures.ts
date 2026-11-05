@@ -1,5 +1,17 @@
 // Real-shaped API payloads (field names and shapes from the CP6 DTOs).
-import type { AudienceStats, Campaign, Channel, ChannelStats, SegmentRule } from '@/api/types'
+import type {
+  AudienceStats,
+  Campaign,
+  Channel,
+  ChannelStats,
+  ContentField,
+  ContentValidation,
+  ContentVersion,
+  CurrentContent,
+  FieldError,
+  LengthStats,
+  SegmentRule,
+} from '@/api/types'
 
 export const CAMPAIGN_ID = '0b9c2f4e-6a1d-4c3b-9e8f-1a2b3c4d5e6f'
 export const OTHER_ID = '7f1e2d3c-4b5a-4968-8776-655443322110'
@@ -42,6 +54,7 @@ export function draftCampaign(overrides: Partial<Campaign> = {}): Campaign {
     segment_version: 0,
     interpretation: null,
     content_brief: null,
+    current_content_id: null,
     version: 1,
     created_at: '2026-11-04T10:00:00Z',
     updated_at: '2026-11-04T10:00:00Z',
@@ -104,5 +117,125 @@ export function errorEnvelope(
       retryable: extra.retryable ?? false,
       ...(extra.raw_proposal !== undefined ? { raw_proposal: extra.raw_proposal } : {}),
     },
+  }
+}
+
+// ---- Content (CP13 DTOs) ----
+
+export const GEN_SMS = 'Hi {{first_name|there}}, your cart is waiting. Enjoy 30% off today.'
+export const GEN_SUBJECT = '{{first_name|Hello}}, your cart is waiting: 30% off'
+export const GEN_BODY = 'Hi {{first_name|there}},\n\nYour cart is still waiting. Enjoy 30% off your order.\n\nSee you soon!'
+export const EXAMPLE_VALUES = { first_name: 'Ayşe', last_name: 'Yılmaz', city: 'İstanbul' }
+export const CONTENT_LIMITS = { sms_body: 160, email_subject: 80, email_body: 5000 }
+export const EMAIL_FOOTER =
+  'You are receiving this email because you agreed to receive marketing emails from us. To stop receiving them, update your communication preferences.'
+
+const VARS: Record<string, number> = { first_name: 20, last_name: 25, city: 13 }
+const EXAMPLE: Record<string, string> = { first_name: 'Ayşe', last_name: 'Yılmaz', city: 'İstanbul' }
+const PLACEHOLDER = /\{\{([^{}|]*)(?:\|([^{}]*))?\}\}/g
+
+/**
+ * A small stand-in for the backend validator (content.Parse) so the fake
+ * backend returns realistic results: required fields, unknown variables,
+ * worst-case length and the rendered example. Not the real rules.
+ */
+export function fakeValidate(
+  draft: Partial<Record<ContentField, string | null>>,
+  channels: Channel[],
+): ContentValidation {
+  const errors: FieldError[] = []
+  const stats: Partial<Record<ContentField, LengthStats>> = {}
+  const fields: ContentField[] = []
+  if (channels.includes('sms')) fields.push('sms_body')
+  if (channels.includes('email')) fields.push('email_subject', 'email_body')
+  for (const f of ['sms_body', 'email_subject', 'email_body'] as ContentField[]) {
+    const raw = draft[f]
+    const text = (raw ?? '').normalize('NFC').trim()
+    const selected = fields.includes(f)
+    if (!selected) {
+      if (text) errors.push({ path: f, code: 'channel_not_selected', message: 'the channel is not selected' })
+      continue
+    }
+    if (raw === null || raw === undefined) {
+      errors.push({ path: f, code: 'required', message: 'is required for the selected channel' })
+      continue
+    }
+    if (!text) {
+      errors.push({ path: f, code: 'empty', message: 'must not be empty' })
+      continue
+    }
+    let worst = 0
+    let rest = text
+    for (const m of text.matchAll(PLACEHOLDER)) {
+      const name = m[1]!
+      if (!(name in VARS)) errors.push({ path: f, code: 'unknown_variable', message: 'unknown placeholder variable', allowed: Object.keys(VARS) })
+      worst += Math.max(VARS[name] ?? 0, [...(m[2] ?? '')].length)
+      rest = rest.replace(m[0], '')
+    }
+    worst += [...rest].length
+    const limit = CONTENT_LIMITS[f]
+    stats[f] = { chars_worst_case: worst, limit }
+    if (worst > limit) errors.push({ path: f, code: 'too_long', message: `is longer than ${limit} characters in the worst case` })
+  }
+  const render = (f: ContentField) =>
+    (draft[f] ?? '').normalize('NFC').trim().replace(PLACEHOLDER, (_, n: string) => EXAMPLE[n] ?? '')
+  const valid = errors.length === 0
+  // Mimics the advisory offer policy for manual text (30% authorized).
+  const warnings: FieldError[] = valid
+    ? fields
+        .filter((f) => /free shipping|coupon/i.test(draft[f] ?? ''))
+        .map((f) => ({ path: f, code: 'unauthorized_offer', message: 'mentions an incentive other than the authorized 30% discount' }))
+    : []
+  return {
+    valid,
+    errors,
+    warnings,
+    sms: stats.sms_body ?? null,
+    subject: stats.email_subject ?? null,
+    body: stats.email_body ?? null,
+    rendered_example: valid
+      ? {
+          sms: fields.includes('sms_body') ? render('sms_body') : null,
+          email: fields.includes('email_body')
+            ? { subject: render('email_subject'), body: render('email_body'), footer: EMAIL_FOOTER }
+            : null,
+        }
+      : null,
+  }
+}
+
+export function contentVersion(overrides: Partial<ContentVersion> = {}): ContentVersion {
+  return {
+    id: 101,
+    version: 1,
+    origin: 'ai',
+    model: 'demo',
+    prompt_version: 'content_v1',
+    created_at: '2026-11-04T10:02:00Z',
+    sms_body: GEN_SMS,
+    email_subject: GEN_SUBJECT,
+    email_body: GEN_BODY,
+    ...overrides,
+  }
+}
+
+export function currentContent(c: Campaign, v: ContentVersion | null): CurrentContent {
+  return {
+    campaign_id: c.id,
+    campaign_version: c.version,
+    channels: [...c.channels],
+    content: v,
+    validation: v ? fakeValidate(storedForChannels(v, c.channels), c.channels) : null,
+    example_values: { ...EXAMPLE_VALUES },
+    limits: { ...CONTENT_LIMITS },
+  }
+}
+
+/** Stored text of the selected channels only (unselected text is not validated). */
+function storedForChannels(v: ContentVersion, chs: Channel[]): Partial<Record<ContentField, string | null>> {
+  return {
+    sms_body: chs.includes('sms') ? v.sms_body : null,
+    email_subject: chs.includes('email') ? v.email_subject : null,
+    email_body: chs.includes('email') ? v.email_body : null,
   }
 }

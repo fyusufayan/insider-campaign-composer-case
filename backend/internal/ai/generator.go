@@ -71,9 +71,62 @@ type Generation struct {
 	Meta  Metadata
 }
 
+// Progress reporting (ARCHITECTURE §7.6, §12). Progress events describe the
+// workflow and carry an *unvalidated* live preview of the model's text; they
+// are never content. Only the Generation returned by GenerateStream is
+// validated.
+
+// ProgressKind distinguishes progress events.
+type ProgressKind string
+
+// Progress kinds.
+const (
+	// ProgressAttempt: a model request starts (Attempt, Reason). A new
+	// attempt discards every delta of the previous one.
+	ProgressAttempt ProgressKind = "attempt"
+	// ProgressThinking: the model is reasoning before it writes output.
+	ProgressThinking ProgressKind = "thinking"
+	// ProgressDelta: the next fragment (Text) of field Field of the current
+	// attempt, extracted from the streamed JSON. Untrusted and unvalidated.
+	ProgressDelta ProgressKind = "delta"
+	// ProgressValidating: the attempt finished; its complete output is being
+	// decoded and validated.
+	ProgressValidating ProgressKind = "validating"
+	// ProgressRepair: the output failed validation (Problems = number of
+	// field errors); a repair attempt follows.
+	ProgressRepair ProgressKind = "repair"
+)
+
+// AttemptReason says why a model request is made.
+type AttemptReason string
+
+// Attempt reasons.
+const (
+	AttemptInitial         AttemptReason = "initial"
+	AttemptTruncationRetry AttemptReason = "truncation_retry"
+	AttemptRepair          AttemptReason = "repair"
+)
+
+// Progress is one progress event. Attempt counts model requests from 1.
+type Progress struct {
+	Kind     ProgressKind
+	Attempt  int
+	Reason   AttemptReason
+	Field    string
+	Text     string
+	Problems int
+}
+
+// ProgressFunc receives progress events synchronously, in order. If it
+// returns an error, generation stops and GenerateStream returns that error
+// unchanged (no further model call is made).
+type ProgressFunc func(Progress) error
+
 // Generator writes SMS/email templates for a campaign:
-// prompt → llm.Client.Complete → stop-reason check → strict decode →
+// prompt → llm.Client.Stream → stop-reason check → strict decode →
 // content.Parse + offer policy → at most one repair turn → result.
+// Streamed text is extracted per field only for progress reporting; the
+// validated result is computed from the complete text of a finished request.
 // It performs no database access.
 type Generator struct {
 	client llm.Client
@@ -102,6 +155,12 @@ func (g *Generator) Model() string { return g.cfg.Model }
 // ErrInvalidGenerationInput (no model call), *Error values (see errors.go),
 // or, when ctx was cancelled by the caller, an error wrapping ctx.Err().
 func (g *Generator) Generate(ctx context.Context, in GenerationInput) (Generation, error) {
+	return g.GenerateStream(ctx, in, nil)
+}
+
+// GenerateStream is Generate with progress events reported to onProgress
+// (nil = none). Requests are always streamed.
+func (g *Generator) GenerateStream(ctx context.Context, in GenerationInput, onProgress ProgressFunc) (Generation, error) {
 	chs, err := segment.NormalizeChannels(in.Channels)
 	switch {
 	case err != nil:
@@ -123,20 +182,31 @@ func (g *Generator) Generate(ctx context.Context, in GenerationInput) (Generatio
 	callCtx, cancel := context.WithTimeout(ctx, g.cfg.Timeout)
 	defer cancel()
 
+	report := onProgress
+	if report == nil {
+		report = func(Progress) error { return nil }
+	}
 	mc := modelCall{
 		client: g.client, task: TaskContentGeneration, system: contentSystemPrompt,
 		promptVersion: ContentPromptVersion, model: g.cfg.Model, effort: g.cfg.Effort, schema: ContentSchema(chs),
+		stream: report, streamFields: fields, streamLimit: maxContentOutputBytes,
 	}
 	st := &attempt{maxTokens: g.cfg.MaxTokens, model: g.cfg.Model}
 	messages := []llm.Message{{Role: llm.RoleUser, Content: first}}
 
-	text, err := mc.do(ctx, callCtx, st, messages)
+	text, err := mc.do(ctx, callCtx, st, messages, AttemptInitial)
 	if err != nil {
+		return Generation{}, err
+	}
+	if err := report(Progress{Kind: ProgressValidating, Attempt: st.calls}); err != nil {
 		return Generation{}, err
 	}
 	c, res, errs := ParseGeneratedContent([]byte(text), chs, in.Brief.Offer)
 	if len(errs) == 0 {
 		return g.done(c, res, chs, st, false), nil
+	}
+	if err := report(Progress{Kind: ProgressRepair, Attempt: st.calls, Problems: len(errs)}); err != nil {
+		return Generation{}, err
 	}
 
 	// One repair turn: append-only history (the invalid proposal as the
@@ -145,8 +215,11 @@ func (g *Generator) Generate(ctx context.Context, in GenerationInput) (Generatio
 		llm.Message{Role: llm.RoleAssistant, Content: text},
 		llm.Message{Role: llm.RoleUser, Content: contentRepairMessage(errs, fields)},
 	)
-	text, err = mc.do(ctx, callCtx, st, messages)
+	text, err = mc.do(ctx, callCtx, st, messages, AttemptRepair)
 	if err != nil {
+		return Generation{}, err
+	}
+	if err := report(Progress{Kind: ProgressValidating, Attempt: st.calls}); err != nil {
 		return Generation{}, err
 	}
 	c, res, errs = ParseGeneratedContent([]byte(text), chs, in.Brief.Offer)

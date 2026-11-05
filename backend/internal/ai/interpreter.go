@@ -99,7 +99,7 @@ func (it *Interpreter) Interpret(ctx context.Context, brief string) (Interpretat
 
 // call performs one logical model call (see modelCall.do).
 func (it *Interpreter) call(parent, ctx context.Context, st *attempt, messages []llm.Message) (string, error) {
-	return it.modelCall().do(parent, ctx, st, messages)
+	return it.modelCall().do(parent, ctx, st, messages, AttemptInitial)
 }
 
 func (it *Interpreter) modelCall() modelCall {

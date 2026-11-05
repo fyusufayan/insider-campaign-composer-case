@@ -133,6 +133,8 @@ export interface Campaign {
   interpretation: InterpretationRecord | null
   /** Kept as unknown: decoded defensively by the UI (see parseContentBrief). */
   content_brief: unknown
+  /** Immutable content version the campaign points at; null without content. */
+  current_content_id: number | null
   version: number
   created_at: string
   updated_at: string
@@ -192,6 +194,160 @@ export interface ReadinessReport {
   migration_dirty: boolean
   llm_provider: string
 }
+
+// ---- Content (CP13; backend httpapi/dto.go content DTOs) ----
+
+/** Draft field names (content.Draft DTO, campaign_contents columns). */
+export type ContentField = 'sms_body' | 'email_subject' | 'email_body'
+
+export const CONTENT_FIELDS: readonly ContentField[] = ['sms_body', 'email_subject', 'email_body']
+
+/** Fields required by each channel. */
+export const CHANNEL_FIELDS: Record<Channel, readonly ContentField[]> = {
+  sms: ['sms_body'],
+  email: ['email_subject', 'email_body'],
+}
+
+export type ContentOrigin = 'ai' | 'edited'
+
+/** One immutable content version. Text is canonical (NFC, trimmed). */
+export interface ContentVersion {
+  id: number
+  version: number
+  origin: ContentOrigin
+  /** Set for AI versions ("demo" for the demo generator). */
+  model: string | null
+  prompt_version: string | null
+  created_at: string
+  sms_body: string | null
+  email_subject: string | null
+  email_body: string | null
+}
+
+/** Worst-case length after personalization (runes after NFC). */
+export interface LengthStats {
+  chars_worst_case: number
+  limit: number
+}
+
+export interface RenderedEmail {
+  subject: string
+  body: string
+  /** Fixed footer appended by the backend (outside the body budget). */
+  footer: string
+}
+
+/** Rendered example with the fixed fictional example values. */
+export interface RenderedExample {
+  sms: string | null
+  email: RenderedEmail | null
+}
+
+/** content.Result for the campaign's selected channels. */
+export interface ContentValidation {
+  valid: boolean
+  errors: FieldError[]
+  warnings: FieldError[]
+  sms: LengthStats | null
+  subject: LengthStats | null
+  body: LengthStats | null
+  /** null when there are errors. */
+  rendered_example: RenderedExample | null
+}
+
+/** Fixed, fictional preview values (never customer data). */
+export interface ExampleValues {
+  first_name: string
+  last_name: string
+  city: string
+}
+
+export interface ContentLimits {
+  sms_body: number
+  email_subject: number
+  email_body: number
+}
+
+/** GET /campaigns/{id}/content. content and validation are null without content. */
+export interface CurrentContent {
+  campaign_id: string
+  campaign_version: number
+  channels: Channel[]
+  content: ContentVersion | null
+  validation: ContentValidation | null
+  example_values: ExampleValues
+  limits: ContentLimits
+}
+
+/** POST /campaigns/{id}/content/validate (read-only). */
+export interface DraftValidation {
+  campaign_id: string
+  campaign_version: number
+  channels: Channel[]
+  validation: ContentValidation
+  example_values: ExampleValues
+  limits: ContentLimits
+}
+
+/** PUT /campaigns/{id}/content and the generation stream's "validated" event. */
+export interface ContentSaved {
+  campaign: Campaign
+  content: CurrentContent
+  /** false: the canonical text was unchanged and nothing was written. */
+  created: boolean
+  notes: string[]
+}
+
+/** A content draft: null = field not provided. */
+export interface ContentDraft {
+  sms_body: string | null
+  email_subject: string | null
+  email_body: string | null
+}
+
+export interface SaveContentRequest extends ContentDraft {
+  expected_version: number
+}
+
+// ---- Generation stream (POST /content/generations, text/event-stream) ----
+
+export type GenerationPhase = 'generating' | 'thinking' | 'validating' | 'repairing' | 'persisting'
+
+export interface GenerationMeta {
+  campaign_id: string
+  campaign_version: number
+  channels: Channel[]
+  fields: ContentField[]
+  prompt_version: string
+  limits: ContentLimits
+}
+
+export interface GenerationStatus {
+  phase: GenerationPhase
+  attempt?: number
+  reason?: 'initial' | 'truncation_retry' | 'repair'
+  problems?: number
+}
+
+/** Unvalidated preview fragment of one field of one attempt. */
+export interface GenerationDelta {
+  attempt: number
+  field: ContentField
+  text: string
+  preview: true
+}
+
+export interface GenerationErrorEvent {
+  status: number
+  error: ErrorBody
+}
+
+export type GenerationEvent =
+  | { type: 'meta'; data: GenerationMeta }
+  | { type: 'status'; data: GenerationStatus }
+  | { type: 'delta'; data: GenerationDelta }
+  | { type: 'validated'; data: ContentSaved }
+  | { type: 'error'; data: GenerationErrorEvent }
 
 // ---- Requests ----
 

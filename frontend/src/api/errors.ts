@@ -4,7 +4,16 @@
 
 import type { ApiError } from './client'
 
-export type Operation = 'load' | 'create' | 'interpret' | 'audience' | 'channels'
+export type Operation =
+  | 'load'
+  | 'create'
+  | 'interpret'
+  | 'audience'
+  | 'channels'
+  | 'content'
+  | 'generate'
+  | 'saveContent'
+  | 'validateContent'
 
 export interface ErrorPresentation {
   title: string
@@ -27,11 +36,25 @@ export function presentError(err: ApiError, op: Operation): ErrorPresentation {
     canReviseBrief: false,
   }
 
+  if (err.kind === 'network' && err.code === 'stream_interrupted') {
+    return {
+      ...base,
+      title: 'Connection lost during generation',
+      message: 'The connection to the server was interrupted before the result arrived.',
+      hint: 'The latest saved state was reloaded: if the content was saved before the interruption, it is shown below; otherwise nothing changed.',
+      canRetry: true,
+    }
+  }
   if (err.kind === 'network') {
     return { ...base, title: 'Cannot reach the server', canRetry: true }
   }
   if (err.kind === 'invalid_response') {
     return { ...base, title: 'Unexpected server response', canRetry: true }
+  }
+
+  if (op === 'generate') {
+    const g = presentGenerationError(err, base)
+    if (g) return g
   }
 
   switch (err.code) {
@@ -88,7 +111,9 @@ export function presentError(err: ApiError, op: Operation): ErrorPresentation {
         message:
           op === 'interpret'
             ? 'The campaign changed while the AI was working, so its result was discarded. Reload the latest version before trying again.'
-            : 'Your change was not saved because the campaign was modified by another request. Reload the latest version, then re-apply your change.',
+            : op === 'saveContent'
+              ? 'Your edits were not saved because the campaign was modified elsewhere. Your edits are kept here: reload the latest version, review the differences and save again.'
+              : 'Your change was not saved because the campaign was modified by another request. Reload the latest version, then re-apply your change.',
         canRetry: false,
         canReload: true,
       }
@@ -98,5 +123,40 @@ export function presentError(err: ApiError, op: Operation): ErrorPresentation {
       return { ...base, title: 'Server error', canRetry: true }
     default:
       return base
+  }
+}
+
+/** Generation-specific wording (the model writes content, not the audience). */
+function presentGenerationError(err: ApiError, base: ErrorPresentation): ErrorPresentation | null {
+  switch (err.code) {
+    case 'llm_refused':
+      return {
+        ...base,
+        title: 'The AI declined to write this content',
+        hint: 'Nothing was saved. Write the messages manually below, or revise the brief in a new campaign.',
+        canRetry: false,
+        canReviseBrief: true,
+      }
+    case 'ai_output_invalid':
+      return {
+        ...base,
+        title: 'The generated content failed validation',
+        hint: 'The draft was rejected after one automatic repair attempt and nothing was saved. Try again, or write the messages manually.',
+        canRetry: true,
+      }
+    case 'llm_truncated':
+      return { ...base, title: 'The AI answer was incomplete', hint: 'Nothing was saved.', canRetry: true }
+    case 'llm_unavailable':
+      return { ...base, title: 'The AI service is unavailable', hint: 'Nothing was saved.', canRetry: true }
+    case 'version_conflict':
+      return {
+        ...base,
+        title: 'The campaign changed during generation',
+        message: 'The campaign was modified while the AI was writing, so the generated content was discarded and nothing was saved.',
+        canRetry: false,
+        canReload: true,
+      }
+    default:
+      return null
   }
 }

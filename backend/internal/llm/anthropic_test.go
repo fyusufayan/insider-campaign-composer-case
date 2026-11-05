@@ -511,11 +511,3 @@ func TestNewAnthropicValidation(t *testing.T) {
 		t.Errorf("valid config: %v", err)
 	}
 }
-
-func TestAnthropicStreamNotImplemented(t *testing.T) {
-	f := newFixture(t, 0, okMessage("{}"))
-	_, err := f.a.Stream(context.Background(), testRequest(), func(StreamEvent) error { return nil })
-	if !errors.Is(err, ErrRejected) || f.tr.Calls() != 0 {
-		t.Fatalf("err = %v, calls = %d", err, f.tr.Calls())
-	}
-}

@@ -24,12 +24,15 @@ var ErrNoMoreReplies = errors.New("anthropictest: no more scripted replies")
 //   - Err set: the round trip fails with Err (a transport failure);
 //   - Block set: the round trip waits until the request context ends;
 //   - otherwise an HTTP response with Status (default 200), Body and Header.
+//     With HoldOpen the body delivers Body and then blocks until the request
+//     context ends (a stream that stalls mid-response).
 type Reply struct {
-	Status int
-	Body   string
-	Header http.Header
-	Err    error
-	Block  bool
+	Status   int
+	Body     string
+	Header   http.Header
+	Err      error
+	Block    bool
+	HoldOpen bool
 }
 
 // Captured is one recorded request.
@@ -116,6 +119,12 @@ func (t *Transport) RoundTrip(req *http.Request) (*http.Response, error) {
 	if h.Get("Content-Type") == "" {
 		h.Set("Content-Type", "application/json")
 	}
+	var respBody io.ReadCloser = io.NopCloser(bytes.NewReader([]byte(r.Body)))
+	length := int64(len(r.Body))
+	if r.HoldOpen {
+		respBody = &holdOpenBody{r: bytes.NewReader([]byte(r.Body)), done: req.Context().Done(), err: req.Context().Err}
+		length = -1
+	}
 	return &http.Response{
 		Status:        strconv.Itoa(status) + " " + http.StatusText(status),
 		StatusCode:    status,
@@ -123,11 +132,28 @@ func (t *Transport) RoundTrip(req *http.Request) (*http.Response, error) {
 		ProtoMajor:    1,
 		ProtoMinor:    1,
 		Header:        h,
-		Body:          io.NopCloser(bytes.NewReader([]byte(r.Body))),
-		ContentLength: int64(len(r.Body)),
+		Body:          respBody,
+		ContentLength: length,
 		Request:       req,
 	}, nil
 }
+
+// holdOpenBody returns its content, then blocks until done is closed.
+type holdOpenBody struct {
+	r    *bytes.Reader
+	done <-chan struct{}
+	err  func() error
+}
+
+func (b *holdOpenBody) Read(p []byte) (int, error) {
+	if b.r.Len() > 0 {
+		return b.r.Read(p)
+	}
+	<-b.done
+	return 0, b.err()
+}
+
+func (b *holdOpenBody) Close() error { return nil }
 
 // Block is a content block of a scripted Message.
 type Block map[string]any
@@ -185,4 +211,109 @@ func APIError(status int, errType, message, requestID string) Reply {
 		"Request-Id":     {requestID},
 		"Retry-After-Ms": {"0"},
 	}}
+}
+
+// ---- Streaming (text/event-stream) ----
+
+// SSEEvent is one server-sent event of a scripted Messages stream.
+type SSEEvent struct {
+	Name string
+	Data any // marshalled to JSON
+}
+
+// SSE returns a 200 text/event-stream reply with the events in order.
+func SSE(requestID string, events ...SSEEvent) Reply {
+	var b bytes.Buffer
+	for _, ev := range events {
+		data, err := json.Marshal(ev.Data)
+		if err != nil {
+			panic(err) // static data
+		}
+		fmt.Fprintf(&b, "event: %s\ndata: %s\n\n", ev.Name, data)
+	}
+	return Reply{Status: http.StatusOK, Body: b.String(), Header: http.Header{
+		"Request-Id":   {requestID},
+		"Content-Type": {"text/event-stream"},
+	}}
+}
+
+// MessageStart is the message_start event.
+func MessageStart(model string, inputTokens int) SSEEvent {
+	return SSEEvent{Name: "message_start", Data: map[string]any{"type": "message_start", "message": map[string]any{
+		"id": "msg_stream", "type": "message", "role": "assistant", "model": model, "content": []any{},
+		"stop_reason": nil, "stop_sequence": nil, "stop_details": nil,
+		"usage": map[string]any{"input_tokens": inputTokens, "output_tokens": 1,
+			"cache_creation_input_tokens": 0, "cache_read_input_tokens": 0},
+	}}}
+}
+
+// BlockStart starts content block index with the given (empty) block.
+func BlockStart(index int, block Block) SSEEvent {
+	return SSEEvent{Name: "content_block_start", Data: map[string]any{
+		"type": "content_block_start", "index": index, "content_block": map[string]any(block)}}
+}
+
+// TextBlockStart starts an empty text block.
+func TextBlockStart(index int) SSEEvent { return BlockStart(index, Text("")) }
+
+// TextDelta appends text to block index.
+func TextDelta(index int, text string) SSEEvent {
+	return SSEEvent{Name: "content_block_delta", Data: map[string]any{
+		"type": "content_block_delta", "index": index, "delta": map[string]any{"type": "text_delta", "text": text}}}
+}
+
+// ThinkingDelta appends (omitted, empty) thinking text to block index.
+func ThinkingDelta(index int) SSEEvent {
+	return SSEEvent{Name: "content_block_delta", Data: map[string]any{
+		"type": "content_block_delta", "index": index, "delta": map[string]any{"type": "signature_delta", "signature": "sig"}}}
+}
+
+// BlockStop stops block index.
+func BlockStop(index int) SSEEvent {
+	return SSEEvent{Name: "content_block_stop", Data: map[string]any{"type": "content_block_stop", "index": index}}
+}
+
+// MessageDelta carries the stop reason and the final output token count.
+func MessageDelta(stopReason string, outputTokens int) SSEEvent {
+	var stopDetails any
+	if stopReason == "refusal" {
+		stopDetails = map[string]any{"type": "refusal", "category": "cyber", "explanation": "declined"}
+	}
+	return SSEEvent{Name: "message_delta", Data: map[string]any{
+		"type":  "message_delta",
+		"delta": map[string]any{"stop_reason": stopReason, "stop_sequence": nil, "stop_details": stopDetails},
+		"usage": map[string]any{"output_tokens": outputTokens},
+	}}
+}
+
+// MessageStop is the message_stop event.
+func MessageStop() SSEEvent {
+	return SSEEvent{Name: "message_stop", Data: map[string]any{"type": "message_stop"}}
+}
+
+// Ping is a keep-alive event.
+func Ping() SSEEvent { return SSEEvent{Name: "ping", Data: map[string]any{"type": "ping"}} }
+
+// StreamError is an in-stream error event (sent after the 200 response
+// started).
+func StreamError(errType, message string) SSEEvent {
+	return SSEEvent{Name: "error", Data: map[string]any{
+		"type": "error", "error": map[string]any{"type": errType, "message": message}}}
+}
+
+// TextStream is a complete, successful stream: an optional thinking block,
+// then one text block delivered in chunks.
+func TextStream(requestID, model, stopReason string, withThinking bool, chunks ...string) Reply {
+	evs := []SSEEvent{MessageStart(model, 11)}
+	idx := 0
+	if withThinking {
+		evs = append(evs, BlockStart(0, Thinking()), ThinkingDelta(0), BlockStop(0), Ping())
+		idx = 1
+	}
+	evs = append(evs, TextBlockStart(idx))
+	for _, c := range chunks {
+		evs = append(evs, TextDelta(idx, c))
+	}
+	evs = append(evs, BlockStop(idx), MessageDelta(stopReason, 42), MessageStop())
+	return SSE(requestID, evs...)
 }

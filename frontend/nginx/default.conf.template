@@ -41,7 +41,9 @@ server {
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto $scheme;
 
-        # SSE-safe (content generation and status streams in later slices).
+        # SSE-safe: the content generation stream (POST .../content/generations)
+        # and, in Slice 5, the status stream. The API also sends
+        # X-Accel-Buffering: no and a keep-alive comment every 15 s.
         proxy_buffering off;
         proxy_cache off;
         proxy_request_buffering on;

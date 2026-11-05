@@ -2,13 +2,16 @@
 
 AI-assisted campaign composer: a marketer writes a brief, the AI proposes a
 typed audience rule, the backend validates it and shows a live,
-database-backed audience preview. No real messages are sent.
+database-backed audience preview; the AI then writes SMS/email content that
+the backend validates and stores as immutable versions the marketer can edit.
+No real messages are sent.
 
 Design and rationale: `docs/ARCHITECTURE.md`, `DECISIONS.md`, `docs/ROADMAP.md`,
-`CLAUDE.md`. Current scope: **Slice 1a** plus the start of **Slice 1b** — brief →
+`CLAUDE.md`. Current scope: **Slices 1a, 1b and 2** — brief →
 interpretation (demo, or real Claude when a key is configured) → validated
-segment → audience preview. Content generation, approval and sending
-come in later slices.
+segment → audience preview → streamed content generation, editing,
+validation and immutable content versions. Approval and sending come in
+later slices.
 
 ## Quick start (Docker only)
 
@@ -72,8 +75,19 @@ make smoke
    audience card shows matched users with the per-channel
    `eligible / no_consent / no_contact` split (184 matched users with the
    default seed while "now" is within 30 days of 2026-11-01; see below).
-3. Untick SMS and email: zero messages, matched users unchanged.
-4. Reload or share `/campaigns/{id}` — the campaign is stored in PostgreSQL.
+3. Untick SMS and email: zero messages, matched users unchanged. Tick them again.
+4. In **Message content**, click **Generate content**. The progress panel shows
+   the phases (writing → validating → saving) and a live draft labelled *not
+   validated, not saved*; when the backend has validated and committed the
+   content, version 1 replaces it in the editors (badge *Demo generator · not a
+   live model* in demo mode), with worst-case character counters and SMS/email
+   previews rendered with fictional example values.
+5. Edit the SMS: the counter and preview update after the server validates the
+   draft (e.g. type `{{email}}` to see an `unknown_variable` error, or make it
+   longer than 160 worst-case characters). **Save changes** creates version 2
+   (*Edited manually*); saving unchanged text reports *No changes* and creates
+   no version.
+6. Reload or share `/campaigns/{id}` — campaign and content are stored in PostgreSQL.
 
 ### Restart, keep data
 
@@ -124,8 +138,8 @@ call, so an invalid key only shows up on the first interpretation (as
 LLM_PROVIDER=demo docker compose up --build
 ```
 
-**Use real Claude locally.** ⚠️ Every interpretation is a billable Anthropic API
-request (up to three requests: the first answer, at most one repair turn and at
+**Use real Claude locally.** ⚠️ Every interpretation and every content
+generation is a billable Anthropic API request (up to three requests: the first answer, at most one repair turn and at
 most one retry after truncation, each with up to `CLAUDE_MAX_RETRIES` automatic
 SDK retries). Put the key in the uncommitted `.env` (git-ignored) or export it
 only in your shell, never in a tracked file:

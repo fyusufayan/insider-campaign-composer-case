@@ -10,18 +10,30 @@ import {
   DecodeError,
   decodeAudienceResponse,
   decodeCampaign,
+  decodeContentSaved,
+  decodeCurrentContent,
+  decodeDraftValidation,
   decodeErrorBody,
+  decodeGenerationEvent,
   decodeInterpretResponse,
   decodeReadiness,
 } from './decode'
+import { SseLimitError, SseParser } from './sse'
 import type {
   AudienceResponse,
   Campaign,
   Channel,
+  ContentDraft,
+  ContentSaved,
   CreateCampaignRequest,
+  CurrentContent,
+  DraftValidation,
+  ErrorBody,
   FieldError,
+  GenerationEvent,
   InterpretResponse,
   ReadinessReport,
+  SaveContentRequest,
   SetChannelsRequest,
 } from './types'
 
@@ -82,6 +94,45 @@ function genericHttpMessage(status: number): string {
   return `The request failed (HTTP ${status}).`
 }
 
+function apiErrorFromBody(status: number, body: ErrorBody): ApiError {
+  return new ApiError({
+    kind: 'http',
+    status,
+    code: body.code,
+    // Internal errors carry no actionable detail; keep the text generic.
+    message: body.code === 'internal' ? genericHttpMessage(status) : body.message,
+    details: body.details,
+    retryable: body.retryable,
+    rawProposal: body.raw_proposal,
+  })
+}
+
+/** The ApiError of a non-2xx response (payload: parsed JSON, if any). */
+function httpError(status: number, payload: unknown): ApiError {
+  if (typeof payload === 'object' && payload !== null && 'error' in payload) {
+    try {
+      return apiErrorFromBody(status, decodeErrorBody((payload as { error: unknown }).error))
+    } catch {
+      // not a valid envelope: generic error below
+    }
+  }
+  return new ApiError({
+    kind: 'http',
+    status,
+    code: `http_${status}`,
+    message: genericHttpMessage(status),
+    retryable: status >= 500,
+  })
+}
+
+function aborted(): ApiError {
+  return new ApiError({ kind: 'aborted', code: 'aborted', message: 'The request was cancelled.' })
+}
+
+function isAbortError(e: unknown, signal?: AbortSignal): boolean {
+  return !!signal?.aborted || (e instanceof DOMException && e.name === 'AbortError')
+}
+
 interface RequestOptions {
   body?: unknown
   signal?: AbortSignal | undefined
@@ -133,35 +184,7 @@ async function request<T>(
     throw new ApiError({ kind: 'aborted', code: 'aborted', message: 'The request was cancelled.' })
   }
 
-  if (!res.ok) {
-    if (parsed && typeof payload === 'object' && payload !== null && 'error' in payload) {
-      let body: ReturnType<typeof decodeErrorBody> | null = null
-      try {
-        body = decodeErrorBody((payload as { error: unknown }).error)
-      } catch {
-        body = null // not a valid envelope: generic error below
-      }
-      if (body) {
-        throw new ApiError({
-          kind: 'http',
-          status: res.status,
-          code: body.code,
-          // Internal errors carry no actionable detail; keep the text generic.
-          message: body.code === 'internal' ? genericHttpMessage(res.status) : body.message,
-          details: body.details,
-          retryable: body.retryable,
-          rawProposal: body.raw_proposal,
-        })
-      }
-    }
-    throw new ApiError({
-      kind: 'http',
-      status: res.status,
-      code: `http_${res.status}`,
-      message: genericHttpMessage(res.status),
-      retryable: res.status >= 500,
-    })
-  }
+  if (!res.ok) throw httpError(res.status, parsed ? payload : undefined)
 
   try {
     return decode(payload)
@@ -176,6 +199,109 @@ async function request<T>(
       message: 'The server sent an unexpected response.',
     })
   }
+}
+
+/**
+ * Reads the generation stream (POST returning text/event-stream). Every event
+ * is decoded strictly and handed to onEvent in order; the promise resolves
+ * with the "validated" payload (sent only after the content was committed)
+ * and rejects with an ApiError for the "error" event, a non-2xx JSON error
+ * response (request errors before the stream started), an aborted request,
+ * a stream that ends without a terminal event (kind network,
+ * code stream_interrupted) or an event that violates the contract
+ * (invalid_response; the stream is cancelled).
+ */
+async function generationStream(
+  url: string,
+  signal: AbortSignal | undefined,
+  onEvent: (ev: GenerationEvent) => void,
+): Promise<ContentSaved> {
+  let res: Response
+  try {
+    res = await fetch(url, {
+      method: 'POST',
+      headers: { Accept: 'text/event-stream', 'Content-Type': 'application/json' },
+      body: '{}',
+      signal: signal ?? null,
+    })
+  } catch (e) {
+    if (isAbortError(e, signal)) throw aborted()
+    throw new ApiError({
+      kind: 'network',
+      code: 'network_error',
+      message: 'Cannot reach the server. Check that the backend is running and try again.',
+      retryable: true,
+    })
+  }
+
+  const type = res.headers.get('Content-Type') ?? ''
+  if (!res.ok || !type.startsWith('text/event-stream')) {
+    let payload: unknown = undefined
+    try {
+      const text = await res.text()
+      payload = text.trim() === '' ? undefined : JSON.parse(text)
+    } catch (e) {
+      if (isAbortError(e, signal)) throw aborted()
+    }
+    if (signal?.aborted) throw aborted()
+    if (!res.ok) throw httpError(res.status, payload)
+    throw new ApiError({ kind: 'invalid_response', status: res.status, code: 'invalid_response', message: 'The server sent an unexpected response.' })
+  }
+  if (!res.body) {
+    throw new ApiError({ kind: 'invalid_response', status: res.status, code: 'invalid_response', message: 'The server sent an unexpected response.' })
+  }
+
+  const reader = res.body.getReader()
+  // Mutated by the parser callback (an object, so TypeScript does not narrow it).
+  const st: { terminal: ContentSaved | ApiError | null; violation: boolean } = { terminal: null, violation: false }
+  const parser = new SseParser((m) => {
+    if (st.terminal || st.violation) return
+    let ev: GenerationEvent
+    try {
+      ev = decodeGenerationEvent(m.event, JSON.parse(m.data))
+    } catch (e) {
+      if (import.meta.env.DEV) console.warn('generation event did not match the contract:', (e as Error).message)
+      st.violation = true
+      return
+    }
+    onEvent(ev)
+    if (ev.type === 'validated') st.terminal = ev.data
+    else if (ev.type === 'error') st.terminal = apiErrorFromBody(ev.data.status, ev.data.error)
+  })
+
+  const interrupted = () =>
+    new ApiError({
+      kind: 'network',
+      code: 'stream_interrupted',
+      message: 'The connection was lost during generation.',
+      retryable: true,
+    })
+  const invalid = () =>
+    new ApiError({ kind: 'invalid_response', status: res.status, code: 'invalid_response', message: 'The server sent an unexpected response.' })
+
+  try {
+    while (!st.terminal && !st.violation) {
+      const { done, value } = await reader.read()
+      if (done) break
+      parser.pushBytes(value)
+    }
+    if (!st.terminal && !st.violation) parser.end()
+  } catch (e) {
+    if (isAbortError(e, signal)) throw aborted()
+    if (!st.terminal) {
+      if (e instanceof SseLimitError) st.violation = true
+      else throw interrupted()
+    }
+  } finally {
+    // Stop reading; the server sees the disconnect if it is still sending.
+    void reader.cancel().catch(() => {})
+  }
+  const terminal = st.terminal
+  if (terminal instanceof ApiError) throw terminal
+  if (terminal) return terminal
+  if (signal?.aborted) throw aborted()
+  if (st.violation) throw invalid()
+  throw interrupted()
 }
 
 function campaignUrl(id: string): string {
@@ -207,6 +333,27 @@ export const api = {
   setChannels(id: string, channels: Channel[], expectedVersion: number, signal?: AbortSignal): Promise<Campaign> {
     const body: SetChannelsRequest = { channels, expected_version: expectedVersion }
     return request('PUT', `${campaignUrl(id)}/channels`, (v) => decodeCampaign(v), { body, signal })
+  },
+
+  /** GET /api/v1/campaigns/{id}/content → current content (content: null without one). */
+  getContent(id: string, signal?: AbortSignal): Promise<CurrentContent> {
+    return request('GET', `${campaignUrl(id)}/content`, (v) => decodeCurrentContent(v), { signal })
+  },
+
+  /** POST /api/v1/campaigns/{id}/content/validate → read-only validation of a draft. */
+  validateContent(id: string, draft: ContentDraft, signal?: AbortSignal): Promise<DraftValidation> {
+    return request('POST', `${campaignUrl(id)}/content/validate`, decodeDraftValidation, { body: draft, signal })
+  },
+
+  /** PUT /api/v1/campaigns/{id}/content → {campaign, content, created}. */
+  saveContent(id: string, draft: ContentDraft, expectedVersion: number, signal?: AbortSignal): Promise<ContentSaved> {
+    const body: SaveContentRequest = { ...draft, expected_version: expectedVersion }
+    return request('PUT', `${campaignUrl(id)}/content`, (v) => decodeContentSaved(v), { body, signal })
+  },
+
+  /** POST /api/v1/campaigns/{id}/content/generations (SSE). Resolves after the commit. */
+  generateContent(id: string, onEvent: (ev: GenerationEvent) => void, signal?: AbortSignal): Promise<ContentSaved> {
+    return generationStream(`${campaignUrl(id)}/content/generations`, signal, onEvent)
   },
 
   /** GET /readyz → readiness incl. the LLM provider selected at startup. */
