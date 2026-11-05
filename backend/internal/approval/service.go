@@ -26,6 +26,10 @@ type Config struct {
 	// ApprovedBy is recorded as campaign_approvals.approved_by
 	// (APPROVER_NAME). Empty means DefaultApprover.
 	ApprovedBy string
+	// DeliveriesCancelled (optional, metrics) is called after a committed
+	// cancellation with the number of queued delivery rows it cancelled per
+	// channel. It must be cheap and must not block.
+	DeliveriesCancelled func(ch segment.Channel, n int64)
 }
 
 // withDefaults fills the zero optional fields.

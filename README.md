@@ -19,8 +19,10 @@ Slice 4's backend (CP16–CP17A): the send API, the delivery worker and the
 mock provider, the per-channel rate limiter (≤ 100 requests per channel in
 any rolling second, retries included), exponential backoff with jitter, 429
 channel pauses, the cancel endpoint and the background approval-expiry
-sweeper. Not yet: delivery statistics, metrics, live progress and any
-delivery UI (no Send/Cancel button, no dashboard) — those follow in CP17B.
+sweeper, and (CP17B) delivery statistics, the delivery list, the live
+progress stream (SSE), worker-heartbeat readiness and the browser delivery
+dashboard with explicit Start sending / Cancel sending, and the six core
+Prometheus metrics on `/metrics` of the API and the worker.
 
 ## Quick start (Docker only)
 
@@ -63,7 +65,11 @@ docker compose ps
 curl -s http://localhost:8000/readyz
 ```
 
-Expected: `{"status":"ready","database":"ok","migration_version":1,"migration_dirty":false,"llm_provider":"demo"}`.
+Expected (abridged): `{"status":"ready","database":"ok","migration_version":2,"migration_dirty":false,"llm_provider":"demo","worker":{"status":"fresh","last_seen_at":"…","heartbeat_age_seconds":1.2,"stale_after_seconds":15,"fresh_processes":1},"sending_campaigns":0}`.
+`worker` is the freshest delivery-worker heartbeat (written every 5 s):
+`fresh` within 15 s, else `stale`; `absent` if no worker ever reported;
+`unknown` if the database is down. It is reported only — the API's readiness
+never fails on it, so it does not flap when no campaign is sending.
 
 An automated HTTP check of the whole Slice 1a flow against the running stack
 (needs `curl` and `python3`; creates one campaign named `smoke …`):
@@ -108,18 +114,35 @@ make smoke
    the version and the reviewed binding) and click
    **Confirm approval**: the campaign becomes *Approved* (valid 24 h) and the
    read-only summary is shown after a reload too. Confirming sends nothing;
-   sending is a separate, explicit API call (see *Send* below; no button yet).
+   sending is a separate, explicit step (9).
 8. **Withdraw approval** (pending: one click in the dialog or panel; approved:
    a second confirmation step) releases the snapshot and returns the campaign to
    *Content ready*. To see expiry, start the stack with short TTLs, e.g.
    `APPROVAL_PENDING_TTL=30s APPROVAL_APPROVED_TTL=1m docker compose up -d`;
    an expired approval cannot be confirmed (`409 approval_expired`) and the UI
    shows *Approval expired — review again*.
+9. In **Send & delivery** (step 6 of the page), click **Start sending…**. A
+   confirmation dialog shows exactly what is released (the frozen per-channel
+   counts and the content version), that it cannot be undone, that the worker
+   may begin before the dialog closes and what cancelling can and cannot do.
+   After **Start sending** the page switches to the live dashboard: overall
+   and per-channel progress, sent / failed / skipped / cancelled / pending,
+   provider attempts, retries and attempts per second, uncertain outcomes,
+   reason summaries, the approval/content/segment versions, worker health
+   and a connection badge (*Live*, *Reconnecting…*, *Final*) with **Refresh**.
+   Every number comes from committed database rows (a delivery appears as
+   sent only after the worker recorded the provider's acceptance). It ends
+   with *Completed*, *Completed with failures* (failed rows are listed, without
+   recipient data) or *Cancelled*; reloading shows the same final numbers.
+   **Cancel sending…** (while sending) asks for confirmation, then reports how
+   many queued deliveries were cancelled and how many requests were already in
+   flight (those may still reach the provider once and are recorded
+   truthfully). Nothing is ever sent by opening, refreshing or approving.
 
-### Send (API only in this version)
+### Send, live progress and cancel over the API
 
-There is no Send button yet. A confirmed campaign is sent with one explicit API
-call (through the frontend proxy); confirming never sends:
+The browser flow above uses these routes; a confirmed campaign can also be
+sent with one explicit API call (through the frontend proxy):
 
 ```bash
 curl -sS -X POST -H 'Content-Type: application/json' \
@@ -134,8 +157,7 @@ the approved content version with the **frozen** personalization values,
 re-checks the **current** consent and contact (missing consent or contact →
 skipped, never sent), persists the destination, and sends to the mock
 provider, recording every attempt. The campaign becomes `completed` (or
-`completed_with_failures` if any row failed) once every row is terminal — the
-campaign page shows the status after a reload. `scripts/smoke-send.sh`
+`completed_with_failures` if any row failed) once every row is terminal. `scripts/smoke-send.sh`
 (`make smoke-send`) runs this whole flow against the stack and checks the
 database and the mock provider's counters:
 
@@ -165,7 +187,27 @@ exponential backoff (≤ 60 s, 5 attempts); permanent 4xx are never retried.
 The mock provider measures the result: `max_in_any_rolling_1s` and
 `limit_exceeded` (its own strict limiter) per channel in `/admin/stats`.
 
-**Cancel** (no button yet; the frontend gets one in CP17B):
+**Statistics and progress (CP17B).** `GET /api/v1/campaigns/<id>/stats` is
+one consistent snapshot of the consumed approval's rows: per channel the
+exclusive partition `approved_total = pending + in_flight + retry_scheduled +
+sent + failed + skipped_consent_revoked + skipped_no_contact + cancelled`
+(each row counted once, however many attempts it took), `uncertain` as an
+overlay, provider `attempts` (rows of `delivery_attempts`, by outcome, with
+`retries` and `per_second` over the last 10 s), sanitized `reasons`, totals,
+`progress`, `terminal` and worker health. "Sent" means **accepted by the
+(mock) provider**, not delivered to a handset or inbox; provider attempts
+(retries, 429s, replays) and the mock's ledger `messages` are different
+numbers again. `GET …/deliveries?status=&channel=&uncertain=&cursor=&limit=`
+pages the rows (id order, ≤ 100 per page) with masked destinations only.
+`GET …/events` is the SSE stream the dashboard uses: `stats` snapshots as they
+change (polled once per second), a keep-alive comment every 15 s, and one
+`end` event once the campaign is finished and no row is in flight:
+
+```bash
+curl -sN http://localhost:8000/api/v1/campaigns/<campaign id>/events
+```
+
+**Cancel** (also the dashboard's *Cancel sending…*):
 
 ```bash
 curl -sS -X POST -H 'Content-Type: application/json' -d '{"expected_version":<campaign version>}' \
@@ -294,6 +336,49 @@ SEED_REFERENCE_TIME="$(date -u +%Y-%m-%dT00:00:00Z)" docker compose up --build
 
 (This only takes effect on an empty volume; it is not reproducible across days.)
 
+## Metrics
+
+Prometheus text exposition (format 0.0.4) on `GET /metrics` of each
+process; neither is published to the host (the API is reached through the
+Compose network, the worker on its health port 9091):
+
+```bash
+docker compose exec api wget -qO- http://127.0.0.1:8080/metrics
+```
+
+```bash
+docker compose exec worker wget -qO- http://127.0.0.1:9091/metrics
+```
+
+| Metric | Type | Process | Meaning |
+|---|---|---|---|
+| `deliveries_total{channel,outcome}` | counter | worker, api | delivery rows this process committed to a terminal status (`sent`, `failed`, `skipped_consent_revoked`, `skipped_no_contact`, `cancelled`); once per row however many attempts. The API counts the queued rows its cancel transaction cancelled, the worker everything else — sum both jobs. |
+| `provider_request_duration_seconds{channel}` | histogram | worker | wall time of every provider HTTP request issued (any result) |
+| `provider_rate_limited_total{channel}` | counter | worker | provider 429 responses |
+| `delivery_queue_depth{channel,status}` | gauge | worker | released, non-terminal rows (`pending`, `in_flight`, `retry_scheduled`) sampled from PostgreSQL every 5 s; absent if the last sample failed |
+| `llm_requests_total{task,outcome}` | counter | api | LLM provider requests (repair and truncation retries are requests) by result; demo-mode calls are counted too |
+| `llm_request_duration_seconds{task}` | histogram | api | duration of those requests |
+
+Counters and histograms are per process and start at 0 when it starts
+(Prometheus treats restarts as counter resets); nothing is reconstructed
+from the database. Labels have closed value sets — no campaign, user,
+destination or free text — so the output has a fixed size (46 series from the worker, 82 from the API).
+
+## Known gaps (CP17B)
+
+- `/metrics` uses a small standard-library exposition (see *Metrics*), not
+  `prometheus/client_golang`, which could not be downloaded here (TLS
+  interception; verification is never disabled). It implements exactly the
+  six core metrics — no Go runtime/process collectors, summaries, exemplars
+  or OpenMetrics negotiation.
+- Cancellation cannot recall a request already on the wire (reported as
+  `in_flight`, at most one request per row). Requests are at-least-once; at
+  most one delivered message per recipient and channel holds only with the
+  mock provider's retained idempotency ledger; never exactly-once.
+- The 100 requests/s limit is enforced at the dispatch gate per channel for
+  the single dispatching worker; arrival at the provider additionally assumes
+  ≤ 30 ms transport jitter (measured by the mock provider, not proven).
+
 ## Tests
 
 Unit tests need no Docker, no API key and no network; the Anthropic adapter is
@@ -338,6 +423,13 @@ prove the rate guarantee from the provider's side (real time, 1,200
 messages with injected 5xx/429: `max_in_any_rolling_1s ≤ 100`, arrivals =
 recorded attempts), a dispatch handover between two workers, 429 channel
 isolation and pause persistence, cancellation races and the expiry sweeper.
+CP17B adds statistics reconciled against the committed rows (multi-attempt
+rows, replays, skips, failures, cancellation), pagination under concurrent
+worker updates, the progress stream following commits to exactly one `end`,
+reconnect snapshots, heartbeat freshness and a privacy scan of every
+response; the frontend suites cover the strict decoders, the EventSource
+composable (backoff, stale and malformed events) and the full send/cancel
+dashboard flow against a fake backend.
 
 Lint (gofmt, go vet, staticcheck):
 

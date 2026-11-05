@@ -28,6 +28,7 @@ import (
 	"github.com/fyusufayan/insider-campaign-composer-case/backend/internal/platform/config"
 	"github.com/fyusufayan/insider-campaign-composer-case/backend/internal/platform/db"
 	"github.com/fyusufayan/insider-campaign-composer-case/backend/internal/platform/logging"
+	"github.com/fyusufayan/insider-campaign-composer-case/backend/internal/platform/metrics"
 	"github.com/fyusufayan/insider-campaign-composer-case/backend/internal/provider"
 )
 
@@ -64,7 +65,10 @@ func run(log *slog.Logger) error {
 	}
 	policy := delivery.Policy{MaxTransientAttempts: cfg.MaxTransientAttempts, MaxRateLimitedAttempts: cfg.MaxRateLimitedAttempts,
 		BackoffBase: cfg.BackoffBase, BackoffCap: cfg.BackoffCap, RetryAfterCap: cfg.RetryAfterCap}
+	// GET /metrics on the worker's health port (§15, ADR-026).
+	reg := metrics.NewRegistry()
 	wcfg := delivery.Config{
+		Metrics:  delivery.NewMetrics(metrics.NewDelivery(reg)),
 		WorkerID: workerID, PoolSize: cfg.SenderPoolSize, ClaimBatch: cfg.ClaimBatchSize,
 		Lease: cfg.LeaseDuration, PollInterval: cfg.PollInterval, Policy: policy,
 		RatePerSecond: cfg.RateLimitPerSecond, RateWindow: time.Second + cfg.RateSafetyMargin,
@@ -106,6 +110,7 @@ func run(log *slog.Logger) error {
 		rw.Header().Set("Content-Type", "application/json")
 		_, _ = rw.Write([]byte(`{"status":"ok"}` + "\n"))
 	})
+	mux.Handle("GET /metrics", reg.Handler())
 	health := &http.Server{Addr: cfg.HealthAddr, Handler: mux, ReadHeaderTimeout: 5 * time.Second}
 	go func() {
 		if err := health.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {

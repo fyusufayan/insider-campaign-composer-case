@@ -23,6 +23,8 @@ const (
 	CodeEmptyAudience    = "empty_audience"
 	CodeAudienceChanged  = "audience_changed"
 	CodeCampaignBusy     = "campaign_busy"
+	// CodeTooManyStreams: the progress-stream limit is reached (CP17B, retryable).
+	CodeTooManyStreams = "too_many_streams"
 	// AI codes; identical to ai.Code* (asserted by a test).
 	CodeAIOutputInvalid = "ai_output_invalid"
 	CodeLLMUnavailable  = "llm_unavailable"

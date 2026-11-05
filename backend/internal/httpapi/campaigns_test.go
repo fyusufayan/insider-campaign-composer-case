@@ -15,6 +15,7 @@ import (
 	"github.com/fyusufayan/insider-campaign-composer-case/backend/internal/ai"
 	"github.com/fyusufayan/insider-campaign-composer-case/backend/internal/campaign"
 	"github.com/fyusufayan/insider-campaign-composer-case/backend/internal/campaign/campaigntest"
+	"github.com/fyusufayan/insider-campaign-composer-case/backend/internal/delivery"
 	"github.com/fyusufayan/insider-campaign-composer-case/backend/internal/llm"
 	"github.com/fyusufayan/insider-campaign-composer-case/backend/internal/segment"
 )
@@ -579,11 +580,13 @@ func TestAICodesMatchEnvelopeCodes(t *testing.T) {
 func TestReadyz(t *testing.T) {
 	log, _ := newTestLogger()
 	ready := NewRouter(log, Deps{Readiness: func(context.Context) (ReadinessReport, error) {
-		return ReadinessReport{Database: "ok", MigrationVersion: 1, LLMProvider: "demo"}, nil
+		return ReadinessReport{Database: "ok", MigrationVersion: 1, LLMProvider: "demo", Worker: delivery.UnknownWorkerHealth()}, nil
 	}})
 	rr := httptest.NewRecorder()
 	ready.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/readyz", nil))
-	want := `{"status":"ready","database":"ok","migration_version":1,"migration_dirty":false,"llm_provider":"demo"}`
+	want := `{"status":"ready","database":"ok","migration_version":1,"migration_dirty":false,"llm_provider":"demo",` +
+		`"worker":{"status":"unknown","last_seen_at":null,"heartbeat_age_seconds":null,"stale_after_seconds":15,"fresh_processes":0},` +
+		`"sending_campaigns":null}`
 	if rr.Code != 200 || strings.TrimSpace(rr.Body.String()) != want {
 		t.Errorf("ready: %d %s", rr.Code, rr.Body)
 	}

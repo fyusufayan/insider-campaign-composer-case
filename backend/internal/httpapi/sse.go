@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strconv"
 	"time"
 	"unicode/utf8"
 )
@@ -80,6 +81,16 @@ func (s *sseWriter) event(name string, v any) error {
 	buf.Write(data)
 	buf.WriteString("\n\n")
 	return s.write(buf.Bytes())
+}
+
+// retry writes the reconnection delay field ("retry: <ms>") for
+// EventSource clients.
+func (s *sseWriter) retry(d time.Duration) error {
+	if s.failed != nil {
+		return s.failed
+	}
+	s.start()
+	return s.write([]byte("retry: " + strconv.FormatInt(d.Milliseconds(), 10) + "\n\n"))
 }
 
 // comment writes a heartbeat comment.

@@ -14,6 +14,7 @@ import ApprovalPanel from '@/components/composer/ApprovalPanel.vue'
 import AudienceCard from '@/components/composer/AudienceCard.vue'
 import BriefCard from '@/components/composer/BriefCard.vue'
 import ContentPanel from '@/components/composer/ContentPanel.vue'
+import DeliveryPanel from '@/components/dashboard/DeliveryPanel.vue'
 import InterpretationCard from '@/components/composer/InterpretationCard.vue'
 import SegmentRuleView from '@/components/composer/SegmentRuleView.vue'
 import ErrorNotice from '@/components/ui/ErrorNotice.vue'
@@ -46,7 +47,14 @@ const {
   hasContentStep,
   selectedChannels,
   conflict,
+  hasDeliveryStep,
 } = storeToRefs(store)
+
+/** Sending or finished: the delivery dashboard leads the page. */
+const dashboardFirst = computed(() => {
+  const s = campaign.value?.status
+  return s === 'sending' || s === 'completed' || s === 'completed_with_failures' || s === 'cancelled'
+})
 
 const invalidId = computed(() => !isCampaignId(props.id))
 
@@ -168,6 +176,8 @@ async function copyLink() {
         @retry="store.reload()"
       />
 
+      <DeliveryPanel v-if="hasDeliveryStep && dashboardFirst" class="dashboard-first" />
+
       <div class="grid">
         <div class="col">
           <BriefCard
@@ -235,6 +245,7 @@ async function copyLink() {
 
       <ContentPanel v-if="hasContentStep" class="content-step" @revise="revise" />
       <ApprovalPanel v-if="hasContentStep" class="content-step" />
+      <DeliveryPanel v-if="hasDeliveryStep && !dashboardFirst" class="content-step" />
     </template>
   </div>
 </template>
@@ -302,6 +313,9 @@ async function copyLink() {
 }
 .content-step {
   margin-top: var(--space-5);
+}
+.dashboard-first {
+  margin-bottom: var(--space-5);
 }
 .placeholder {
   border-style: dashed;

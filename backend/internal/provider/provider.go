@@ -86,6 +86,12 @@ type Result struct {
 	MessageID  string
 	RetryAfter time.Duration // rate_limited only
 	ErrorCode  string
+	// Duration is the request's wall time measured by SendGated, from
+	// building the request to reading the response (metrics only; the
+	// clock is read before the gate, never between the gate and Do). It is
+	// zero when no HTTP request was issued (e.g. our own request could not
+	// be built).
+	Duration time.Duration
 }
 
 // Capabilities is what an adapter declares about its provider (§10.6):
@@ -273,6 +279,13 @@ func (c *Client) Send(ctx context.Context, m Message) Result {
 // permanent error with sent = true (nothing reached the provider, but the
 // attempt is final).
 func (c *Client) SendGated(ctx context.Context, m Message, gate func() bool) (r Result, sent bool) {
+	start := time.Now()
+	issued := false
+	defer func() {
+		if issued {
+			r.Duration = time.Since(start)
+		}
+	}()
 	req, err := c.newRequest(ctx, m)
 	if err != nil {
 		// Our own request could not be built: nothing was sent.
@@ -286,6 +299,7 @@ func (c *Client) SendGated(ctx context.Context, m Message, gate func() bool) (r 
 		return Result{}, false
 	}
 	resp, err := c.http.Do(req) // the only network call of a delivery attempt
+	issued = true
 	if err != nil {
 		return classifyTransportError(ctx, rctx, err), true
 	}

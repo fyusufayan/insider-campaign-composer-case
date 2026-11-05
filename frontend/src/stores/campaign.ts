@@ -39,6 +39,15 @@
 //      reload path). The expiry countdown is display only: when it elapses
 //      the store re-reads the approval (the server performs the expiry) and
 //      Confirm is disabled; the server's decision is authoritative.
+//   8. Send / cancel (CP17B): explicit, version-guarded mutations, one at a
+//      time (a second click while one is pending is ignored). Nothing ever
+//      sends implicitly (opening, refreshing or approving never calls
+//      /send). already_started is a success. A lost response (network
+//      error) or an invalid_state is never guessed at: the campaign is
+//      re-read with a fresh GET. Delivery statistics are server state of the
+//      dashboard (useCampaignEvents), not kept here; when they report a newer
+//      campaign version (completion, cancellation elsewhere) the campaign is
+//      re-read so the status shown follows the server.
 
 import { defineStore } from 'pinia'
 import { computed, ref, shallowRef } from 'vue'
@@ -46,6 +55,8 @@ import { ApiError, api, isApiError } from '@/api/client'
 import type {
   ApprovalResponse,
   ApprovalSummary,
+  CancelResponse,
+  SendResponse,
   AudienceStats,
   Campaign,
   CampaignStatus,
@@ -91,6 +102,17 @@ export type Draft = Record<ContentField, string>
 export type ApprovalAction = 'prepareApproval' | 'confirmApproval' | 'withdrawApproval'
 /** How the approval shown last ended, or that it was just confirmed. */
 export type ApprovalNotice = 'expired' | 'withdrawn' | 'replaced' | 'confirmed'
+
+export type DeliveryAction = 'send' | 'cancel'
+
+/** Outcome of the last send/cancel shown as a banner (counts only). */
+export type DeliveryNotice =
+  | { kind: 'started'; released: number }
+  | { kind: 'already_started' }
+  | { kind: 'cancelled'; cancelled: number; inFlight: number; releasedHeld: number }
+  | { kind: 'reconciled'; op: DeliveryAction }
+
+const DELIVERY_STATUSES: readonly CampaignStatus[] = ['approved', 'sending', 'completed', 'completed_with_failures', 'cancelled']
 
 
 const IDLE_GENERATION: GenerationView = {
@@ -194,6 +216,14 @@ export const useCampaignStore = defineStore('campaign', () => {
   /** server clock − client clock (ms), from the last approval response. */
   const serverOffsetMs = ref(0)
 
+  // ---- delivery (CP17B) ----
+  const sending = ref(false)
+  const cancelling = ref(false)
+  const deliveryActionError = shallowRef<{ op: DeliveryAction; error: ApiError } | null>(null)
+  const deliveryNotice = shallowRef<DeliveryNotice | null>(null)
+  const lastCancel = shallowRef<CancelResponse | null>(null)
+  const lastSend = shallowRef<SendResponse | null>(null)
+
   let epoch = 0
   const controllers = new Set<AbortController>()
   let audienceController: AbortController | null = null
@@ -206,8 +236,15 @@ export const useCampaignStore = defineStore('campaign', () => {
   // ---- derived ----
   const generating = computed(() => !['idle', 'done', 'failed', 'cancelled'].includes(generation.value.phase))
   const approvalBusy = computed(() => preparing.value || confirming.value || withdrawing.value)
+  const deliveryBusy = computed(() => sending.value || cancelling.value)
   const busy = computed(
-    () => interpreting.value || savingChannels.value || generating.value || savingContent.value || approvalBusy.value,
+    () =>
+      interpreting.value ||
+      savingChannels.value ||
+      generating.value ||
+      savingContent.value ||
+      approvalBusy.value ||
+      deliveryBusy.value,
   )
   const status = computed(() => campaign.value?.status ?? null)
   const canInterpret = computed(() => !!status.value && INTERPRET_STATUSES.includes(status.value))
@@ -283,6 +320,23 @@ export const useCampaignStore = defineStore('campaign', () => {
   })
   const canPrepare = computed(() => !busy.value && prepareBlockedReason.value === null)
 
+  /** The delivery step is shown (approved, sending or finished). */
+  const hasDeliveryStep = computed(() => !!status.value && DELIVERY_STATUSES.includes(status.value))
+  /** Why Start sending is unavailable (null: it is available). */
+  const sendBlockedReason = computed<string | null>(() => {
+    const c = campaign.value
+    if (!c) return 'Loading…'
+    if (c.status !== 'approved') return 'Only an approved campaign can be sent.'
+    const a = liveApproval.value
+    if (!a) return approvalLoading.value ? 'Loading the approval…' : 'The confirmed approval is not loaded; reload the campaign.'
+    if (a.status !== 'approved') return 'The approval is not confirmed.'
+    if (Date.parse(a.expires_at) <= Date.now() + serverOffsetMs.value) return 'The approval has expired.'
+    if (staleNotice.value) return 'A newer version exists; reload first.'
+    return null
+  })
+  const canSend = computed(() => !busy.value && sendBlockedReason.value === null)
+  const canCancelSending = computed(() => !busy.value && status.value === 'sending')
+
   // ---- helpers ----
   function track(): { controller: AbortController; myEpoch: number } {
     const controller = new AbortController()
@@ -346,6 +400,12 @@ export const useCampaignStore = defineStore('campaign', () => {
     approvalDialogOpen.value = false
     approvalNotice.value = null
     serverOffsetMs.value = 0
+    sending.value = false
+    cancelling.value = false
+    deliveryActionError.value = null
+    deliveryNotice.value = null
+    lastCancel.value = null
+    lastSend.value = null
   }
 
   /** Replaces the draft with the saved version's text (discarding edits). */
@@ -470,6 +530,7 @@ export const useCampaignStore = defineStore('campaign', () => {
     interpretError.value = null
     saveError.value = null
     approvalActionError.value = null
+    deliveryActionError.value = null
     if (generation.value.phase === 'failed') generation.value = IDLE_GENERATION
     await fetchCampaign({ refreshAudience: true })
   }
@@ -1026,6 +1087,115 @@ export const useCampaignStore = defineStore('campaign', () => {
     approvalActionError.value = null
   }
 
+  // ---- send / cancel (CP17B) ----
+
+  /**
+   * Re-reads the campaign after an interrupted or refused delivery action
+   * (never guesses the outcome). Also used when the progress stream reports
+   * a newer campaign version.
+   */
+  async function syncCampaign(): Promise<void> {
+    if (!campaignId.value || loading.value) return
+    await fetchCampaign({ refreshAudience: false })
+  }
+
+  /** Called by the dashboard with the campaign version a stats snapshot reports. */
+  function noteServerVersion(version: number): void {
+    const c = campaign.value
+    if (!c || version <= c.version || busy.value) return
+    void syncCampaign()
+  }
+
+  /**
+   * POST /send for the confirmed approval of the version shown. Explicit
+   * user action only; refused while anything else is pending.
+   */
+  async function startSending(): Promise<void> {
+    const id = campaignId.value
+    const cur = campaign.value
+    const a = liveApproval.value
+    if (!id || !cur || !a || !canSend.value) return
+    const { controller, myEpoch } = track()
+    sending.value = true
+    deliveryActionError.value = null
+    deliveryNotice.value = null
+    try {
+      const res = await api.send(id, { approval_id: a.approval_id, expected_version: cur.version }, controller.signal)
+      if (myEpoch !== epoch) return
+      if (res.campaign.id !== id) return
+      applyCampaign(res.campaign)
+      lastSend.value = res
+      approvalNotice.value = null
+      const released = Object.values(res.released).reduce((n, x) => n + (x ?? 0), 0)
+      deliveryNotice.value = res.already_started ? { kind: 'already_started' } : { kind: 'started', released }
+    } catch (e) {
+      const err = toApiError(e)
+      if (err.isAbort || myEpoch !== epoch) return
+      deliveryActionError.value = { op: 'send', error: err }
+      if (err.code === 'approval_expired') void refreshApproval(a.approval_id)
+      // The outcome is unknown (lost response) or the state moved: re-read, never retry.
+      if (err.kind === 'network' || err.kind === 'invalid_response' || err.code === 'invalid_state') {
+        void reconcileAfter('send', myEpoch)
+      }
+    } finally {
+      untrack(controller)
+      if (myEpoch === epoch) sending.value = false
+    }
+  }
+
+  async function reconcileAfter(op: DeliveryAction, myEpoch: number): Promise<void> {
+    const before = campaign.value?.version ?? 0
+    await fetchCampaign({ refreshAudience: false })
+    if (myEpoch !== epoch) return
+    const now = campaign.value
+    if (now && now.version > before) deliveryNotice.value = { kind: 'reconciled', op }
+  }
+
+  /** POST /cancel for a sending campaign (stops new work; cannot recall requests in flight). */
+  async function cancelSending(): Promise<void> {
+    const id = campaignId.value
+    const cur = campaign.value
+    if (!id || !cur || !canCancelSending.value) return
+    const { controller, myEpoch } = track()
+    cancelling.value = true
+    deliveryActionError.value = null
+    deliveryNotice.value = null
+    try {
+      const res = await api.cancel(id, cur.version, controller.signal)
+      if (myEpoch !== epoch) return
+      if (res.campaign.id !== id) return
+      applyCampaign(res.campaign)
+      lastCancel.value = res
+      const sum = (m: Partial<Record<Channel, number>>) => Object.values(m).reduce((n, x) => n + (x ?? 0), 0)
+      deliveryNotice.value = {
+        kind: 'cancelled',
+        cancelled: sum(res.cancelled_deliveries),
+        inFlight: sum(res.in_flight),
+        releasedHeld: res.released_held_rows,
+      }
+    } catch (e) {
+      const err = toApiError(e)
+      if (err.isAbort || myEpoch !== epoch) return
+      deliveryActionError.value = { op: 'cancel', error: err }
+      // A lost response may have cancelled; an invalid_state usually means the
+      // campaign just completed (cancellation racing completion): re-read.
+      if (err.kind === 'network' || err.kind === 'invalid_response' || err.code === 'invalid_state') {
+        void reconcileAfter('cancel', myEpoch)
+      }
+    } finally {
+      untrack(controller)
+      if (myEpoch === epoch) cancelling.value = false
+    }
+  }
+
+  function dismissDeliveryNotice(): void {
+    deliveryNotice.value = null
+  }
+
+  function dismissDeliveryError(): void {
+    deliveryActionError.value = null
+  }
+
   return {
     // state
     campaignId,
@@ -1066,6 +1236,12 @@ export const useCampaignStore = defineStore('campaign', () => {
     approvalDialogOpen,
     approvalNotice,
     serverOffsetMs,
+    sending,
+    cancelling,
+    deliveryActionError,
+    deliveryNotice,
+    lastCancel,
+    lastSend,
     // derived
     busy,
     approvalBusy,
@@ -1088,6 +1264,11 @@ export const useCampaignStore = defineStore('campaign', () => {
     canEditContent,
     canGenerate,
     shownValidation,
+    deliveryBusy,
+    hasDeliveryStep,
+    sendBlockedReason,
+    canSend,
+    canCancelSending,
     // actions
     open,
     close,
@@ -1116,5 +1297,11 @@ export const useCampaignStore = defineStore('campaign', () => {
     approvalDeadlinePassed,
     dismissApprovalNotice,
     dismissApprovalError,
+    syncCampaign,
+    noteServerVersion,
+    startSending,
+    cancelSending,
+    dismissDeliveryNotice,
+    dismissDeliveryError,
   }
 })

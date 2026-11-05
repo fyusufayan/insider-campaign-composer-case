@@ -18,6 +18,10 @@ export type Operation =
   | 'approval'
   | 'confirmApproval'
   | 'withdrawApproval'
+  | 'send'
+  | 'cancel'
+  | 'stats'
+  | 'deliveries'
 
 export interface ErrorPresentation {
   title: string
@@ -49,6 +53,18 @@ export function presentError(err: ApiError, op: Operation): ErrorPresentation {
       canRetry: true,
     }
   }
+  if (err.kind === 'network' && (op === 'send' || op === 'cancel')) {
+    return {
+      ...base,
+      title: 'Cannot reach the server',
+      message:
+        op === 'send'
+          ? 'The response to Start sending was lost. The request may or may not have started the send; the latest campaign state is being reloaded — never assume either outcome.'
+          : 'The response to Cancel was lost. The cancellation may or may not have been applied; the latest campaign state is being reloaded.',
+      canRetry: false,
+      canReload: true,
+    }
+  }
   if (err.kind === 'network') {
     return { ...base, title: 'Cannot reach the server', canRetry: true }
   }
@@ -63,6 +79,10 @@ export function presentError(err: ApiError, op: Operation): ErrorPresentation {
   if (op === 'prepareApproval' || op === 'approval' || op === 'confirmApproval' || op === 'withdrawApproval') {
     const a = presentApprovalError(err, op, base)
     if (a) return a
+  }
+  if (op === 'send' || op === 'cancel' || op === 'stats' || op === 'deliveries') {
+    const d = presentDeliveryError(err, op, base)
+    if (d) return d
   }
 
   switch (err.code) {
@@ -226,6 +246,58 @@ function presentApprovalError(err: ApiError, op: Operation, base: ErrorPresentat
       }
     case 'invalid_state':
       return { ...base, title: 'This approval action is not allowed right now', canRetry: false, canReload: true }
+    default:
+      return null
+  }
+}
+
+/** Send / cancel / statistics wording (CP17B). Nothing is retried automatically. */
+function presentDeliveryError(err: ApiError, op: Operation, base: ErrorPresentation): ErrorPresentation | null {
+  switch (err.code) {
+    case 'approval_expired':
+      return {
+        ...base,
+        title: 'The approval has expired',
+        message: 'Nothing was sent: the approval passed its time limit and its recipient snapshot was released.',
+        hint: 'Reload the campaign and prepare a new approval.',
+        canRetry: false,
+        canReload: true,
+      }
+    case 'approval_mismatch':
+      return {
+        ...base,
+        title: 'The approval no longer matches the campaign',
+        hint: 'Nothing was sent. Reload the campaign and review it again.',
+        canRetry: false,
+        canReload: true,
+      }
+    case 'version_conflict':
+      return {
+        ...base,
+        title: 'This campaign was changed elsewhere',
+        message:
+          op === 'send'
+            ? 'Nothing was started by this request: the campaign changed since you loaded it. Reload and check its current state.'
+            : 'Nothing was cancelled by this request: the campaign changed since you loaded it (for example, it just finished). Reload and check its current state.',
+        canRetry: false,
+        canReload: true,
+      }
+    case 'invalid_state':
+      return {
+        ...base,
+        title: op === 'send' ? 'Sending cannot start' : 'The campaign cannot be cancelled',
+        hint: 'The latest campaign state is being reloaded.',
+        canRetry: false,
+        canReload: true,
+      }
+    case 'campaign_busy':
+      return { ...base, title: 'The campaign is busy', canRetry: false, canReload: true }
+    case 'too_many_streams':
+      return { ...base, title: 'Too many live views are open', canRetry: true }
+    case 'not_found':
+      return op === 'send'
+        ? { ...base, title: 'Approval not found', hint: 'Reload the campaign.', canRetry: false, canReload: true }
+        : null
     default:
       return null
   }

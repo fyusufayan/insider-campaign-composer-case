@@ -195,6 +195,9 @@ export interface ReadinessReport {
   migration_version: number
   migration_dirty: boolean
   llm_provider: string
+  /** Freshest worker heartbeat (CP17B); reported only, never a readiness failure. Null if absent from the body. */
+  worker: WorkerHealth | null
+  sending_campaigns: number | null
 }
 
 // ---- Content (CP13; backend httpapi/dto.go content DTOs) ----
@@ -393,6 +396,7 @@ export type ErrorCode =
   | 'empty_audience'
   | 'audience_changed'
   | 'campaign_busy'
+  | 'too_many_streams'
 
 export interface ErrorBody {
   /** One of ErrorCode for this API version; unknown codes are tolerated. */
@@ -488,3 +492,177 @@ export const LIMITS = {
   briefMin: 10,
   briefMax: 2000,
 } as const
+
+// ---- Send / cancel (CP16/CP17A; backend httpapi/approvals.go) ----
+
+export interface SendRequest {
+  approval_id: string
+  expected_version: number
+}
+
+/** POST /send: 202 started, or 200 already_started (idempotent repeat). */
+export interface SendResponse {
+  status: CampaignStatus
+  approval_id: string
+  released: Partial<Record<Channel, number>>
+  already_started: boolean
+  campaign: Campaign
+  server_time: string
+}
+
+export interface CancelRequest {
+  expected_version: number
+}
+
+export interface CancelResponse {
+  status: 'cancelled'
+  previous_status: CampaignStatus
+  revoked_approval_id: string | null
+  released_held_rows: number
+  cancelled_deliveries: Partial<Record<Channel, number>>
+  /** Rows in flight at the commit: each may still make at most one provider request. */
+  in_flight: Partial<Record<Channel, number>>
+  campaign: Campaign
+  server_time: string
+}
+
+// ---- Delivery statistics (CP17B; backend delivery/stats.go, ARCHITECTURE §13) ----
+
+export type DeliveryStatus =
+  | 'pending'
+  | 'in_flight'
+  | 'retry_scheduled'
+  | 'sent'
+  | 'failed'
+  | 'skipped_consent_revoked'
+  | 'skipped_no_contact'
+  | 'cancelled'
+
+export type AttemptOutcome =
+  | 'accepted'
+  | 'replayed'
+  | 'rate_limited'
+  | 'transient_error'
+  | 'timeout'
+  | 'permanent_error'
+  | 'unknown'
+
+/** Exclusive partition of delivery rows; uncertain is an overlay, never added. */
+export interface DeliveryPartition {
+  approved_total: number
+  pending: number
+  in_flight: number
+  retry_scheduled: number
+  sent: number
+  failed: number
+  skipped_consent_revoked: number
+  skipped_no_contact: number
+  cancelled: number
+  uncertain: number
+}
+
+/** Provider attempts (delivery_attempts rows), not deliveries. */
+export interface DeliveryAttempts {
+  total: number
+  by_outcome: Record<AttemptOutcome, number>
+  retries: number
+  retried_deliveries: number
+  recent: number
+  per_second: number
+}
+
+export interface DeliveryReason {
+  status: DeliveryStatus
+  /** Sanitized code ([a-z0-9_]): e.g. no_consent, destination_rejected, campaign_cancelled, http_500. */
+  code: string
+  count: number
+}
+
+export interface ChannelDeliveryStats extends DeliveryPartition {
+  attempts: DeliveryAttempts
+  reasons: DeliveryReason[]
+}
+
+export type WorkerHealthStatus = 'fresh' | 'stale' | 'absent' | 'unknown'
+
+export interface WorkerHealth {
+  status: WorkerHealthStatus
+  last_seen_at: string | null
+  heartbeat_age_seconds: number | null
+  stale_after_seconds: number
+  fresh_processes: number
+}
+
+export type DeliveryOutcome =
+  | 'not_started'
+  | 'sending'
+  | 'settling'
+  | 'completed'
+  | 'completed_with_failures'
+  | 'cancelled'
+
+export interface DeliveryStats {
+  campaign_id: string
+  campaign_status: CampaignStatus
+  campaign_version: number
+  approval_id: string | null
+  segment_version: number | null
+  content_id: number | null
+  content_version: number | null
+  channels: Partial<Record<Channel, ChannelDeliveryStats>>
+  totals: DeliveryPartition
+  attempts: DeliveryAttempts
+  processed: number
+  remaining: number
+  /** processed / approved_total in [0, 1]; 0 for an empty snapshot. */
+  progress: number
+  campaign_terminal: boolean
+  /** campaign_terminal and no row pending / in flight / scheduled: final numbers. */
+  terminal: boolean
+  outcome: DeliveryOutcome
+  send_started_at: string | null
+  completed_at: string | null
+  cancelled_at: string | null
+  worker: WorkerHealth
+  updated_at: string
+}
+
+/** One delivery row in safe form (no user id, contact, vars, body or key). */
+export interface DeliveryItem {
+  id: number
+  channel: Channel
+  status: DeliveryStatus
+  attempts: number
+  rate_limited_attempts: number
+  outcome_uncertain: boolean
+  reason: string | null
+  destination_masked: string | null
+  sent_at: string | null
+  updated_at: string
+}
+
+export interface DeliveryPage {
+  campaign_id: string
+  approval_id: string | null
+  items: DeliveryItem[]
+  next_cursor: string | null
+  limit: number
+}
+
+export interface DeliveryListQuery {
+  status?: DeliveryStatus
+  channel?: Channel
+  uncertain?: boolean
+  cursor?: string
+  limit?: number
+}
+
+/** Terminal event of GET /events. */
+export interface DeliveryEndEvent {
+  campaign_id: string
+  campaign_status: CampaignStatus
+  campaign_version: number
+  outcome: DeliveryOutcome
+}
+
+export type DeliveryStreamEvent = { type: 'stats'; data: DeliveryStats } | { type: 'end'; data: DeliveryEndEvent }

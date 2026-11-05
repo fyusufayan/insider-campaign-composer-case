@@ -45,6 +45,22 @@ import type {
   ReadinessReport,
   RenderedExample,
   SegmentRule,
+  AttemptOutcome,
+  CancelResponse,
+  ChannelDeliveryStats,
+  DeliveryAttempts,
+  DeliveryEndEvent,
+  DeliveryItem,
+  DeliveryOutcome,
+  DeliveryPage,
+  DeliveryPartition,
+  DeliveryReason,
+  DeliveryStats,
+  DeliveryStatus,
+  DeliveryStreamEvent,
+  SendResponse,
+  WorkerHealth,
+  WorkerHealthStatus,
 } from './types'
 
 export class DecodeError extends Error {
@@ -296,6 +312,21 @@ export function decodeReadiness(v: unknown): ReadinessReport {
     migration_version: typeof o.migration_version === 'number' ? o.migration_version : 0,
     migration_dirty: o.migration_dirty === true,
     llm_provider: typeof o.llm_provider === 'string' ? o.llm_provider : '',
+    // Readiness is informational and decoded leniently: a missing or
+    // malformed worker report is "unknown", never "fresh".
+    worker: lenientWorker(o.worker),
+    sending_campaigns:
+      typeof o.sending_campaigns === 'number' && Number.isInteger(o.sending_campaigns) && o.sending_campaigns >= 0
+        ? o.sending_campaigns
+        : null,
+  }
+}
+
+function lenientWorker(v: unknown): WorkerHealth | null {
+  try {
+    return workerHealth(v, 'worker')
+  } catch {
+    return null
   }
 }
 
@@ -700,4 +731,375 @@ export function decodeApprovalResponse(v: unknown, path = 'response'): ApprovalR
   if (a.status === 'pending' && c.status !== 'pending_approval') throw new DecodeError(`${path}.campaign.status`, 'pending_approval')
   if (a.status === 'approved' && c.status !== 'approved') throw new DecodeError(`${path}.campaign.status`, 'approved')
   return res
+}
+
+// ---- Send / cancel (CP16/CP17A) ----
+
+function channelCountMap(v: unknown, path: string): Partial<Record<Channel, number>> {
+  const o = obj(v, path)
+  const out: Partial<Record<Channel, number>> = {}
+  for (const k of Object.keys(o)) {
+    out[channel(k, `${path}.${k}`)] = nonNegative(o[k], `${path}.${k}`)
+  }
+  return out
+}
+
+const SEND_KEYS = ['status', 'approval_id', 'released', 'already_started', 'campaign', 'server_time'] as const
+
+export function decodeSendResponse(v: unknown, path = 'response'): SendResponse {
+  const o = obj(v, path)
+  closed(o, SEND_KEYS, path)
+  const campaign = decodeCampaign(o.campaign, `${path}.campaign`)
+  const status = str(o.status, `${path}.status`)
+  if (status !== campaign.status) throw new DecodeError(`${path}.status`, 'the campaign status')
+  const res: SendResponse = {
+    status: campaign.status,
+    approval_id: uuid(o.approval_id, `${path}.approval_id`),
+    released: channelCountMap(o.released, `${path}.released`),
+    already_started: bool(o.already_started, `${path}.already_started`),
+    campaign,
+    server_time: timestamp(o.server_time, `${path}.server_time`),
+  }
+  if (!['sending', 'completed', 'completed_with_failures'].includes(campaign.status)) {
+    throw new DecodeError(`${path}.status`, 'sending or a completed status')
+  }
+  if (campaign.active_approval_id !== res.approval_id) {
+    throw new DecodeError(`${path}.campaign.active_approval_id`, 'the consumed approval')
+  }
+  return res
+}
+
+const CANCEL_KEYS = [
+  'status',
+  'previous_status',
+  'revoked_approval_id',
+  'released_held_rows',
+  'cancelled_deliveries',
+  'in_flight',
+  'campaign',
+  'server_time',
+] as const
+
+export function decodeCancelResponse(v: unknown, path = 'response'): CancelResponse {
+  const o = obj(v, path)
+  closed(o, CANCEL_KEYS, path)
+  const campaign = decodeCampaign(o.campaign, `${path}.campaign`)
+  if (o.status !== 'cancelled' || campaign.status !== 'cancelled') throw new DecodeError(`${path}.status`, '"cancelled"')
+  const prev = str(o.previous_status, `${path}.previous_status`)
+  if (!(STATUSES as readonly string[]).includes(prev)) throw new DecodeError(`${path}.previous_status`, 'a known status')
+  return {
+    status: 'cancelled',
+    previous_status: prev as CampaignStatus,
+    revoked_approval_id: nullableUuid(o.revoked_approval_id, `${path}.revoked_approval_id`),
+    released_held_rows: nonNegative(o.released_held_rows, `${path}.released_held_rows`),
+    cancelled_deliveries: channelCountMap(o.cancelled_deliveries, `${path}.cancelled_deliveries`),
+    in_flight: channelCountMap(o.in_flight, `${path}.in_flight`),
+    campaign,
+    server_time: timestamp(o.server_time, `${path}.server_time`),
+  }
+}
+
+// ---- Delivery statistics (CP17B, §13) ----
+// Closed property sets and cross-field identities: a snapshot that does not
+// reconcile (partition ≠ approved_total, inconsistent terminal flags, …) is
+// rejected as a whole instead of being shown.
+
+export const DELIVERY_STATUSES: readonly DeliveryStatus[] = [
+  'pending',
+  'in_flight',
+  'retry_scheduled',
+  'sent',
+  'failed',
+  'skipped_consent_revoked',
+  'skipped_no_contact',
+  'cancelled',
+]
+const ATTEMPT_OUTCOMES: readonly AttemptOutcome[] = [
+  'accepted',
+  'replayed',
+  'rate_limited',
+  'transient_error',
+  'timeout',
+  'permanent_error',
+  'unknown',
+]
+const DELIVERY_OUTCOMES: readonly DeliveryOutcome[] = [
+  'not_started',
+  'sending',
+  'settling',
+  'completed',
+  'completed_with_failures',
+  'cancelled',
+]
+const WORKER_STATUSES: readonly WorkerHealthStatus[] = ['fresh', 'stale', 'absent', 'unknown']
+const PARTITION_KEYS = [
+  'approved_total',
+  'pending',
+  'in_flight',
+  'retry_scheduled',
+  'sent',
+  'failed',
+  'skipped_consent_revoked',
+  'skipped_no_contact',
+  'cancelled',
+  'uncertain',
+] as const
+const CODE_RE = /^[a-z0-9_]{1,64}$/
+
+function deliveryStatus(v: unknown, path: string): DeliveryStatus {
+  const s = str(v, path)
+  if (!(DELIVERY_STATUSES as readonly string[]).includes(s)) throw new DecodeError(path, 'a delivery status')
+  return s as DeliveryStatus
+}
+
+function nonNegativeNumber(v: unknown, path: string): number {
+  if (typeof v !== 'number' || !Number.isFinite(v) || v < 0) throw new DecodeError(path, 'a non-negative number')
+  return v
+}
+
+function partitionFields(o: Obj, path: string): DeliveryPartition {
+  const p = {} as DeliveryPartition
+  for (const k of PARTITION_KEYS) p[k] = nonNegative(o[k], `${path}.${k}`)
+  const sum =
+    p.pending + p.in_flight + p.retry_scheduled + p.sent + p.failed + p.skipped_consent_revoked + p.skipped_no_contact + p.cancelled
+  if (sum !== p.approved_total) throw new DecodeError(path, 'a partition that sums to approved_total')
+  if (p.uncertain > p.approved_total - p.sent) throw new DecodeError(`${path}.uncertain`, 'at most the non-sent rows')
+  return p
+}
+
+function attempts(v: unknown, path: string): DeliveryAttempts {
+  const o = obj(v, path)
+  closed(o, ['total', 'by_outcome', 'retries', 'retried_deliveries', 'recent', 'per_second'], path)
+  const bo = obj(o.by_outcome, `${path}.by_outcome`)
+  closed(bo, ATTEMPT_OUTCOMES, `${path}.by_outcome`)
+  const by = {} as Record<AttemptOutcome, number>
+  let sum = 0
+  for (const k of ATTEMPT_OUTCOMES) {
+    by[k] = nonNegative(bo[k], `${path}.by_outcome.${k}`)
+    sum += by[k]
+  }
+  const a: DeliveryAttempts = {
+    total: nonNegative(o.total, `${path}.total`),
+    by_outcome: by,
+    retries: nonNegative(o.retries, `${path}.retries`),
+    retried_deliveries: nonNegative(o.retried_deliveries, `${path}.retried_deliveries`),
+    recent: nonNegative(o.recent, `${path}.recent`),
+    per_second: nonNegativeNumber(o.per_second, `${path}.per_second`),
+  }
+  if (sum !== a.total) throw new DecodeError(`${path}.total`, 'the sum of by_outcome')
+  if (a.retries > a.total || a.recent > a.total) throw new DecodeError(path, 'retries and recent ≤ total')
+  return a
+}
+
+function reason(v: unknown, path: string): DeliveryReason {
+  const o = obj(v, path)
+  closed(o, ['status', 'code', 'count'], path)
+  const code = str(o.code, `${path}.code`)
+  if (!CODE_RE.test(code)) throw new DecodeError(`${path}.code`, 'a short [a-z0-9_] code')
+  return { status: deliveryStatus(o.status, `${path}.status`), code, count: nonNegative(o.count, `${path}.count`) }
+}
+
+function channelDeliveryStats(v: unknown, path: string): ChannelDeliveryStats {
+  const o = obj(v, path)
+  closed(o, [...PARTITION_KEYS, 'attempts', 'reasons'], path)
+  const p = partitionFields(o, path)
+  const a = attempts(o.attempts, `${path}.attempts`)
+  if (!Array.isArray(o.reasons) || o.reasons.length > 64) throw new DecodeError(`${path}.reasons`, 'an array of ≤ 64 reasons')
+  const reasons = o.reasons.map((r, i) => reason(r, `${path}.reasons[${i}]`))
+  if (a.by_outcome.accepted + a.by_outcome.replayed < p.sent) {
+    throw new DecodeError(`${path}.attempts`, 'at least one accepted/replayed attempt per sent delivery')
+  }
+  return { ...p, attempts: a, reasons }
+}
+
+export function workerHealth(v: unknown, path = 'worker'): WorkerHealth {
+  const o = obj(v, path)
+  closed(o, ['status', 'last_seen_at', 'heartbeat_age_seconds', 'stale_after_seconds', 'fresh_processes'], path)
+  const status = str(o.status, `${path}.status`)
+  if (!(WORKER_STATUSES as readonly string[]).includes(status)) throw new DecodeError(`${path}.status`, 'a worker status')
+  const age = o.heartbeat_age_seconds === null ? null : nonNegativeNumber(o.heartbeat_age_seconds, `${path}.heartbeat_age_seconds`)
+  const w: WorkerHealth = {
+    status: status as WorkerHealthStatus,
+    last_seen_at: nullableTimestamp(o.last_seen_at, `${path}.last_seen_at`),
+    heartbeat_age_seconds: age,
+    stale_after_seconds: nonNegative(o.stale_after_seconds, `${path}.stale_after_seconds`),
+    fresh_processes: nonNegative(o.fresh_processes, `${path}.fresh_processes`),
+  }
+  if ((w.status === 'fresh' || w.status === 'stale') !== (w.last_seen_at !== null)) {
+    throw new DecodeError(`${path}.last_seen_at`, 'a heartbeat time exactly when one exists')
+  }
+  if (w.status === 'fresh' && age !== null && age > w.stale_after_seconds) {
+    throw new DecodeError(`${path}.status`, 'fresh only within stale_after_seconds')
+  }
+  return w
+}
+
+const STATS_KEYS = [
+  'campaign_id',
+  'campaign_status',
+  'campaign_version',
+  'approval_id',
+  'segment_version',
+  'content_id',
+  'content_version',
+  'channels',
+  'totals',
+  'attempts',
+  'processed',
+  'remaining',
+  'progress',
+  'campaign_terminal',
+  'terminal',
+  'outcome',
+  'send_started_at',
+  'completed_at',
+  'cancelled_at',
+  'worker',
+  'updated_at',
+] as const
+
+export function decodeDeliveryStats(v: unknown, path = 'stats'): DeliveryStats {
+  const o = obj(v, path)
+  closed(o, STATS_KEYS, path)
+  const status = str(o.campaign_status, `${path}.campaign_status`)
+  if (!(STATUSES as readonly string[]).includes(status)) throw new DecodeError(`${path}.campaign_status`, 'a known status')
+  const outcome = str(o.outcome, `${path}.outcome`)
+  if (!(DELIVERY_OUTCOMES as readonly string[]).includes(outcome)) throw new DecodeError(`${path}.outcome`, 'a delivery outcome')
+  const chObj = obj(o.channels, `${path}.channels`)
+  const chs: Partial<Record<Channel, ChannelDeliveryStats>> = {}
+  for (const k of Object.keys(chObj)) chs[channel(k, `${path}.channels.${k}`)] = channelDeliveryStats(chObj[k], `${path}.channels.${k}`)
+  const tObj = obj(o.totals, `${path}.totals`)
+  closed(tObj, PARTITION_KEYS, `${path}.totals`)
+  const st: DeliveryStats = {
+    campaign_id: uuid(o.campaign_id, `${path}.campaign_id`),
+    campaign_status: status as CampaignStatus,
+    campaign_version: int(o.campaign_version, `${path}.campaign_version`),
+    approval_id: nullableUuid(o.approval_id, `${path}.approval_id`),
+    segment_version: nullableInt(o.segment_version, `${path}.segment_version`),
+    content_id: nullableInt(o.content_id, `${path}.content_id`),
+    content_version: nullableInt(o.content_version, `${path}.content_version`),
+    channels: chs,
+    totals: partitionFields(tObj, `${path}.totals`),
+    attempts: attempts(o.attempts, `${path}.attempts`),
+    processed: nonNegative(o.processed, `${path}.processed`),
+    remaining: nonNegative(o.remaining, `${path}.remaining`),
+    progress: nonNegativeNumber(o.progress, `${path}.progress`),
+    campaign_terminal: bool(o.campaign_terminal, `${path}.campaign_terminal`),
+    terminal: bool(o.terminal, `${path}.terminal`),
+    outcome: outcome as DeliveryOutcome,
+    send_started_at: nullableTimestamp(o.send_started_at, `${path}.send_started_at`),
+    completed_at: nullableTimestamp(o.completed_at, `${path}.completed_at`),
+    cancelled_at: nullableTimestamp(o.cancelled_at, `${path}.cancelled_at`),
+    worker: workerHealth(o.worker, `${path}.worker`),
+    updated_at: timestamp(o.updated_at, `${path}.updated_at`),
+  }
+  // Cross-field identities.
+  const list = Object.values(chs)
+  const sumOf = (k: (typeof PARTITION_KEYS)[number]) => list.reduce((n, c) => n + c[k], 0)
+  for (const k of PARTITION_KEYS) {
+    if (sumOf(k) !== st.totals[k]) throw new DecodeError(`${path}.totals.${k}`, 'the sum over channels')
+  }
+  if (list.reduce((n, c) => n + c.attempts.total, 0) !== st.attempts.total) {
+    throw new DecodeError(`${path}.attempts.total`, 'the sum over channels')
+  }
+  const t = st.totals
+  const processed = t.sent + t.failed + t.skipped_consent_revoked + t.skipped_no_contact + t.cancelled
+  if (st.processed !== processed || st.remaining !== t.pending + t.in_flight + t.retry_scheduled) {
+    throw new DecodeError(`${path}.processed`, 'processed/remaining consistent with the totals')
+  }
+  if (st.progress > 1 || (t.approved_total === 0 && st.progress !== 0)) throw new DecodeError(`${path}.progress`, 'a ratio in [0, 1]')
+  if ((st.approval_id === null) !== (list.length === 0)) throw new DecodeError(`${path}.channels`, 'channels exactly when an approval was consumed')
+  const finished = ['completed', 'completed_with_failures', 'cancelled'].includes(status)
+  if (st.campaign_terminal !== finished) throw new DecodeError(`${path}.campaign_terminal`, 'consistent with campaign_status')
+  if (st.terminal !== (finished && st.remaining === 0)) throw new DecodeError(`${path}.terminal`, 'campaign_terminal and nothing remaining')
+  const expected: DeliveryOutcome = st.terminal
+    ? (status as DeliveryOutcome)
+    : finished
+      ? 'settling'
+      : status === 'sending'
+        ? 'sending'
+        : 'not_started'
+  if (st.outcome !== expected) throw new DecodeError(`${path}.outcome`, `"${expected}"`)
+  return st
+}
+
+export function decodeDeliveryEnd(v: unknown, path = 'end'): DeliveryEndEvent {
+  const o = obj(v, path)
+  closed(o, ['campaign_id', 'campaign_status', 'campaign_version', 'outcome'], path)
+  const status = str(o.campaign_status, `${path}.campaign_status`)
+  if (!['completed', 'completed_with_failures', 'cancelled'].includes(status)) {
+    throw new DecodeError(`${path}.campaign_status`, 'a terminal status')
+  }
+  if (o.outcome !== status) throw new DecodeError(`${path}.outcome`, 'the campaign status')
+  return {
+    campaign_id: uuid(o.campaign_id, `${path}.campaign_id`),
+    campaign_status: status as CampaignStatus,
+    campaign_version: int(o.campaign_version, `${path}.campaign_version`),
+    outcome: status as DeliveryOutcome,
+  }
+}
+
+/** Decodes one progress-stream event; unknown names or shapes are rejected. */
+export function decodeDeliveryEvent(name: string, data: unknown): DeliveryStreamEvent {
+  if (name === 'stats') return { type: 'stats', data: decodeDeliveryStats(data) }
+  if (name === 'end') return { type: 'end', data: decodeDeliveryEnd(data) }
+  throw new DecodeError('event', 'stats or end')
+}
+
+const ITEM_KEYS = [
+  'id',
+  'channel',
+  'status',
+  'attempts',
+  'rate_limited_attempts',
+  'outcome_uncertain',
+  'reason',
+  'destination_masked',
+  'sent_at',
+  'updated_at',
+] as const
+
+function deliveryItem(v: unknown, path: string): DeliveryItem {
+  const o = obj(v, path)
+  closed(o, ITEM_KEYS, path)
+  const reasonCode = nullableStr(o.reason, `${path}.reason`)
+  if (reasonCode !== null && !CODE_RE.test(reasonCode)) throw new DecodeError(`${path}.reason`, 'a short [a-z0-9_] code')
+  const masked = nullableStr(o.destination_masked, `${path}.destination_masked`)
+  // A masked destination always hides most of the value.
+  if (masked !== null && !masked.includes('*')) throw new DecodeError(`${path}.destination_masked`, 'a masked value')
+  const id = int(o.id, `${path}.id`)
+  if (id < 1) throw new DecodeError(`${path}.id`, 'a positive id')
+  return {
+    id,
+    channel: channel(o.channel, `${path}.channel`),
+    status: deliveryStatus(o.status, `${path}.status`),
+    attempts: nonNegative(o.attempts, `${path}.attempts`),
+    rate_limited_attempts: nonNegative(o.rate_limited_attempts, `${path}.rate_limited_attempts`),
+    outcome_uncertain: bool(o.outcome_uncertain, `${path}.outcome_uncertain`),
+    reason: reasonCode,
+    destination_masked: masked,
+    sent_at: nullableTimestamp(o.sent_at, `${path}.sent_at`),
+    updated_at: timestamp(o.updated_at, `${path}.updated_at`),
+  }
+}
+
+export function decodeDeliveryPage(v: unknown, path = 'page'): DeliveryPage {
+  const o = obj(v, path)
+  closed(o, ['campaign_id', 'approval_id', 'items', 'next_cursor', 'limit'], path)
+  if (!Array.isArray(o.items)) throw new DecodeError(`${path}.items`, 'an array')
+  const limit = int(o.limit, `${path}.limit`)
+  if (limit < 1 || limit > 100 || o.items.length > limit) throw new DecodeError(`${path}.limit`, 'a page size ≥ the item count')
+  const items = o.items.map((x, i) => deliveryItem(x, `${path}.items[${i}]`))
+  for (let i = 1; i < items.length; i++) {
+    if (items[i]!.id <= items[i - 1]!.id) throw new DecodeError(`${path}.items[${i}].id`, 'ascending ids')
+  }
+  const next = nullableStr(o.next_cursor, `${path}.next_cursor`)
+  if (next !== null && !/^[1-9][0-9]{0,17}$/.test(next)) throw new DecodeError(`${path}.next_cursor`, 'a cursor')
+  return {
+    campaign_id: uuid(o.campaign_id, `${path}.campaign_id`),
+    approval_id: nullableUuid(o.approval_id, `${path}.approval_id`),
+    items,
+    next_cursor: next,
+    limit,
+  }
 }

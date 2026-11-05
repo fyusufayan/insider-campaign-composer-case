@@ -205,5 +205,10 @@ func (s *Service) Cancel(ctx context.Context, campaignID campaign.ID, expectedVe
 		attrs = append(attrs, "in_flight_"+string(ch), n)
 	}
 	s.log.InfoContext(ctx, "campaign cancelled", attrs...)
+	if s.cfg.DeliveriesCancelled != nil {
+		for ch, n := range out.CancelledRows {
+			s.cfg.DeliveriesCancelled(ch, n)
+		}
+	}
 	return out, nil
 }

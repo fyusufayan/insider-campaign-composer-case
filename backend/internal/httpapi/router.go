@@ -18,6 +18,12 @@ type Deps struct {
 	// Campaigns).
 	Approvals *approval.Service
 	Readiness ReadinessFunc
+	// Deliveries serves /stats, /deliveries and /events (CP17B; registered
+	// only together with Campaigns).
+	Deliveries DeliveryStats
+	Events     EventsConfig
+	// Metrics serves GET /metrics (Prometheus text exposition) when set.
+	Metrics http.Handler
 }
 
 // NewRouter returns the API handler with all middleware applied.
@@ -26,6 +32,9 @@ type Deps struct {
 func NewRouter(log *slog.Logger, deps Deps) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", handleHealthz)
+	if deps.Metrics != nil {
+		mux.Handle("GET /metrics", deps.Metrics)
+	}
 	if deps.Readiness != nil {
 		mux.HandleFunc("GET /readyz", handleReadyz(deps.Readiness, log))
 	}
@@ -34,6 +43,9 @@ func NewRouter(log *slog.Logger, deps Deps) http.Handler {
 		ch.register(mux)
 		if deps.Approvals != nil {
 			(&approvalHandlers{campaignHandlers: ch, svc: deps.Approvals}).register(mux)
+		}
+		if deps.Deliveries != nil {
+			newDeliveryHandlers(ch, deps.Deliveries, deps.Events).register(mux)
 		}
 	}
 

@@ -1,8 +1,8 @@
 <script setup lang="ts">
 // Step 5: approval. Prepare freezes the audience and content into a pending
 // approval (server); the dialog reviews and confirms or withdraws it; an
-// approved campaign shows a read-only summary. No send action exists in this
-// version. All state lives in the campaign store.
+// approved campaign shows a read-only summary; sending starts from step 6
+// (DeliveryPanel), never from here. All state lives in the campaign store.
 import { computed, ref, watch } from 'vue'
 import { storeToRefs } from 'pinia'
 import { useCampaignStore } from '@/stores/campaign'
@@ -167,8 +167,8 @@ const notice = computed(() => (approvalNotice.value ? NOTICE[approvalNotice.valu
             <div>
               <p class="notice-title">Approved — not sent</p>
               <p>
-                Valid for <strong data-testid="approved-countdown">{{ remaining }}</strong>. Sending is not available
-                in this version; no messages have been sent. Consent and contact will be re-checked for every delivery.
+                Valid for <strong data-testid="approved-countdown">{{ remaining }}</strong>. No messages have been sent:
+                start sending explicitly in step 6 below. Consent and contact will be re-checked for every delivery.
               </p>
             </div>
           </div>

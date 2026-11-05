@@ -10,6 +10,10 @@ import {
   DecodeError,
   decodeApprovalResponse,
   decodeAudienceResponse,
+  decodeCancelResponse,
+  decodeDeliveryPage,
+  decodeDeliveryStats,
+  decodeSendResponse,
   decodeCampaign,
   decodeContentSaved,
   decodeCurrentContent,
@@ -22,6 +26,13 @@ import {
 import { SseLimitError, SseParser } from './sse'
 import type {
   ApprovalResponse,
+  CancelRequest,
+  CancelResponse,
+  DeliveryListQuery,
+  DeliveryPage,
+  DeliveryStats,
+  SendRequest,
+  SendResponse,
   ConfirmApprovalRequest,
   PrepareApprovalRequest,
   WithdrawApprovalRequest,
@@ -385,6 +396,43 @@ export const api = {
   withdrawApproval(id: string, approvalId: string, expectedVersion: number, signal?: AbortSignal): Promise<ApprovalResponse> {
     const body: WithdrawApprovalRequest = { expected_version: expectedVersion }
     return request('POST', `${approvalUrl(id, approvalId)}/withdraw`, (v) => decodeApprovalResponse(v), { body, signal })
+  },
+
+  /**
+   * POST /api/v1/campaigns/{id}/send {approval_id, expected_version} → 202
+   * started, or 200 already_started (idempotent repeat for the same consumed
+   * approval). Mock sends may begin before the response arrives.
+   */
+  send(id: string, req: SendRequest, signal?: AbortSignal): Promise<SendResponse> {
+    return request('POST', `${campaignUrl(id)}/send`, (v) => decodeSendResponse(v), { body: req, signal })
+  },
+
+  /** POST /api/v1/campaigns/{id}/cancel {expected_version} → 200 counts. */
+  cancel(id: string, expectedVersion: number, signal?: AbortSignal): Promise<CancelResponse> {
+    const body: CancelRequest = { expected_version: expectedVersion }
+    return request('POST', `${campaignUrl(id)}/cancel`, (v) => decodeCancelResponse(v), { body, signal })
+  },
+
+  /** GET /api/v1/campaigns/{id}/stats → one delivery statistics snapshot. */
+  getStats(id: string, signal?: AbortSignal): Promise<DeliveryStats> {
+    return request('GET', `${campaignUrl(id)}/stats`, (v) => decodeDeliveryStats(v), { signal })
+  },
+
+  /** GET /api/v1/campaigns/{id}/deliveries?… → one page of safe delivery rows. */
+  listDeliveries(id: string, q: DeliveryListQuery = {}, signal?: AbortSignal): Promise<DeliveryPage> {
+    const params = new URLSearchParams()
+    if (q.status) params.set('status', q.status)
+    if (q.channel) params.set('channel', q.channel)
+    if (q.uncertain !== undefined) params.set('uncertain', String(q.uncertain))
+    if (q.cursor) params.set('cursor', q.cursor)
+    if (q.limit !== undefined) params.set('limit', String(q.limit))
+    const qs = params.toString()
+    return request('GET', `${campaignUrl(id)}/deliveries${qs ? `?${qs}` : ''}`, (v) => decodeDeliveryPage(v), { signal })
+  },
+
+  /** URL of the progress stream (GET /events, read with EventSource). */
+  eventsUrl(id: string): string {
+    return `${campaignUrl(id)}/events`
   },
 
   /** GET /readyz → readiness incl. the LLM provider selected at startup. */

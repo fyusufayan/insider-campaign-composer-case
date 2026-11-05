@@ -184,7 +184,7 @@ WHERE id = $1`
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, now())`
 
 	// Reaper: in-flight rows whose lease expired (crashed or stalled worker).
-	sqlLockExpiredLeases = `SELECT d.id, d.dispatch_started_at, d.destination, d.attempts, d.rate_limited_attempts,
+	sqlLockExpiredLeases = `SELECT d.id, d.channel::text, d.dispatch_started_at, d.destination, d.attempts, d.rate_limited_attempts,
        d.outcome_uncertain, c.status = 'sending' AND a.status = 'consumed', ` + priorAmbiguous + `
 FROM campaign_deliveries AS d
 JOIN campaigns AS c ON c.id = d.campaign_id
@@ -204,6 +204,10 @@ SET status = CASE WHEN $2::boolean THEN 'pending' ELSE 'cancelled' END,
                              ELSE d.outcome_uncertain OR ` + priorAmbiguous + ` END,
     next_attempt_at = now(), lease_until = NULL, leased_by = NULL, dispatch_started_at = NULL, updated_at = now()
 WHERE d.id = $1 AND d.status = 'in_flight'`
+
+	// Queue depth (metrics sampler): released rows not yet terminal.
+	sqlQueueDepth = `SELECT channel::text, status, count(*) FROM campaign_deliveries
+WHERE status IN ('pending', 'in_flight', 'retry_scheduled') GROUP BY 1, 2`
 
 	sqlSendingCampaigns = `SELECT id::text FROM campaigns WHERE status = 'sending' ORDER BY send_started_at NULLS FIRST, id LIMIT $1`
 
@@ -597,6 +601,22 @@ type ReapStats struct {
 	// Unknown: leases expired after a request may have been made (an
 	// 'unknown' attempt was recorded).
 	Unknown int
+	// Terminal counts the rows this pass moved to a terminal status
+	// (failed / cancelled), by channel (metrics).
+	Terminal map[provider.Channel]map[Status]int
+}
+
+func (s *ReapStats) terminal(ch provider.Channel, st Status) {
+	if !st.Terminal() {
+		return
+	}
+	if s.Terminal == nil {
+		s.Terminal = map[provider.Channel]map[Status]int{}
+	}
+	if s.Terminal[ch] == nil {
+		s.Terminal[ch] = map[Status]int{}
+	}
+	s.Terminal[ch][st]++
 }
 
 // Reap recovers up to n rows whose lease expired (§10.7), in one short
@@ -617,6 +637,7 @@ func (r *Repository) Reap(ctx context.Context, n int, policy Policy, rnd func() 
 		}
 		type due struct {
 			id                int64
+			channel           provider.Channel
 			dispatchStartedAt *time.Time
 			destination       *string
 			attempts, rl      int32
@@ -628,8 +649,12 @@ func (r *Repository) Reap(ctx context.Context, n int, policy Policy, rnd func() 
 			return err
 		}
 		list, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (due, error) {
-			var d due
-			err := row.Scan(&d.id, &d.dispatchStartedAt, &d.destination, &d.attempts, &d.rl, &d.uncertain, &d.sending, &d.prior)
+			var (
+				d  due
+				ch string
+			)
+			err := row.Scan(&d.id, &ch, &d.dispatchStartedAt, &d.destination, &d.attempts, &d.rl, &d.uncertain, &d.sending, &d.prior)
+			d.channel = provider.Channel(ch)
 			return d, err
 		})
 		if err != nil {
@@ -641,6 +666,9 @@ func (r *Repository) Reap(ctx context.Context, n int, policy Policy, rnd func() 
 					return err
 				}
 				st.Released++
+				if !d.sending {
+					st.terminal(d.channel, StatusCancelled)
+				}
 				continue
 			}
 			dec, err := policy.Decide(provider.OutcomeUnknown, int(d.attempts), int(d.rl), 0, rnd())
@@ -661,6 +689,7 @@ func (r *Repository) Reap(ctx context.Context, n int, policy Policy, rnd func() 
 				return err
 			}
 			st.Unknown++
+			st.terminal(d.channel, status)
 		}
 		return nil
 	})
@@ -668,6 +697,31 @@ func (r *Repository) Reap(ctx context.Context, n int, policy Policy, rnd func() 
 		return ReapStats{}, fmt.Errorf("delivery: reap: %w", err)
 	}
 	return st, nil
+}
+
+// QueueDepth counts released, non-terminal rows per (channel, status) from
+// committed state (metrics sampler; one statement, no locks).
+func (r *Repository) QueueDepth(ctx context.Context) (map[provider.Channel]map[Status]int64, error) {
+	rows, err := r.pool.Query(ctx, sqlQueueDepth)
+	if err != nil {
+		return nil, fmt.Errorf("delivery: queue depth: %w", err)
+	}
+	out := map[provider.Channel]map[Status]int64{}
+	var (
+		ch, st string
+		n      int64
+	)
+	_, err = pgx.ForEachRow(rows, []any{&ch, &st, &n}, func() error {
+		if out[provider.Channel(ch)] == nil {
+			out[provider.Channel(ch)] = map[Status]int64{}
+		}
+		out[provider.Channel(ch)][Status(st)] = n
+		return nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("delivery: queue depth: %w", err)
+	}
+	return out, nil
 }
 
 // SendingCampaigns lists up to n campaigns in status sending.

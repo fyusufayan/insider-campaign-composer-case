@@ -14,11 +14,13 @@ import (
 	"github.com/fyusufayan/insider-campaign-composer-case/backend/internal/ai"
 	"github.com/fyusufayan/insider-campaign-composer-case/backend/internal/approval"
 	"github.com/fyusufayan/insider-campaign-composer-case/backend/internal/campaign"
+	"github.com/fyusufayan/insider-campaign-composer-case/backend/internal/delivery"
 	"github.com/fyusufayan/insider-campaign-composer-case/backend/internal/httpapi"
 	"github.com/fyusufayan/insider-campaign-composer-case/backend/internal/llm"
 	"github.com/fyusufayan/insider-campaign-composer-case/backend/internal/platform/config"
 	"github.com/fyusufayan/insider-campaign-composer-case/backend/internal/platform/db"
 	"github.com/fyusufayan/insider-campaign-composer-case/backend/internal/platform/logging"
+	"github.com/fyusufayan/insider-campaign-composer-case/backend/internal/platform/metrics"
 	"github.com/fyusufayan/insider-campaign-composer-case/backend/internal/segment"
 )
 
@@ -53,6 +55,14 @@ func run(log *slog.Logger) error {
 	if err != nil {
 		return err
 	}
+	// GET /metrics (§15, ADR-026): process counters/histograms in memory.
+	reg := metrics.NewRegistry()
+	llmMetrics := metrics.NewLLM(reg)
+	deliveriesTotal := metrics.NewDeliveriesTotal(reg) // queued rows cancelled by POST /cancel
+	llmClient = llm.Observe(llmClient, func(task, outcome string, d time.Duration) {
+		llmMetrics.Requests.Inc(task, outcome)
+		llmMetrics.Duration.ObserveDuration(d, task)
+	})
 	interpreter, err := ai.NewInterpreter(llmClient, ai.InterpreterConfig{
 		Model:     cfg.Segment.Model,
 		Effort:    llm.Effort(cfg.Segment.Effort),
@@ -90,6 +100,7 @@ func run(log *slog.Logger) error {
 
 	approvals, err := approval.NewService(approval.NewRepository(pool), approval.Config{
 		PendingTTL: cfg.Approval.PendingTTL, ApprovedTTL: cfg.Approval.ApprovedTTL, ApprovedBy: cfg.Approval.ApproverName,
+		DeliveriesCancelled: func(ch segment.Channel, n int64) { deliveriesTotal.Add(float64(n), string(ch), "cancelled") },
 	}, log)
 	if err != nil {
 		return err
@@ -101,20 +112,39 @@ func run(log *slog.Logger) error {
 	if err != nil {
 		return err
 	}
+	// Delivery statistics, the delivery list and the progress stream read
+	// committed rows only (CP17B); a due live approval is expired lazily
+	// first, as for every other campaign read.
+	stats := delivery.NewStatsReader(pool, func(ctx context.Context, id string) error {
+		cid, err := campaign.ParseID(id)
+		if err != nil {
+			return err
+		}
+		_, err = approvals.ExpireDue(ctx, cid)
+		return err
+	})
 	provider := string(cfg.LLM.Provider)
 	readiness := func(ctx context.Context) (httpapi.ReadinessReport, error) {
-		report := httpapi.ReadinessReport{Database: "ok", LLMProvider: provider}
+		report := httpapi.ReadinessReport{Database: "ok", LLMProvider: provider, Worker: delivery.UnknownWorkerHealth()}
 		st, err := db.Readiness(ctx, pool)
 		report.MigrationVersion, report.MigrationDirty = st.Version, st.Dirty
 		if err != nil {
 			report.Database = "unavailable"
+			return report, err
 		}
-		return report, err
+		// The worker heartbeat is reported, never a readiness failure (§15).
+		if d, derr := stats.Readiness(ctx); derr == nil {
+			report.Worker, report.SendingCampaigns = d.Worker, &d.SendingCampaigns
+		} else {
+			log.WarnContext(ctx, "worker heartbeat unavailable", "err", derr)
+		}
+		return report, nil
 	}
 
 	srv := &http.Server{
-		Addr:              cfg.HTTPAddr,
-		Handler:           httpapi.NewRouter(log, httpapi.Deps{Campaigns: campaigns, Approvals: approvals, Readiness: readiness}),
+		Addr: cfg.HTTPAddr,
+		Handler: httpapi.NewRouter(log, httpapi.Deps{Campaigns: campaigns, Approvals: approvals, Readiness: readiness, Deliveries: stats,
+			Metrics: reg.Handler()}),
 		ReadHeaderTimeout: readHeaderTimeout,
 		IdleTimeout:       idleTimeout,
 		// No WriteTimeout: SSE responses are long-lived.

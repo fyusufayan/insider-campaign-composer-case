@@ -50,6 +50,11 @@ type Config struct {
 	ReaperInterval     time.Duration
 	CompletionInterval time.Duration
 	HeartbeatInterval  time.Duration
+	// Metrics receives instrumentation events (nil: none, and no queue
+	// sampler). QueueSampleInterval is the delivery_queue_depth sampling
+	// period (default 5 s, §10.1).
+	Metrics             Metrics
+	QueueSampleInterval time.Duration
 	// ShutdownGrace bounds how long in-progress requests may finish after
 	// shutdown starts; then they are aborted (recorded as unknown).
 	ShutdownGrace time.Duration
@@ -84,23 +89,24 @@ type Config struct {
 
 // Defaults (§10.1, §10.2, §10.4, §10.7, §16).
 const (
-	DefaultPoolSize           = 20
-	DefaultClaimBatch         = 50
-	DefaultLease              = 60 * time.Second
-	DefaultPollInterval       = 500 * time.Millisecond
-	DefaultReaperInterval     = 10 * time.Second
-	DefaultCompletionInterval = 5 * time.Second
-	DefaultHeartbeatInterval  = 5 * time.Second
-	DefaultShutdownGrace      = 10 * time.Second
-	DefaultDBTimeout          = 10 * time.Second
-	DefaultRatePerSecond      = 100
-	DefaultRateSafetyMargin   = 50 * time.Millisecond
-	DefaultDispatchLockRetry  = time.Second
-	DefaultLockCheckInterval  = time.Second
-	DefaultLockCheckTimeout   = time.Second
-	reapBatch                 = 100
-	completionScan            = 100
-	contentCacheSize          = 256
+	DefaultPoolSize            = 20
+	DefaultClaimBatch          = 50
+	DefaultLease               = 60 * time.Second
+	DefaultPollInterval        = 500 * time.Millisecond
+	DefaultReaperInterval      = 10 * time.Second
+	DefaultCompletionInterval  = 5 * time.Second
+	DefaultHeartbeatInterval   = 5 * time.Second
+	DefaultQueueSampleInterval = 5 * time.Second
+	DefaultShutdownGrace       = 10 * time.Second
+	DefaultDBTimeout           = 10 * time.Second
+	DefaultRatePerSecond       = 100
+	DefaultRateSafetyMargin    = 50 * time.Millisecond
+	DefaultDispatchLockRetry   = time.Second
+	DefaultLockCheckInterval   = time.Second
+	DefaultLockCheckTimeout    = time.Second
+	reapBatch                  = 100
+	completionScan             = 100
+	contentCacheSize           = 256
 )
 
 func (c Config) withDefaults() Config {
@@ -129,6 +135,7 @@ func (c Config) withDefaults() Config {
 	def(&c.ReaperInterval, DefaultReaperInterval)
 	def(&c.CompletionInterval, DefaultCompletionInterval)
 	def(&c.HeartbeatInterval, DefaultHeartbeatInterval)
+	def(&c.QueueSampleInterval, DefaultQueueSampleInterval)
 	def(&c.ShutdownGrace, DefaultShutdownGrace)
 	def(&c.DBTimeout, DefaultDBTimeout)
 	def(&c.RateWindow, time.Second+DefaultRateSafetyMargin)
@@ -174,6 +181,9 @@ type Worker struct {
 
 	completionKick chan struct{}
 
+	metrics     Metrics
+	sampleQueue bool
+
 	stateMu    sync.Mutex
 	dispatcher bool // holds the dispatch lock and dispatches
 	// leaseOK is the clock reading taken just BEFORE the latest successful
@@ -218,7 +228,11 @@ func New(repo *Repository, sender Sender, cfg Config, log *slog.Logger) (*Worker
 		}
 		limiters[ch] = l // independent per channel: nothing shared
 	}
-	w := &Worker{repo: repo, sender: sender, cfg: cfg, log: log, contents: map[string]content.Content{},
+	m, sample := cfg.Metrics, cfg.Metrics != nil
+	if m == nil {
+		m = nopMetrics{}
+	}
+	w := &Worker{repo: repo, sender: sender, cfg: cfg, log: log, contents: map[string]content.Content{}, metrics: m, sampleQueue: sample,
 		completionKick: make(chan struct{}, 1)}
 	w.gate = &gatedSender{clk: cfg.Clock, limiters: limiters, sender: sender, cfg: cfg.Gate, admit: w.leaseFresh}
 	return w, nil
@@ -295,6 +309,10 @@ func (w *Worker) Run(ctx context.Context) error {
 		w.every(ctx, w.cfg.CompletionInterval, w.completionKick, w.detectCompletions)
 	}()
 	go func() { defer loops.Done(); w.every(ctx, w.cfg.HeartbeatInterval, nil, w.heartbeat) }()
+	if w.sampleQueue {
+		loops.Add(1)
+		go func() { defer loops.Done(); w.every(ctx, w.cfg.QueueSampleInterval, nil, w.sampleQueueDepth) }()
+	}
 	w.log.Info("delivery worker started", "worker_id", w.cfg.WorkerID, "pool_size", w.cfg.PoolSize,
 		"claim_batch", w.cfg.ClaimBatch, "lease", w.cfg.Lease.String(), "rate_per_channel", w.cfg.RatePerSecond,
 		"rate_window", w.cfg.RateWindow.String(), "quiet_period", w.cfg.QuietPeriod().String())
@@ -637,6 +655,7 @@ func (w *Worker) attempt(ctx, hard context.Context, j Job, msg provider.Message)
 		return
 	}
 	res, pre := g.res, g.pre
+	w.metrics.ProviderResponse(j.Channel, res) // in memory, after the request returned
 	if res.Outcome == provider.OutcomeRateLimited {
 		// Pause this channel only, immediately (requests already granted a
 		// slot finish); the durable pause is written with the completion.
@@ -673,6 +692,7 @@ func (w *Worker) attempt(ctx, hard context.Context, j Job, msg provider.Message)
 		}
 		w.log.Info("delivery attempt recorded", attrs...)
 		if c.Status.Terminal() {
+			w.metrics.Finished(j.Channel, c.Status, 1)
 			w.kickCompletion()
 		}
 	}
@@ -717,6 +737,7 @@ func (w *Worker) finish(hard context.Context, j Job, s Status, code string) {
 		w.log.Warn("lease lost before the terminal status was recorded", w.jobLog(j)...)
 	default:
 		w.log.Info("delivery finished without a provider request", append(w.jobLog(j), "status", final, "reason", code)...)
+		w.metrics.Finished(j.Channel, final, 1)
 		w.kickCompletion()
 	}
 }
@@ -732,10 +753,27 @@ func (w *Worker) release(hard context.Context, j Job, delay time.Duration, why s
 		w.log.Warn("lease lost before the row could be released", append(w.jobLog(j), "reason", why)...)
 	case st == StatusCancelled:
 		w.log.Info("delivery cancelled without a request: the campaign is no longer sending", append(w.jobLog(j), "reason", why)...)
+		w.metrics.Finished(j.Channel, StatusCancelled, 1)
 		w.kickCompletion()
 	default:
 		w.log.Debug("delivery released without an attempt", append(w.jobLog(j), "reason", why)...)
 	}
+}
+
+// sampleQueueDepth samples delivery_queue_depth from committed rows. A
+// failed sample clears the gauge instead of presenting stale values.
+func (w *Worker) sampleQueueDepth(ctx context.Context) {
+	cctx, cancel := w.dbCtx(ctx, w.cfg.QueueSampleInterval)
+	defer cancel()
+	depth, err := w.repo.QueueDepth(cctx)
+	if err != nil {
+		if ctx.Err() == nil {
+			w.log.Warn("queue depth sample failed", "err", err)
+		}
+		w.metrics.QueueDepth(nil, false)
+		return
+	}
+	w.metrics.QueueDepth(depth, true)
 }
 
 func (w *Worker) heartbeat(ctx context.Context) {
@@ -785,6 +823,11 @@ func (w *Worker) reap(ctx context.Context) {
 				w.log.Warn("reaper pass failed", "err", err)
 			}
 			return
+		}
+		for ch, byStatus := range st.Terminal {
+			for s, n := range byStatus {
+				w.metrics.Finished(ch, s, n)
+			}
 		}
 		if st.Released+st.Unknown > 0 {
 			w.log.Warn("expired leases recovered", "released_without_attempt", st.Released, "unknown_attempts", st.Unknown)

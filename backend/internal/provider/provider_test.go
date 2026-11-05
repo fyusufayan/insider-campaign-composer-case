@@ -227,13 +227,13 @@ func TestSendGatedClosedGateSendsNothing(t *testing.T) {
 		t.Fatalf("closed gate: %+v sent=%v calls=%d hits=%d", r, sent, gateCalls, hits.Load())
 	}
 	r, sent = c.SendGated(context.Background(), testMsg, func() bool { return true })
-	if !sent || r.Outcome != OutcomeAccepted || hits.Load() != 1 {
+	if !sent || r.Outcome != OutcomeAccepted || hits.Load() != 1 || r.Duration <= 0 {
 		t.Fatalf("open gate: %+v sent=%v hits=%d", r, sent, hits.Load())
 	}
 	// An unbuildable request never reaches the gate.
 	bad := testMsg
 	bad.To = ""
-	if r, sent := c.SendGated(context.Background(), bad, func() bool { t.Error("gate called"); return true }); !sent || r.Outcome != OutcomePermanentError {
-		t.Errorf("invalid = %+v %v", r, sent)
+	if r, sent := c.SendGated(context.Background(), bad, func() bool { t.Error("gate called"); return true }); !sent || r.Outcome != OutcomePermanentError || r.Duration != 0 {
+		t.Errorf("invalid = %+v %v (no request issued: no duration)", r, sent)
 	}
 }

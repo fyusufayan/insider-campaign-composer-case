@@ -1,5 +1,12 @@
 // Real-shaped API payloads (field names and shapes from the CP6 DTOs).
 import type {
+  AttemptOutcome,
+  ChannelDeliveryStats,
+  DeliveryAttempts,
+  DeliveryPartition,
+  DeliveryReason,
+  DeliveryStats,
+  WorkerHealth,
   ApprovalSummary,
   AudienceStats,
   Campaign,
@@ -280,5 +287,97 @@ export function approvalFor(c: Campaign, v: ContentVersion, overrides: Partial<A
     rendered_content: validation.rendered_example,
     superseded_approval_id: null,
     ...overrides,
+  }
+}
+
+// ---- Delivery statistics (CP17B) ----
+
+export interface ChannelInput {
+  pending?: number
+  in_flight?: number
+  retry_scheduled?: number
+  sent?: number
+  failed?: number
+  skipped_consent_revoked?: number
+  skipped_no_contact?: number
+  cancelled?: number
+  uncertain?: number
+  /** Attempts by outcome (default: one accepted attempt per sent and one permanent_error per failed). */
+  attempts?: Partial<Record<AttemptOutcome, number>>
+  reasons?: DeliveryReason[]
+}
+
+const OUTCOMES: AttemptOutcome[] = ['accepted', 'replayed', 'rate_limited', 'transient_error', 'timeout', 'permanent_error', 'unknown']
+
+function attemptsOf(p: DeliveryPartition, input: ChannelInput): DeliveryAttempts {
+  const by = Object.fromEntries(OUTCOMES.map((o) => [o, 0])) as Record<AttemptOutcome, number>
+  const given = input.attempts ?? { accepted: p.sent, permanent_error: p.failed }
+  for (const o of OUTCOMES) by[o] = given[o] ?? 0
+  const total = OUTCOMES.reduce((n, o) => n + by[o], 0)
+  const attempted = Math.min(total, p.sent + p.failed)
+  return { total, by_outcome: by, retries: total - attempted, retried_deliveries: Math.min(total - attempted, attempted), recent: 0, per_second: 0 }
+}
+
+export function freshWorker(overrides: Partial<WorkerHealth> = {}): WorkerHealth {
+  return { status: 'fresh', last_seen_at: '2026-11-04T10:30:00Z', heartbeat_age_seconds: 1.2, stale_after_seconds: 15, fresh_processes: 1, ...overrides }
+}
+
+/**
+ * Consistent delivery statistics for campaign c (status, version and
+ * terminal flags follow the backend's rules). channels: per-channel
+ * partition input; omit for a campaign that never sent (approval_id null).
+ */
+export function deliveryStats(
+  c: Campaign,
+  opts: { channels?: Partial<Record<Channel, ChannelInput>>; approvalId?: string; worker?: WorkerHealth; updatedAt?: string } = {},
+): DeliveryStats {
+  const keys = ['pending', 'in_flight', 'retry_scheduled', 'sent', 'failed', 'skipped_consent_revoked', 'skipped_no_contact', 'cancelled'] as const
+  const channels: Partial<Record<Channel, ChannelDeliveryStats>> = {}
+  const totals: DeliveryPartition = {
+    approved_total: 0, pending: 0, in_flight: 0, retry_scheduled: 0, sent: 0, failed: 0,
+    skipped_consent_revoked: 0, skipped_no_contact: 0, cancelled: 0, uncertain: 0,
+  }
+  const allAttempts = attemptsOf(totals, { attempts: {} })
+  for (const ch of ['sms', 'email'] as Channel[]) {
+    const input = opts.channels?.[ch]
+    if (!input) continue
+    const p = { ...totals, approved_total: 0, uncertain: input.uncertain ?? 0 }
+    for (const k of keys) p[k] = input[k] ?? 0
+    p.approved_total = keys.reduce((n, k) => n + p[k], 0)
+    const a = attemptsOf(p, input)
+    channels[ch] = { ...p, attempts: a, reasons: input.reasons ?? [] }
+    for (const k of [...keys, 'approved_total', 'uncertain'] as const) totals[k] += p[k]
+    allAttempts.total += a.total
+    allAttempts.retries += a.retries
+    allAttempts.retried_deliveries += a.retried_deliveries
+    for (const o of OUTCOMES) allAttempts.by_outcome[o] += a.by_outcome[o]
+  }
+  const processed = totals.sent + totals.failed + totals.skipped_consent_revoked + totals.skipped_no_contact + totals.cancelled
+  const remaining = totals.pending + totals.in_flight + totals.retry_scheduled
+  const finished = c.status === 'completed' || c.status === 'completed_with_failures' || c.status === 'cancelled'
+  const terminal = finished && remaining === 0
+  const sentAny = opts.channels !== undefined
+  return {
+    campaign_id: c.id,
+    campaign_status: c.status,
+    campaign_version: c.version,
+    approval_id: sentAny ? (opts.approvalId ?? APPROVAL_ID) : null,
+    segment_version: sentAny ? c.segment_version : null,
+    content_id: sentAny ? 101 : null,
+    content_version: sentAny ? 1 : null,
+    channels,
+    totals,
+    attempts: allAttempts,
+    processed,
+    remaining,
+    progress: totals.approved_total > 0 ? processed / totals.approved_total : 0,
+    campaign_terminal: finished,
+    terminal,
+    outcome: terminal ? (c.status as DeliveryStats['outcome']) : finished ? 'settling' : c.status === 'sending' ? 'sending' : 'not_started',
+    send_started_at: sentAny ? '2026-11-04T10:25:00Z' : null,
+    completed_at: c.status === 'completed' || c.status === 'completed_with_failures' ? '2026-11-04T10:40:00Z' : null,
+    cancelled_at: c.status === 'cancelled' ? '2026-11-04T10:35:00Z' : null,
+    worker: opts.worker ?? freshWorker(),
+    updated_at: opts.updatedAt ?? new Date().toISOString(),
   }
 }

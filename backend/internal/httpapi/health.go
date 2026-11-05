@@ -5,6 +5,8 @@ import (
 	"log/slog"
 	"net/http"
 	"time"
+
+	"github.com/fyusufayan/insider-campaign-composer-case/backend/internal/delivery"
 )
 
 // readinessTimeout bounds the readiness probe's database checks.
@@ -20,6 +22,14 @@ type ReadinessReport struct {
 	MigrationDirty   bool   `json:"migration_dirty"`
 	// LLMProvider is the provider selected at startup: "anthropic" or "demo".
 	LLMProvider string `json:"llm_provider"`
+	// Worker is the freshest delivery-worker heartbeat (CP17B, §15):
+	// reported only — readiness of the API never fails on it, so it does
+	// not flap while no campaign is sending. "unknown" when the database
+	// is unavailable.
+	Worker delivery.WorkerHealth `json:"worker"`
+	// SendingCampaigns counts campaigns in status sending (null when the
+	// database is unavailable).
+	SendingCampaigns *int64 `json:"sending_campaigns"`
 }
 
 // ReadinessFunc reports readiness. It returns the report and whether the

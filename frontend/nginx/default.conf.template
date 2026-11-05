@@ -42,7 +42,7 @@ server {
         proxy_set_header X-Forwarded-Proto $scheme;
 
         # SSE-safe: the content generation stream (POST .../content/generations)
-        # and, in Slice 5, the status stream. The API also sends
+        # and the delivery progress stream (GET .../events, CP17B). The API also sends
         # X-Accel-Buffering: no and a keep-alive comment every 15 s.
         proxy_buffering off;
         proxy_cache off;

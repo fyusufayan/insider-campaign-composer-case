@@ -4,7 +4,7 @@
 // route (e.g. to delay, reorder or fail responses).
 
 import { vi } from 'vitest'
-import type { ApprovalSummary, Campaign, Channel, ContentField, ContentVersion, FieldError } from '@/api/types'
+import type { ApprovalSummary, Campaign, Channel, ContentField, ContentVersion, DeliveryItem, DeliveryStats, FieldError } from '@/api/types'
 import {
   APPROVAL_ID,
   approvalFor,
@@ -19,6 +19,8 @@ import {
   GEN_SUBJECT,
   audienceFor,
   currentContent,
+  deliveryStats,
+  type ChannelInput,
   draftCampaign,
   errorEnvelope,
   fakeValidate,
@@ -106,6 +108,8 @@ export function deferred<T>(): Deferred<T> {
 export class FakeBackend {
   campaigns = new Map<string, Campaign>()
   calls: RecordedCall[] = []
+  /** URL of the request being routed (query strings are not part of `path`). */
+  lastUrl = ''
   overrides: Array<{ method: string; pattern: RegExp; handler: Handler }> = []
   nextId = CAMPAIGN_ID
   llmProvider = 'demo'
@@ -124,6 +128,10 @@ export class FakeBackend {
   approvedTtlMs = 24 * 3_600_000
   /** Offer findings attached to the next prepared approval. */
   nextFindings: FieldError[] = []
+  /** Delivery statistics per campaign (GET /stats); default derived from the campaign. */
+  stats = new Map<string, DeliveryStats>()
+  /** Delivery rows per campaign (GET /deliveries), ascending ids. */
+  deliveries = new Map<string, DeliveryItem[]>()
 
   constructor() {
     vi.stubGlobal('fetch', this.fetch)
@@ -145,6 +153,7 @@ export class FakeBackend {
   fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
     const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url
     const path = new URL(url, 'http://localhost').pathname
+    this.lastUrl = url
     const method = (init?.method ?? 'GET').toUpperCase()
     const body = typeof init?.body === 'string' ? JSON.parse(init.body) : undefined
     const signal = init?.signal ?? null
@@ -212,6 +221,10 @@ export class FakeBackend {
       this.campaigns.set(c.id, next)
       return json(200, next)
     }
+    if (method === 'POST' && sub === '/send') return this.send(c, body as Record<string, unknown>)
+    if (method === 'POST' && sub === '/cancel') return this.cancel(c, body as Record<string, unknown>)
+    if (method === 'GET' && sub === '/stats') return json(200, this.statsOf(c))
+    if (method === 'GET' && sub === '/deliveries') return this.listDeliveries(c, req)
     if (method === 'GET' && sub === '/content') return json(200, currentContent(c, this.current(c)))
     if (method === 'POST' && sub === '/content/validate') {
       if (c.status === 'draft') return json(409, errorEnvelope('invalid_state', 'validate_content is not allowed while the campaign is draft'))
@@ -458,6 +471,107 @@ export class FakeBackend {
     const w = this.closed(a, next, { status: 'revoked', revoke_reason: 'withdrawn' })
     this.approvals.set(a.approval_id, w)
     return this.approvalResponse(200, next, w)
+  }
+
+  // ---- send / cancel / stats (CP17B) ----
+
+  statsOf(c: Campaign): DeliveryStats {
+    const cur = this.campaigns.get(c.id)!
+    const st = this.stats.get(c.id)
+    if (st) return { ...st, campaign_status: cur.status, campaign_version: cur.version }
+    return deliveryStats(cur)
+  }
+
+  private send(c: Campaign, b: Record<string, unknown>): Response {
+    this.lazyExpire(c.id)
+    c = this.campaigns.get(c.id)!
+    const a = this.approvals.get(String(b.approval_id))
+    if (!a || a.campaign_id !== c.id) return json(404, errorEnvelope('not_found', 'approval not found'))
+    const res = (status: number, next: Campaign, started: boolean) => {
+      const released: Partial<Record<Channel, number>> = {}
+      for (const ch of a.channels) released[ch] = a.snapshot[ch]!.recipients
+      return json(status, { status: next.status, approval_id: a.approval_id, released, already_started: !started, campaign: next, server_time: new Date().toISOString() })
+    }
+    if (a.status === 'consumed' && c.active_approval_id === a.approval_id && ['sending', 'completed', 'completed_with_failures'].includes(c.status)) {
+      return res(200, c, false)
+    }
+    if (a.status === 'expired') return json(409, errorEnvelope('approval_expired', 'the approval has expired'))
+    if (c.status !== 'approved' || a.status !== 'approved' || c.active_approval_id !== a.approval_id) {
+      return json(409, errorEnvelope('invalid_state', `send is not allowed while the campaign is ${c.status}`))
+    }
+    if (b.expected_version !== c.version) return json(409, errorEnvelope('version_conflict', 'the campaign was changed by another request; reload it and try again'))
+    const next: Campaign = { ...c, status: 'sending', version: c.version + 1 }
+    this.campaigns.set(c.id, next)
+    this.approvals.set(a.approval_id, { ...a, status: 'consumed', campaign_version: next.version })
+    const chs: Partial<Record<Channel, { pending: number }>> = {}
+    for (const ch of a.channels) chs[ch] = { pending: a.snapshot[ch]!.recipients }
+    this.stats.set(c.id, deliveryStats(next, { channels: chs, approvalId: a.approval_id }))
+    return res(202, next, true)
+  }
+
+  private cancel(c: Campaign, b: Record<string, unknown>): Response {
+    if (['cancelled', 'completed', 'completed_with_failures'].includes(c.status)) {
+      return json(409, errorEnvelope('invalid_state', `cancel is not allowed while the campaign is ${c.status}`))
+    }
+    if (b.expected_version !== c.version) return json(409, errorEnvelope('version_conflict', 'the campaign was changed by another request; reload it and try again'))
+    const next: Campaign = { ...c, status: 'cancelled', version: c.version + 1 }
+    this.campaigns.set(c.id, next)
+    const cancelled: Partial<Record<Channel, number>> = {}
+    const inFlight: Partial<Record<Channel, number>> = {}
+    const st = this.stats.get(c.id)
+    if (st && c.status === 'sending') {
+      const input: Partial<Record<Channel, ChannelInput>> = {}
+      for (const ch of ['sms', 'email'] as Channel[]) {
+        const x = st.channels[ch]
+        if (!x) continue
+        cancelled[ch] = x.pending + x.retry_scheduled
+        inFlight[ch] = x.in_flight
+        input[ch] = {
+          in_flight: x.in_flight,
+          sent: x.sent,
+          failed: x.failed,
+          skipped_consent_revoked: x.skipped_consent_revoked,
+          skipped_no_contact: x.skipped_no_contact,
+          cancelled: x.cancelled + x.pending + x.retry_scheduled,
+          uncertain: x.uncertain,
+          attempts: x.attempts.by_outcome,
+          reasons: x.reasons,
+        }
+      }
+      this.stats.set(c.id, deliveryStats(next, { channels: input, approvalId: st.approval_id ?? APPROVAL_ID }))
+    }
+    return json(200, {
+      status: 'cancelled',
+      previous_status: c.status,
+      revoked_approval_id: null,
+      released_held_rows: 0,
+      cancelled_deliveries: cancelled,
+      in_flight: inFlight,
+      campaign: next,
+      server_time: new Date().toISOString(),
+    })
+  }
+
+  private listDeliveries(c: Campaign, req: FakeRequest): Response {
+    const url = new URL(this.lastUrl, 'http://localhost')
+    const q = url.searchParams
+    const limit = Number(q.get('limit') ?? 50)
+    const after = Number(q.get('cursor') ?? 0)
+    const status = q.get('status')
+    const uncertain = q.get('uncertain')
+    void req
+    const all = (this.deliveries.get(c.id) ?? []).filter(
+      (d) => d.id > after && (!status || d.status === status) && (uncertain === null || String(d.outcome_uncertain) === uncertain),
+    )
+    const items = all.slice(0, limit)
+    const st = this.stats.get(c.id)
+    return json(200, {
+      campaign_id: c.id,
+      approval_id: st?.approval_id ?? null,
+      items,
+      next_cursor: all.length > limit ? String(items[items.length - 1]!.id) : null,
+      limit,
+    })
   }
 
   /** Simulates a change made by another tab/request (version bump). */

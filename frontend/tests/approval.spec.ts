@@ -84,7 +84,7 @@ describe('prepare and review', () => {
     expect(text(app!.wrapper, 'approval-countdown')).toMatch(/1[45]:\d\d/)
     // Rendered with the fictional example values, escaped, in previews.
     expect(find('approval-previews').exists()).toBe(true)
-    // No send action anywhere in CP15.
+    // No send action while the approval is only pending (Start sending appears once approved).
     expect(app!.wrapper.text()).not.toMatch(/\bSend\b/)
   })
 

@@ -795,7 +795,7 @@ CP17A completes the reliability half of Slice 4 (ADR-025). Delivery statistics, 
 
 **Expiry sweeper (§5.3 (2a)).** `approval.Sweeper` runs in every worker process every `APPROVAL_SWEEP_INTERVAL` (30 s): an unlocked candidate query (`status IN (pending, approved) AND expires_at <= clock_timestamp()`, batch 100, ≤ 1,000 per pass), then `ExpireDue` per campaign (campaign lock first, `clock_timestamp()` after it). Concurrent sweepers, the API's lazy expiry and live workers serialize on the campaign row; the loser finds nothing live and due, so an approval expires — and the version advances — exactly once. Consumed approvals (sending/finished) are never candidates, whatever their old `expires_at`. Pending (15 min) and approved (24 h from confirmation) TTLs are distinguished by the stored `expires_at`. Tested: two sweepers in parallel with a live worker; a sweeper that blocks on the campaign lock before expiry and acquires it after expiry expires the approval.
 
-**Heartbeat.** Every worker process upserts `worker_heartbeats(worker_id, now())` every 5 s and deletes rows older than a day. Reporting its age in `/readyz` is CP17B (§15).
+**Heartbeat.** Every worker process upserts `worker_heartbeats(worker_id, now())` every 5 s and deletes rows older than a day. CP17B reports the freshest one in `/readyz` and in every statistics snapshot (§13.1, §15).
 
 **Mock provider (§10.11).** Per channel it keeps the arrival times of the last second (handler entry, monotonic) and reports `max_in_any_rolling_1s` (half-open windows) and its own strict limiter (`MOCK_RATE_LIMIT_PER_SECOND`, default 100; an arrival beyond it gets `429 rate_limit_exceeded`, counted as `limit_exceeded`, apart from injected 429s).
 
@@ -917,6 +917,18 @@ Transaction: lazy expiry in its own committed transaction; then lock campaign �
 
 `in_flight` counts rows in flight at the commit: each may still produce at most one provider request (already on the wire or past its precheck); it cannot be recalled. Counts only — no recipient data.
 
+### 11.6 Delivery statistics, list and progress contracts as implemented (CP17B)
+
+Read-only, any campaign status, served by `delivery.StatsReader` (one short `REPEATABLE READ READ ONLY` transaction per read, `statement_timeout` 5 s, never open between reads). A due live approval is expired lazily first (§5.3 (b)), as for every campaign read.
+
+| Request | Success | Errors |
+|---|---|---|
+| `GET /campaigns/{id}/stats` (no query parameters) | `200` statistics snapshot (§13.1) | `422 validation_failed` (bad id, any query parameter), `404 not_found`, `500 internal` if the rows do not reconcile with the approved totals (a bug; logged) |
+| `GET /campaigns/{id}/deliveries?status=&channel=&uncertain=&cursor=&limit=` | `200 {campaign_id, approval_id, items, next_cursor, limit}` | `422 validation_failed` (unknown or repeated parameter; `status` ∉ the eight partition statuses — `held` is never listed; `channel` ∉ {sms, email}; `uncertain` ∉ {true, false}; `cursor` not a positive decimal id; `limit` ∉ 1–100, canonical decimal), `404` |
+| `GET /campaigns/{id}/events` | `200 text/event-stream` (§12.1) | before the stream: `422`, `404`, `503 too_many_streams` (retryable; 64 open streams per API process) |
+
+- **Delivery list.** Rows of the consumed approval only, ordered by `id` ascending; `cursor` = the last id of the previous page (`next_cursor`, set when more rows may follow; default page 50, max 100). Ids never change, so pages never duplicate or skip a row under concurrent worker updates; a row may leave or enter a `status` filter between pages. `items` is `[]` (and `approval_id` null) before a send. **Item** = `{id, channel, status, attempts, rate_limited_attempts, outcome_uncertain, reason, destination_masked, sent_at, updated_at}`: `reason` is the row's `last_error` passed through `delivery.SafeCode` (`[a-z0-9_]{1,64}`, otherwise `other`; empty → `unspecified`); `destination_masked` uses the log masking (`+90********67`, `a***@example.com`; null before the first precheck). Never returned: user id, names, raw contacts, frozen `vars`, message text, idempotency key, provider message id. The dashboard does not display `destination_masked`.
+
 ## 12. Streaming (SSE)
 
 - **Content generation**: the `POST` response itself is `text/event-stream`; the frontend reads it with `fetch` + `ReadableStream`. Not resumable by design; disconnect cancels the LLM call.
@@ -935,6 +947,23 @@ Transaction: lazy expiry in its own committed transaction; then lock campaign �
 
 Exactly one terminal event ends a stream that started. The handler runs the service in its own goroutine and is the only writer (events arrive over an unbuffered channel, so their order is the service's order); each write is flushed and bounded by a 30 s write deadline; a `: keep-alive` comment is sent every 15 s (Opus thinking can take a while; nginx `proxy_read_timeout 300s` ≥ `CLAUDE_CONTENT_TIMEOUT`). A client disconnect or a failed write cancels the request context, which closes the provider stream; nothing is persisted unless the commit had already happened (then the client sees the version after a reload). No transaction is open while the model streams. The stream is not resumable (no `id`, no `retry`). The browser reads it with `fetch` + `ReadableStream` and an incremental WHATWG-conformant parser (`src/api/sse.ts`; LF/CRLF/CR, split chunks and split UTF-8, comments, a truncated trailing event is discarded), decodes every event strictly and rejects unknown names or shapes.
 
+### 12.1 Delivery progress stream as implemented (CP17B)
+
+`GET /campaigns/{id}/events` (`EventSource`). Every event has a name and one `data:` line of JSON:
+
+| Line | When |
+|---|---|
+| `retry: 3000` | first (EventSource reconnection delay) |
+| `event: stats` / `data: <§13.1 snapshot>` | immediately on connection (fresh from the database), then after each 1 s poll **whose snapshot changed** (everything except `updated_at` and `worker.heartbeat_age_seconds` is compared, so an idle stream sends one event per worker heartbeat, ≈ 5 s) |
+| `: keep-alive` | every 15 s |
+| `event: end` / `data: {campaign_id, campaign_status, campaign_version, outcome}` | exactly once, right after the first snapshot with `terminal = true` (campaign `completed`, `completed_with_failures` or `cancelled` **and** no row `pending`/`in_flight`/`retry_scheduled`); the server then closes the stream |
+
+- A cancelled campaign whose in-flight rows have not finished is `outcome: settling` and the stream stays open until they settle, so `end` always carries the final numbers. A campaign cancelled before sending (no consumed approval) is terminal at once: one snapshot, `end`.
+- Snapshots are full and read from committed rows, so a reconnect needs no event ids or replay, and a delivery is never shown as sent before the worker's completion transaction committed. Reconnecting to a finished campaign yields one snapshot and `end`.
+- Without `end` the stream closes after 10 min (lifetime cap), after 3 consecutive failed reads, on a write failure (30 s write deadline) or on client disconnect (request context); each poll runs with a 5 s timeout. The client reconnects in all of these cases.
+- nginx: `/api/` already has `proxy_buffering off`, `proxy_read_timeout 300s` (≫ the 15 s keep-alive) and the API sends `X-Accel-Buffering: no`.
+- Polling (1 s per open stream, three to four short queries) was chosen over `LISTEN/NOTIFY` (C tier) per ADR-017; ADR-026.
+
 ---
 
 ## 13. Delivery statistics
@@ -950,6 +979,33 @@ where `approved_total` equals the approval's `by_channel[ch].eligible` (asserted
                          "uncertain": 0, "attempts_per_sec": 94.8 }, "email": { "…": "…" } },
   "updated_at": "…" }
 ```
+
+### 13.1 Statistics snapshot as implemented (CP17B)
+
+Additive to the documented shape (ADR-026). Partition counts come from `campaign_deliveries` of the campaign's **consumed** approval (one row per delivery, whatever its number of attempts); attempt counts from `delivery_attempts`; `approved_total` per channel from the approval's stored `audience_stats.by_channel[ch].eligible`, and the partition must sum to it (else `500`, never a silently wrong number).
+
+```json
+{ "campaign_id": "…", "campaign_status": "sending", "campaign_version": 7,
+  "approval_id": "…", "segment_version": 1, "content_id": 12, "content_version": 1,
+  "channels": { "sms": { "approved_total": 101, "pending": 40, "in_flight": 8, "retry_scheduled": 2, "sent": 50,
+                         "failed": 1, "skipped_consent_revoked": 0, "skipped_no_contact": 0, "cancelled": 0, "uncertain": 0,
+                         "attempts": { "total": 56, "by_outcome": { "accepted": 50, "replayed": 0, "rate_limited": 2,
+                                       "transient_error": 3, "timeout": 0, "permanent_error": 1, "unknown": 0 },
+                                       "retries": 5, "retried_deliveries": 4, "recent": 480, "per_second": 48.0 },
+                         "reasons": [ { "status": "retry_scheduled", "code": "http_503", "count": 2 } ] } },
+  "totals": { "approved_total": 101, "…": "Σ channels" }, "attempts": { "…": "Σ channels" },
+  "processed": 51, "remaining": 50, "progress": 0.505,
+  "campaign_terminal": false, "terminal": false, "outcome": "sending",
+  "send_started_at": "…", "completed_at": null, "cancelled_at": null,
+  "worker": { "status": "fresh", "last_seen_at": "…", "heartbeat_age_seconds": 1.4, "stale_after_seconds": 15, "fresh_processes": 1 },
+  "updated_at": "…" }
+```
+
+- **Identities** (checked by the server and again by the client decoder): per channel `approved_total = pending + in_flight + retry_scheduled + sent + failed + skipped_consent_revoked + skipped_no_contact + cancelled`; `uncertain ≤ approved_total − sent` (overlay, never added); `totals` = Σ channels; `processed` = terminal rows, `remaining = pending + in_flight + retry_scheduled`, `processed + remaining = approved_total`; `progress = processed / approved_total`, `0` for an empty snapshot (no division by zero); `attempts.total = Σ by_outcome`; `retries = total − deliveries with ≥ 1 attempt`; `retried_deliveries` = rows with `attempts + rate_limited_attempts > 1`; `per_second = recent / 10` (attempts finished in the last 10 s, database time); `accepted + replayed ≥ sent`.
+- **Flags.** `campaign_terminal` ⇔ status ∈ {completed, completed_with_failures, cancelled}; `terminal` ⇔ `campaign_terminal` ∧ `remaining = 0`. `outcome` = the status when terminal, `settling` (cancelled, rows still in flight), `sending`, or `not_started` (before a send: `approval_id`/versions null, `channels {}`).
+- **Three different counts:** `sent` = deliveries the provider **accepted** (not real-world delivery to a handset or inbox — not tracked); `attempts.total` = provider requests recorded (retries, 429s, replays included; a reaped `unknown` attempt may not have reached the provider); the mock provider's ledger `messages` = distinct accepted keys (a replay reuses the original message). With the mock, `sent` = ledger messages for the campaign (smoke-send checks it).
+- **Reasons**: `(status, code, count)` over rows not sent (`retry_scheduled`, `failed`, skipped, `cancelled`), codes from the worker (`no_consent`, `no_contact`, `campaign_cancelled`, `campaign_not_sending`, `lease_expired`, provider codes such as `destination_rejected`, `http_<status>`), sanitized, at most 20 per channel (smaller cells folded into `other` per status).
+- **Worker**: freshest `worker_heartbeats` row, database time. `fresh` ⇔ age ≤ `delivery.HeartbeatStaleAfter` = 15 s (3 × the 5 s heartbeat period), else `stale`; `absent` without any row. `fresh_processes` counts processes with a fresh heartbeat (at most one dispatches, ADR-025).
 
 ---
 
@@ -971,6 +1027,7 @@ Vue 3 + TypeScript (strict) + Vite + Vue Router + Pinia (one store for the activ
 - No `v-html` for any AI or user content; variables highlighted via tokenized spans. Client-side counters are UX only; the server is authoritative.
 - Slice 2 (CP13): `ContentPanel` (step 4) with `GenerationProgress` (phases, attempt, live preview labelled "not validated, not saved" in an escaped `<pre>`, Cancel), `SmsEditor`/`EmailEditor` (only for the selected channels; server-computed worst-case counters next to the typed length; inline errors and warnings), `SmsPreview`/`EmailPreview` (rendered example with the fictional values; the email in an `<iframe sandbox="">` whose `srcdoc` is built from escaped text), `ValidationList`, `ContentVersionBadge` (version, AI model/prompt vs. "Edited manually", demo generator called out). The store keeps the draft, validates it on the server (debounced 350 ms; results bound to the draft revision and campaign version, re-validated when the campaign version changes), saves only a revision the server has validated (so its warnings were shown) with `expected_version` (a `409` keeps the draft for an explicit save after reload; never retried automatically), blocks generation while the draft has unsaved edits, drops stream events after navigation (epoch), aborts the stream on unmount/navigation/Cancel and reloads campaign + content after any failure, interruption or cancellation (a commit may have happened just before).
 - Slice 3 (CP15): `ApprovalPanel` (step 5: *Prepare approval* with the reason it is unavailable — unsaved or invalid draft, no channel; pending: *Review & confirm* / *Withdraw* with countdown; approved: read-only summary with a 24 h countdown and a two-step *Withdraw approval…*; banners for confirmed / withdrawn / expired / replaced), `ApprovalDialog` (explainer of what confirming authorizes and that consent/contact are re-checked at delivery, `ApprovalSummary` — channels, content version + origin, segment version, digest, per-channel frozen recipients with `no_consent`/`no_contact`, reach, render issues, non-offer warnings, rendered previews — the offer/price findings listed individually with the authorized offer, explicit acknowledgement checkboxes, Confirm / Withdraw / *Close without confirming*). No send button. The store applies an approval only together with the campaign of the same response (same version), runs one approval mutation at a time, never retries a `409` (shown with *Reload latest campaign*), re-reads the approval (server-side lazy expiry) when the display countdown elapses and disables Confirm meanwhile, restores the dialog on reload of a pending campaign, drops late responses after navigation (epoch), and decodes approval responses strictly (closed property sets, cross-field consistency).
+- Slice 4/5 delivery UI (CP17B): the dashboard is a section of the campaign page (`components/dashboard/DeliveryPanel.vue`, step 6), not a separate route: one stable URL, one store. It appears for `approved` (Start sending) and leads the page for `sending`/finished campaigns. **Start sending…** opens a confirmation (`ConfirmDialog`) with the frozen per-channel counts, content version, irreversibility, "the worker may start before this returns" and what cancel cannot do; the store sends `{approval_id, expected_version}` once (a second click while pending is ignored), treats `already_started` as success, never retries a `409`, refreshes the approval on `approval_expired`, and on a lost response (network / invalid response) or `invalid_state` re-reads the campaign with a fresh GET instead of guessing. **Cancel sending…** (sending only) explains the in-flight limit and reports `cancelled_deliveries` / `in_flight`; a cancel racing completion (`409 invalid_state`) or a lost cancel response also reconciles with a GET. Live data: `useCampaignEvents` (EventSource; strict decoding of every event; a malformed or oversized event is dropped, the source closed and reopened for a fresh snapshot; events of superseded connections and of other campaigns are ignored; snapshots older than the one shown (`updated_at`) are never applied; own capped exponential reconnect 1 s → 15 s instead of the browser's; `end` closes for good; polling `GET /stats` every 3 s if EventSource is unavailable; manual Refresh). A snapshot reporting a newer `campaign_version` triggers a campaign re-read, so the status badge follows completion or a cancel elsewhere. Views: connection badge, worker-offline warning while sending with a non-fresh heartbeat, overall and per-channel stacked progress (`ChannelProgress`), tiles (sent/failed/skipped/cancelled/pending, attempts, retries, attempts/s), uncertain overlay note, reason summary, version identity, final summary distinguishing *Completed* from *Completed with failures* and *Cancelled*, and `FailureTable` (`GET /deliveries`, filters by status or uncertain, *Load more*; ids, reasons and attempt counts only — no recipient data, no message text). Responsive: auto-fit grids and a table that scrolls inside its own container (no page overflow at 375 px).
 - Slice 1a (CP7): routes `/campaigns/new` and `/campaigns/:id` (reloadable). The store applies a campaign only if its `version` is not older than the one shown, shows audience statistics only for the matching `campaign_version`, aborts superseded requests, and never retries a `409` automatically (the rejected channel selection is offered for an explicit re-apply after reload). The shell reads `llm_provider` from `GET /readyz` to label demo mode, so the CP8 proxy must forward `/readyz` as well as `/api/`.
 
 ---
@@ -978,6 +1035,15 @@ Vue 3 + TypeScript (strict) + Vite + Vue Router + Pinia (one store for the activ
 ## 15. Observability
 
 - **api**: `/healthz` (process alive), `/readyz` (DB ping + migration version; worker heartbeat age reported in the body, readiness does not fail on it), `/metrics`.
+- **As implemented (CP17B)**: `/readyz` = `{status, database, migration_version, migration_dirty, llm_provider, worker: {status, last_seen_at, heartbeat_age_seconds, stale_after_seconds: 15, fresh_processes}, sending_campaigns}`. `status`/HTTP code depend only on the database and migrations (`503 not_ready` otherwise); the worker block distinguishes `fresh`/`stale`/`absent` (and `unknown` with `sending_campaigns: null` when the heartbeat cannot be read) and never fails readiness, so it does not flap while nothing is sending; an absent or stale heartbeat is never reported as healthy. API liveness stays `/healthz`.
+- **`/metrics` as implemented (CP17B, ADR-026)**: Prometheus text exposition 0.0.4 (`text/plain; version=0.0.4; charset=utf-8`) from `platform/metrics`, a minimal standard-library registry (counters, gauges, histograms with closed label sets; `HELP`/`TYPE` per family, escaped help and label values, families sorted by name), on the API router (`GET /metrics`, not proxied by nginx) and the worker's health port (`:9091/metrics`). The handler renders memory only: no database call, bounded output, unaffected by a database outage. Definitions (types from the names' Prometheus conventions and §10.1):
+  - `deliveries_total{channel,outcome}` — counter; `outcome` ∈ terminal statuses. Incremented after the committing transaction of a terminal transition: worker completion (`Complete` returning a terminal status), finish-without-request (skips, render failures, campaign not sending), release/reap ending `cancelled`, reap ending `failed`; the API's cancel transaction adds its cancelled queued rows. A row is counted once (every path is guarded by lease/status, so a transition commits once); retries, 429s and replays never add to it.
+  - `provider_request_duration_seconds{channel}` — histogram (buckets 5 ms … 10 s), observed in the worker after `SendGated` returned, for every request actually issued; the clock is read in `provider.Client.SendGated` before the request is built, so nothing is added between the final gate and `http.Client.Do`. Its count equals the attempt rows (reaped `unknown` attempts made by a crashed process are not observed by anyone) and the provider's arrivals.
+  - `provider_rate_limited_total{channel}` — counter of 429 responses (injected or the mock's own limiter).
+  - `delivery_queue_depth{channel,status}` — gauge, `status` ∈ {pending, in_flight, retry_scheduled}, sampled from committed rows by every worker process every 5 s (one `GROUP BY` statement); all six series are set (missing combinations = 0) after a successful sample and removed after a failed one, never served stale; absent before the first sample.
+  - `llm_requests_total{task,outcome}` — counter per LLM provider request via `llm.Observe` (decorator of the selected client): `task` ∈ {segment_interpretation, content_generation, other}, `outcome` ∈ {ok, max_tokens, refused, unavailable, rejected, timeout, cancelled, aborted, error}.
+  - `llm_request_duration_seconds{task}` — histogram (100 ms … 300 s) of the same requests.
+  Counters/histograms are process-local and start at 0 (restart = counter reset); no value is derived from or reconstructed out of the database except the queue gauge. Not provided: Go runtime/process collectors, summaries, exemplars, OpenMetrics/protobuf.
 - **worker**: `/healthz`, `/metrics` on its own port.
 - Core metrics: `deliveries_total{channel,outcome}`, `provider_request_duration_seconds{channel}`, `provider_rate_limited_total{channel}`, `delivery_queue_depth{channel,status}`, `llm_requests_total{task,outcome}`, `llm_request_duration_seconds{task}`.
 - Structured `slog` JSON logs with `campaign_id`, `approval_id`, `delivery_id`, `request_id`; phone numbers and emails masked; LLM calls logged with model, prompt version, tokens, latency, stop reason.
