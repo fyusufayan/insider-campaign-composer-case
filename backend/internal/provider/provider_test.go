@@ -23,6 +23,18 @@ func newTestClient(t *testing.T, h http.HandlerFunc, timeout time.Duration) *Cli
 	return c
 }
 
+// alwaysOpen is a test-only final gate. These tests exercise the HTTP client
+// and the provider themselves; production gating (rate-limit slot, slot
+// deadline, leadership fence) lives in delivery.gatedSender and is tested
+// there.
+func alwaysOpen() bool { return true }
+
+// sendOpen sends m through the always-open gate.
+func sendOpen(c *Client, ctx context.Context, m Message) Result {
+	r, _ := c.SendGated(ctx, m, alwaysOpen)
+	return r
+}
+
 var testMsg = Message{Channel: ChannelSMS, IdempotencyKey: "c:1:sms", To: "+905550001234", Text: "hello"}
 
 // Wire format: method, path, headers and a deterministic body.
@@ -35,10 +47,10 @@ func TestRequestFormatIsDeterministic(t *testing.T) {
 		_, _ = io.WriteString(w, `{"message_id":"m1","status":"accepted"}`)
 	}, time.Second)
 	for i := 0; i < 2; i++ {
-		c.Send(context.Background(), testMsg)
+		sendOpen(c, context.Background(), testMsg)
 	}
 	em := Message{Channel: ChannelEmail, IdempotencyKey: "c:1:email", To: "a@example.test", Subject: "S", Text: "T"}
-	c.Send(context.Background(), em)
+	sendOpen(c, context.Background(), em)
 	want := []string{
 		`POST /v1/sms c:1:sms application/json {"to":"+905550001234","text":"hello"}`,
 		`POST /v1/sms c:1:sms application/json {"to":"+905550001234","text":"hello"}`,
@@ -83,7 +95,7 @@ func TestResponseClassification(t *testing.T) {
 				w.WriteHeader(tc.status)
 				_, _ = io.WriteString(w, tc.body)
 			}, time.Second)
-			r := c.Send(context.Background(), testMsg)
+			r := sendOpen(c, context.Background(), testMsg)
 			if r.Outcome != tc.outcome || r.ErrorCode != tc.code || r.MessageID != tc.id || r.RetryAfter != tc.retry || r.HTTPStatus != tc.status {
 				t.Errorf("result = %+v", r)
 			}
@@ -105,7 +117,7 @@ func TestTimeoutIsAmbiguous(t *testing.T) {
 		}
 	}, 100*time.Millisecond)
 	t.Cleanup(func() { close(release) }) // runs before the server's Close
-	r := c.Send(context.Background(), testMsg)
+	r := sendOpen(c, context.Background(), testMsg)
 	if r.Outcome != OutcomeTimeout || !r.Outcome.Ambiguous() || r.HTTPStatus != 0 {
 		t.Errorf("result = %+v", r)
 	}
@@ -122,7 +134,7 @@ func TestAbortedRequestIsUnknown(t *testing.T) {
 	}, 5*time.Second)
 	ctx, cancel := context.WithCancel(context.Background())
 	go func() { <-arrived; cancel() }()
-	r := c.Send(ctx, testMsg)
+	r := sendOpen(c, ctx, testMsg)
 	if r.Outcome != OutcomeUnknown || r.ErrorCode != "aborted" {
 		t.Errorf("result = %+v", r)
 	}
@@ -141,7 +153,7 @@ func TestConnectionRefusedIsTransient(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	r := c.Send(context.Background(), testMsg)
+	r := sendOpen(c, context.Background(), testMsg)
 	if r.Outcome != OutcomeTransientError || r.ErrorCode != "connection_failed" || r.Outcome.Ambiguous() {
 		t.Errorf("result = %+v", r)
 	}
@@ -153,7 +165,7 @@ func TestInvalidMessageIsNotSent(t *testing.T) {
 	c := newTestClient(t, func(http.ResponseWriter, *http.Request) { called = true }, time.Second)
 	for _, m := range []Message{{Channel: "fax", IdempotencyKey: "k", To: "x", Text: "t"}, {Channel: ChannelSMS, To: "+90", Text: "t"},
 		{Channel: ChannelSMS, IdempotencyKey: "k", Text: "t"}} {
-		if r := c.Send(context.Background(), m); r.Outcome != OutcomePermanentError || r.ErrorCode != "invalid_request" {
+		if r := sendOpen(c, context.Background(), m); r.Outcome != OutcomePermanentError || r.ErrorCode != "invalid_request" {
 			t.Errorf("%+v → %+v", m, r)
 		}
 	}
@@ -220,6 +232,10 @@ func TestSendGatedClosedGateSendsNothing(t *testing.T) {
 	c, err := NewClient(ClientConfig{BaseURL: srv.URL, RequestTimeout: time.Second})
 	if err != nil {
 		t.Fatal(err)
+	}
+	// A nil gate fails closed: nothing is sent.
+	if r, sent := c.SendGated(context.Background(), testMsg, nil); sent || r != (Result{}) || hits.Load() != 0 {
+		t.Fatalf("nil gate: %+v sent=%v hits=%d", r, sent, hits.Load())
 	}
 	gateCalls := 0
 	r, sent := c.SendGated(context.Background(), testMsg, func() bool { gateCalls++; return false })

@@ -120,7 +120,7 @@ func (h *campaignHandlers) audience(w http.ResponseWriter, r *http.Request) {
 		CampaignID:      p.CampaignID.String(),
 		CampaignVersion: p.CampaignVersion,
 		SegmentVersion:  p.SegmentVersion,
-		Channels:        channelStrings(p.Channels),
+		Channels:        segment.ChannelNames(p.Channels),
 		Audience:        p.Stats,
 	})
 }

@@ -164,7 +164,7 @@ func sendTx(ctx context.Context, tx pgx.Tx, cur campaign.Campaign, p SendParams)
 		return SendOutcome{}, nil, err
 	}
 
-	tag, err := tx.Exec(ctx, sqlConsumeApproval, uuidArg(a.id), uuidArg(cur.ID), a.segmentVersion, a.contentID, channelNames(a.channels))
+	tag, err := tx.Exec(ctx, sqlConsumeApproval, uuidArg(a.id), uuidArg(cur.ID), a.segmentVersion, a.contentID, segment.ChannelNames(a.channels))
 	if err != nil {
 		return SendOutcome{}, nil, fmt.Errorf("approval %s: consume: %w", a.id, err)
 	}

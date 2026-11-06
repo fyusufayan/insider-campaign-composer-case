@@ -115,7 +115,7 @@ Every slice ends with a working end-to-end result in the browser, its tests, and
 
 **Acceptance criteria**
 - Edit → prepare shows counts that exactly equal the held rows in the DB; confirm → approved with 24 h countdown.
-- Editing content or channels after prepare/confirm visibly revokes the approval and removes held rows.
+- Editing content or channels after prepare/confirm visibly revokes the approval and removes held rows. *(As implemented: such edits are refused with `409 invalid_state` while the approval is live and the UI disables them; the marketer withdraws explicitly, which removes the held rows — ARCHITECTURE §5.2 ².)*
 - Shortening TTLs via env demonstrates expiry: campaign returns to `content_ready`, held rows gone, confirm/send return `409 approval_expired`.
 - The lock-wait expiry test passes: an approval that expires while a confirm/send transaction waits for the campaign lock is never confirmed or consumed.
 

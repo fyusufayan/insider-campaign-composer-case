@@ -50,8 +50,15 @@ var (
 
 func (e *env) send(m provider.Message) provider.Result {
 	e.t.Helper()
-	return e.client.Send(context.Background(), m)
+	r, _ := e.client.SendGated(context.Background(), m, alwaysOpen)
+	return r
 }
+
+// alwaysOpen is a test-only final gate. These tests exercise the HTTP client
+// and the provider themselves; production gating (rate-limit slot, slot
+// deadline, leadership fence) lives in delivery.gatedSender and is tested
+// there.
+func alwaysOpen() bool { return true }
 
 // Same key + same payload → the original result is replayed (200,
 // original message id, Idempotent-Replayed) and nothing is sent again.
@@ -317,7 +324,7 @@ func TestConcurrentIdenticalRequestsAcceptOnce(t *testing.T) {
 	for i := 0; i < n; i++ {
 		go func() {
 			<-start
-			results <- e.client.Send(context.Background(), sms)
+			results <- e.send(sms)
 		}()
 	}
 	close(start)

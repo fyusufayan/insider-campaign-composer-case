@@ -153,10 +153,7 @@ func updateArgs(lockedVersion int, c Campaign) ([]any, error) {
 	if !c.Status.Valid() {
 		return nil, fmt.Errorf("invalid status %q", c.Status)
 	}
-	channels := make([]string, len(c.Channels))
-	for i, ch := range c.Channels {
-		channels[i] = string(ch)
-	}
+	channels := segment.ChannelNames(c.Channels)
 	var rule, interp []byte
 	var err error
 	if !c.Segment.IsZero() {

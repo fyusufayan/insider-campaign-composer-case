@@ -128,7 +128,7 @@ func (s *Service) GenerateContentStream(ctx context.Context, id ID, observe Gene
 	s.log.InfoContext(ctx, "content generated", "campaign_id", id.String(),
 		"model", gen.Meta.Model, "prompt_version", gen.Meta.PromptVersion, "llm_calls", gen.Meta.Calls,
 		"repaired", gen.Meta.Repaired, "input_tokens", gen.Meta.Usage.InputTokens,
-		"output_tokens", gen.Meta.Usage.OutputTokens, "channels", channelNames(gen.Channels),
+		"output_tokens", gen.Meta.Usage.OutputTokens, "channels", segment.ChannelNames(gen.Channels),
 		"warnings", len(gen.Validation.Warnings), "duration_ms", time.Since(start).Milliseconds())
 
 	if err := observe(GenerationEvent{Kind: GenerationPersisting}); err != nil {
@@ -247,14 +247,6 @@ func (s *Service) CurrentContent(ctx context.Context, id ID) (Campaign, *content
 		return Campaign{}, nil, err
 	}
 	return c, &v, nil
-}
-
-func channelNames(chs []segment.Channel) []string {
-	out := make([]string, len(chs))
-	for i, ch := range chs {
-		out[i] = string(ch)
-	}
-	return out
 }
 
 func (s *Service) logGenerateFailure(ctx context.Context, id ID, err error, d time.Duration) {

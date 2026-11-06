@@ -44,6 +44,17 @@ func NormalizeChannels(chs []Channel) ([]Channel, error) {
 	return out, nil
 }
 
+// ChannelNames returns the channels as strings in the given order (SQL
+// text[] arguments, DTOs, logs). The result is never nil, so an empty
+// selection encodes as an empty array, not NULL.
+func ChannelNames(chs []Channel) []string {
+	out := make([]string, len(chs))
+	for i, ch := range chs {
+		out[i] = string(ch)
+	}
+	return out
+}
+
 // ChannelStats is the exclusive per-channel partition of the matched users,
 // evaluated in order: no_contact → no_consent → eligible. Units: users.
 type ChannelStats struct {

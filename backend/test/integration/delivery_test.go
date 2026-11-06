@@ -681,7 +681,7 @@ func TestReaperRecoversCrashedWorker(t *testing.T) {
 		t.Fatal(code, err)
 	}
 	msg.To = pre.Destination
-	if r := e.client.Send(ctxBG, msg); r.Outcome != provider.OutcomeAccepted {
+	if r := sendOpen(e.client, ctxBG, msg); r.Outcome != provider.OutcomeAccepted {
 		t.Fatalf("first request = %+v", r)
 	}
 	// Leases expire (instead of waiting a minute).
@@ -1018,7 +1018,7 @@ func TestMockProviderRestartReplaysAfterLostResponse(t *testing.T) {
 		t.Fatal(err)
 	}
 	msg.To = pre.Destination
-	accepted := firstClient.Send(ctxBG, msg) // 1. accepted and journaled; 2. the response is "lost"
+	accepted := sendOpen(firstClient, ctxBG, msg) // 1. accepted and journaled; 2. the response is "lost"
 	if accepted.Outcome != provider.OutcomeAccepted {
 		t.Fatalf("first = %+v", accepted)
 	}
@@ -1064,4 +1064,12 @@ func TestMockProviderRestartReplaysAfterLostResponse(t *testing.T) {
 		st.Channels[provider.ChannelSMS].Accepted != 1 || st.Channels[provider.ChannelSMS].Replayed != 1 {
 		t.Fatalf("one logical acceptance per key expected: %+v", st)
 	}
+}
+
+// sendOpen issues one request outside the worker through an always-open,
+// test-only gate (it simulates a request the worker made before crashing).
+// Production requests are gated by delivery.gatedSender.
+func sendOpen(c *provider.Client, ctx context.Context, m provider.Message) provider.Result {
+	r, _ := c.SendGated(ctx, m, func() bool { return true })
+	return r
 }

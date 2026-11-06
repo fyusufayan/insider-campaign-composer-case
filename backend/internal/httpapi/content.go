@@ -77,7 +77,7 @@ func (h *campaignHandlers) validateContent(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	writeJSON(w, http.StatusOK, draftValidationDTO{
-		CampaignID: v.CampaignID.String(), CampaignVersion: v.CampaignVersion, Channels: channelStrings(v.Channels),
+		CampaignID: v.CampaignID.String(), CampaignVersion: v.CampaignVersion, Channels: segment.ChannelNames(v.Channels),
 		Validation: toValidationDTO(v.Result), ExampleValues: exampleValues(), Limits: contentLimits(),
 	})
 }
@@ -270,7 +270,7 @@ func (h *campaignHandlers) writeGenerationEvent(sse *sseWriter, ev campaign.Gene
 			}
 		}
 		return sse.event(sseEventMeta, sseMeta{CampaignID: st.CampaignID.String(), CampaignVersion: st.CampaignVersion,
-			Channels: channelStrings(st.Channels), Fields: fields, PromptVersion: st.PromptVersion, Limits: contentLimits()})
+			Channels: segment.ChannelNames(st.Channels), Fields: fields, PromptVersion: st.PromptVersion, Limits: contentLimits()})
 	case campaign.GenerationPersisting:
 		return sse.event(sseEventStatus, sseStatus{Phase: phasePersisting})
 	case campaign.GenerationProgress:

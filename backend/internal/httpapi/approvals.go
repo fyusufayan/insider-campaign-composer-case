@@ -371,7 +371,7 @@ func toApprovalDTO(s approval.Summary) approvalDTO {
 		ApprovalID: s.ApprovalID.String(), CampaignID: s.CampaignID.String(), Status: string(s.Status),
 		CampaignVersion: s.CampaignVersion, SegmentVersion: s.SegmentVersion,
 		ContentID: s.ContentID, ContentVersion: s.ContentVersion, ContentOrigin: string(s.ContentProvenance.Origin),
-		Channels: channelStrings(s.Channels), AudienceStats: s.AudienceStats,
+		Channels: segment.ChannelNames(s.Channels), AudienceStats: s.AudienceStats,
 		SnapshotCount: s.SnapshotCount, SnapshotDigest: s.SnapshotDigest, Snapshot: map[string]channelSnapshotDTO{},
 		PreparedAt: s.PreparedAt, ExpiresAt: s.ExpiresAt, ApprovedAt: s.ApprovedAt, ClosedAt: s.ClosedAt,
 	}

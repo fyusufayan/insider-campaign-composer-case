@@ -389,10 +389,7 @@ func prepareTx(ctx context.Context, tx pgx.Tx, cur campaign.Campaign, p PrepareP
 	if err != nil {
 		return Outcome{}, fmt.Errorf("campaign %s: encode audience stats: %w", cur.ID, err)
 	}
-	channels := make([]string, len(cur.Channels))
-	for i, ch := range cur.Channels {
-		channels[i] = string(ch)
-	}
+	channels := segment.ChannelNames(cur.Channels)
 	var (
 		approvalUUID          pgtype.UUID
 		preparedAt, expiresAt time.Time

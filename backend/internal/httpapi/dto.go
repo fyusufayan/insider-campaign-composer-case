@@ -49,7 +49,7 @@ func toCampaignDTO(c campaign.Campaign) (campaignDTO, error) {
 		Name:             c.Name,
 		Brief:            c.Brief,
 		Status:           string(c.Status),
-		Channels:         channelStrings(c.Channels),
+		Channels:         segment.ChannelNames(c.Channels),
 		SegmentVersion:   c.SegmentVersion,
 		Interpretation:   c.Interpretation,
 		ContentBrief:     c.ContentBrief,
@@ -70,14 +70,6 @@ func toCampaignDTO(c campaign.Campaign) (campaignDTO, error) {
 		dto.SegmentRule = rule
 	}
 	return dto, nil
-}
-
-func channelStrings(chs []segment.Channel) []string {
-	out := make([]string, len(chs))
-	for i, ch := range chs {
-		out[i] = string(ch)
-	}
-	return out
 }
 
 // interpretResponseDTO is the response of POST /campaigns/{id}/interpret.
@@ -226,7 +218,7 @@ type currentContentDTO struct {
 
 func toCurrentContentDTO(c campaign.Campaign, v *content.Version, res *content.Result) currentContentDTO {
 	dto := currentContentDTO{
-		CampaignID: c.ID.String(), CampaignVersion: c.Version, Channels: channelStrings(c.Channels),
+		CampaignID: c.ID.String(), CampaignVersion: c.Version, Channels: segment.ChannelNames(c.Channels),
 		ExampleValues: exampleValues(), Limits: contentLimits(),
 	}
 	if v != nil {

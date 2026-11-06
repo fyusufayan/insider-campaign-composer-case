@@ -411,7 +411,7 @@ func (r *Repository) Confirm(ctx context.Context, p ConfirmParams) (Outcome, err
 
 		var approvedAt, expiresAt time.Time
 		err = tx.QueryRow(ctx, sqlConfirmApproval, uuidArg(a.id), uuidArg(cur.ID), p.ApprovedBy,
-			p.ApprovedTTL.Microseconds(), a.segmentVersion, a.contentID, channelNames(a.channels)).Scan(&approvedAt, &expiresAt)
+			p.ApprovedTTL.Microseconds(), a.segmentVersion, a.contentID, segment.ChannelNames(a.channels)).Scan(&approvedAt, &expiresAt)
 		if errors.Is(err, pgx.ErrNoRows) {
 			// Everything else was verified under the lock, so the only way
 			// the CAS can miss is that the approval became due between the
@@ -517,12 +517,4 @@ func validateApprover(name string) error {
 		return fmt.Errorf("approval: approver name must be 1–%d printable characters without surrounding spaces", MaxApproverRunes)
 	}
 	return nil
-}
-
-func channelNames(chs []segment.Channel) []string {
-	out := make([]string, len(chs))
-	for i, ch := range chs {
-		out[i] = string(ch)
-	}
-	return out
 }

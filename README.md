@@ -248,9 +248,10 @@ not performed (ADR-015).
   the segment version, content version and channels. *Confirm* within 15 min
   (pending TTL) → approved for 24 h. Every transition locks the campaign row
   and checks expiry with `clock_timestamp()`; an expired approval can never be
-  confirmed or sent (`409 approval_expired`). Editing content or channels
-  revokes the approval and deletes its held rows. Users who start matching
-  later are never added.
+  confirmed or sent (`409 approval_expired`). While an approval is live,
+  re-interpreting, changing channels, generating or editing content is
+  refused (`409 invalid_state`, "withdraw it first"); withdrawing deletes the
+  held rows. Users who start matching later are never added.
 - **Send** is an explicit, idempotent, version-guarded call that consumes the
   approval and releases exactly its frozen rows to the worker. A repeat
   returns `200 already_started` and writes nothing.
@@ -417,7 +418,7 @@ ARCHITECTURE §18 has the complete list.
 ## AI-assisted development
 
 This project was built with Claude Code as an engineering partner. The
-exported working sessions are in [`ai-sessions/`](ai-sessions) (sessions 1–18,
+exported working sessions are in [`ai-sessions/`](ai-sessions) (sessions 1–19,
 as recorded); design decisions, reviews and corrections made in those
 sessions are reflected in `DECISIONS.md`. No AI output is trusted at runtime
 without backend validation.

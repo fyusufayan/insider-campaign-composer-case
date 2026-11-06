@@ -82,11 +82,7 @@ func CompileEligible(rule Validated, channels []Channel) (EligibleQuery, error) 
 	if len(sel) == 0 {
 		return EligibleQuery{}, ErrNoChannels
 	}
-	names := make([]string, len(sel))
-	for i, ch := range sel {
-		names[i] = string(ch)
-	}
-	args = append(args, names)
+	args = append(args, ChannelNames(sel))
 	placeholder := "$" + strconv.Itoa(len(args))
 	return EligibleQuery{
 		With:      sqlAudienceStatsHead + matchedSQL + sqlClassifiedCTE + strings.Replace(sqlEligibleCTE, channelsMarker, placeholder, 1),

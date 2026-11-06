@@ -62,7 +62,19 @@ func (d *durable) restart() *durable {
 }
 
 func (d *durable) send(m provider.Message) provider.Result {
-	return d.client.Send(context.Background(), m)
+	return sendOpen(d.client, m)
+}
+
+// alwaysOpen is a test-only final gate. These tests exercise the HTTP client
+// and the provider themselves; production gating (rate-limit slot, slot
+// deadline, leadership fence) lives in delivery.gatedSender and is tested
+// there.
+func alwaysOpen() bool { return true }
+
+// sendOpen sends m through the always-open gate.
+func sendOpen(c *provider.Client, m provider.Message) provider.Result {
+	r, _ := c.SendGated(context.Background(), m, alwaysOpen)
+	return r
 }
 
 func records(t *testing.T, path string) []ledgerRecord {
@@ -207,7 +219,7 @@ func TestDurableLostResponseThenRestart(t *testing.T) {
 	}
 	hs := httptest.NewServer(srv.Handler())
 	client, _ := provider.NewClient(provider.ClientConfig{BaseURL: hs.URL, RequestTimeout: 200 * time.Millisecond})
-	if r := client.Send(context.Background(), msgA); r.Outcome != provider.OutcomeTimeout {
+	if r := sendOpen(client, msgA); r.Outcome != provider.OutcomeTimeout {
 		t.Fatalf("first = %+v", r)
 	}
 	recs := records(t, path)

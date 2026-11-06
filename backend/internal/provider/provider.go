@@ -261,21 +261,17 @@ func (c *Client) Capabilities() Capabilities { return c.caps }
 // RequestTimeout returns the configured per-request timeout.
 func (c *Client) RequestTimeout() time.Duration { return c.timeout }
 
-// Send performs one request and classifies the result. It never returns an
-// error: every failure is an Outcome. The request is bounded by the
-// request timeout; cancelling ctx aborts it (OutcomeUnknown, since the
+// SendGated performs one request and classifies the result. It never
+// returns an error: every failure is an Outcome. The request is bounded by
+// the request timeout; cancelling ctx aborts it (OutcomeUnknown, since the
 // request may already have reached the provider).
-func (c *Client) Send(ctx context.Context, m Message) Result {
-	r, _ := c.SendGated(ctx, m, nil)
-	return r
-}
-
-// SendGated is Send with a final gate: gate (if not nil) is called after
-// the request has been built — immediately before http.Client.Do, with no
-// other work in between — and if it returns false nothing is sent and sent
-// is false. The delivery worker's slot-deadline check runs here (§10.2
-// step 4), so the time between that check and the request is only the
-// transport's own. A request that could not be built is reported as a
+//
+// gate is the final gate: it is called after the request has been built —
+// immediately before http.Client.Do, with no other work in between — and if
+// it returns false nothing is sent and sent is false. A nil gate also sends
+// nothing (fail closed): there is no ungated way to issue a request. The
+// delivery worker's slot-deadline check runs here (§10.2 step 4), so the
+// time between that check and the request is only the transport's own. A request that could not be built is reported as a
 // permanent error with sent = true (nothing reached the provider, but the
 // attempt is final).
 func (c *Client) SendGated(ctx context.Context, m Message, gate func() bool) (r Result, sent bool) {
@@ -295,7 +291,7 @@ func (c *Client) SendGated(ctx context.Context, m Message, gate func() bool) (r 
 	defer cancel()
 	req = req.WithContext(rctx)
 
-	if gate != nil && !gate() {
+	if gate == nil || !gate() {
 		return Result{}, false
 	}
 	resp, err := c.http.Do(req) // the only network call of a delivery attempt
