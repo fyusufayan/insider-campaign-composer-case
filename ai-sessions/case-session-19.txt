@@ -1,0 +1,3082 @@
+ ▐▛███▛█   Claude Code v2.1.318
+▝▜██████▀  Opus 5.5 · Claude Pro
+ ▝▝   ▝▝   ~/Desktop/devel/leet/insider-case/insider-campaign-composer-case
+
+
+❯ We are continuing Smart Campaign Composer, an Insider One take-home project.  
+  This is a NEW FINAL CHECKPOINT: CP18 — Final Hardening, Clean-Room            
+  Verification and Submission Readiness.                                        
+  Baseline                                                                      
+  CP1–CP17B are implemented, reviewed and committed.                            
+  Latest reviewed commit:                                                       
+  `1d39f91` — `feat: add live delivery dashboard SSE and metrics`               
+  The working tree was clean at the end of CP17B.                               
+  The product now supports the complete workflow:                               
+  Create campaign → Interpret natural-language audience → Preview segmentation  
+  → Generate and edit personalized content → Prepare frozen audience → Review   
+  and confirm approval → Start sending → Monitor delivery through SSE →         
+  Complete or cancel.                                                           
+  Architecture:                                                                 
+                                                                                
+  * Go API and PostgreSQL.                                                      
+  * Vue 3, TypeScript, Vite and Pinia frontend.                                 
+  * Anthropic integration with explicit deterministic demo mode.                
+  * Strict segmentation DSL and parameterized SQL.                              
+  * Immutable content and frozen approval snapshots.                            
+  * PostgreSQL delivery worker, retry scheduling, rate limiting and             
+  cancellation.                                                                 
+  * HTTP mock SMS/email provider with durable idempotency ledger.               
+  * Live delivery stats, paginated delivery lists, SSE and metrics.             
+  * Docker Compose with nginx.                                                  
+                                                                                
+  Previous verification passed backend unit/race/integration tests, 260         
+  frontend tests, forced-demo Compose smoke tests and browser end-to-end tests. 
+  This checkpoint is a quality and submission gate, not a feature sprint.       
+  Do not add new product features, frameworks, architecture layers or external  
+  infrastructure unless required to fix a reproducible release-blocking issue.  
+  1. Establish the repository baseline                                          
+  Read:                                                                         
+                                                                                
+  * `CLAUDE.md`                                                                 
+  * `README.md`                                                                 
+  * `docs/ROADMAP.md`                                                           
+  * `docs/ARCHITECTURE.md`                                                      
+  * `DECISIONS.md`                                                              
+  * Existing ADRs, especially the LLM, approval, idempotency, rate-limit and    
+  metrics decisions                                                             
+  * Existing `ai-sessions/` logs                                                
+  * `docker-compose.yml`, backend Dockerfile, nginx configuration and           
+  `.env.example`                                                                
+  * Makefile and smoke scripts                                                  
+  * Go and frontend manifests                                                   
+  * CI configuration, if present                                                
+  * Existing backend/frontend test suites and helper scripts                    
+                                                                                
+  Verify HEAD contains `1d39f91`, inspect Git status and identify any           
+  outstanding changes.                                                          
+  Do not silently discard, overwrite, delete or stage unrelated files.          
+  Compare the actual implementation against the seven-day take-home             
+  requirements as recorded in the repository. Identify any material requirement 
+  that remains incomplete, and distinguish true blockers from optional polish.  
+  Do not invent missing requirements.                                           
+  2. Clean-room Docker installation                                             
+  The highest priority is provi                                                 
+  ──── (230 lines hidden) ───────────────────────────────────────────────────── 
+   and 429 rules.                                                               
+  * Dispatch rate-limit guarantee boundaries.                                   
+  * Mock provider idempotency and ledger reset rules.                           
+  * SSE and metrics contracts.                                                  
+  * HTTP routes and error shapes.                                               
+  * Demo versus real Anthropic behavior.                                        
+  * Worker deployment constraints.                                              
+  * Known limitations.                                                          
+                                                                                
+  Fix contradictions, stale instructions or broken links.                       
+  Preserve the honest statements about:                                         
+                                                                                
+  * The provider-arrival limit depending on network timing.                     
+  * Cancellation not recalling an already-started request.                      
+  * At-least-once worker execution.                                             
+  * Mock-provider idempotency being conditional on retained durable ledger      
+  history.                                                                      
+  * Standard-library Prometheus exposition rather than the official client.     
+  * The local TLS/staticcheck download issue.                                   
+                                                                                
+  Do not claim exactly-once real-world delivery.                                
+  9. AI session records and repository hygiene                                  
+  Review the existing `ai-sessions/` convention.                                
+  Confirm the required AI-assisted development disclosure is represented        
+  accurately.                                                                   
+  Do not fabricate session records or claim conversations occurred that are not 
+  recorded.                                                                     
+  Inspect Git status, recent commit history, branch state and any unexpectedly  
+  untracked files.                                                              
+  Run:                                                                          
+                                                                                
+  * `git diff --check`                                                          
+  * Appropriate secret and sensitive-data scans.                                
+  * A check that database dumps, provider ledger data, runtime logs and `.env`  
+  are ignored.                                                                  
+                                                                                
+  Do not push, rewrite history or create a release tag without explicit         
+  authorization.                                                                
+  10. Final deliverables                                                        
+  Produce:                                                                      
+                                                                                
+  1. Any minimal code/test fixes needed for true submission blockers.           
+  2. Reviewer-ready README.                                                     
+  3. Consistent final architecture/ADR documentation.                           
+  4. A concise final acceptance checklist, preferably in                        
+  `docs/FINAL_CHECKLIST.md`.                                                    
+  5. A truthful verification summary.                                           
+  6. A list of remaining known limitations, separated into blockers and         
+  accepted tradeoffs.                                                           
+  7. A recommended 3–5 minute live demo path for the evaluator.                 
+                                                                                
+  No new dashboards, providers, infrastructure services or major refactors.     
+  11. Completion report                                                         
+  At the end, report:                                                           
+                                                                                
+  * Exact Git HEAD and working-tree status.                                     
+  * Files modified.                                                             
+  * Clean-room installation result.                                             
+  * Security findings and fixes.                                                
+  * Full test results.                                                          
+  * Docker smoke results.                                                       
+  * Browser E2E results.                                                        
+  * Documentation consistency findings.                                         
+  * Remaining blockers, if any.                                                 
+  * Accepted limitations.                                                       
+  * Final submission readiness verdict.                                         
+                                                                                
+  Do not commit anything yet.                                                   
+  Do not push or tag.                                                           
+  Do not perform paid Anthropic API calls.                                      
+  Do not delete existing Docker volumes, customer-like data or mock-provider    
+  ledger history.                                                               
+  Stop after CP18 implementation and validation for final review.               
+
+  Searched for 1 pattern, read 1 file, ran 3 shell commands (ctrl+o to expand)
+
+⏺ Git baseline is clean at e458687, and the local .env holds a real key, so I'll
+  force demo mode on every Compose run; the full test suite is running in the
+  background next.
+
+  Searched for 1 pattern, ran 6 shell commands (ctrl+o to expand)
+
+⏺ Unit and race tests pass, and gofmt and vet are clean. make lint hits the TLS
+  block, so I'm running the pinned staticcheck offline from the local cache.
+
+  Ran 5 shell commands (ctrl+o to expand)
+
+⏺ Background command "Run integration tests with race in background" completed
+(exit code 0)
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ Integration tests pass and the clean-room stack came up healthy in about 4
+  minutes. I'm now checking the seed, ports and volumes, then running the smoke
+  scripts.
+
+  Searched for 1 pattern, ran 2 shell commands (ctrl+o to expand)
+
+⏺ All three smoke scripts pass on the clean-room stack, and the README's "184
+  matched users" is now 178 because the 30-day window moves with the date, so
+  I'm fixing that wording and then checking that data survives down/up.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+  Listed 1 directory, ran 3 shell commands (ctrl+o to expand)
+
+⏺ Input validation held under black-box probes through nginx, with all the
+  malformed, oversized and out-of-range inputs rejected by the error envelope,
+  and /metrics, admin paths and CORS headers all closed to the host. Next I'm
+  running static greps for SQL building, templates, PII logging and secrets.
+
+  Searched for 1 pattern, ran 4 shell commands (ctrl+o to expand)
+
+⏺ Server-side validation already rejects template syntax, control characters,
+  markup and over-long SMS, and the security audit has found no real gaps so
+  far. I'm moving on to the supply-chain review.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ Supply chain checks pass: the production binaries pull in only the expected
+  dependencies and npm reports no production vulnerabilities. Next I'll run
+  browser acceptance on the clean-room stack, starting with which Turkish
+  keywords the demo interpreter understands.
+
+  Searched for 1 pattern, ran 2 shell commands (ctrl+o to expand)
+
+⏺ Skill(anthropic-skills:built-in-browser)
+  ⎿  Successfully loaded skill
+
+⏺ Browser is open on the clean-room app at port 18000. Running Scenario A with a
+  Turkish brief.
+
+⏺ Turkish interpretation checks out: City is İstanbul, and the 178 abandoned
+  carts from the last 30 days add up across partitions. I'll look into a UI
+  glitch where two sections are both numbered "4" once the run finishes.
+⏺ Keyboard check on the approval dialog: it opens with focus inside and closes
+  on Escape, but Shift+Tab escapes the modal to the header's "New campaign"
+  link. Looking at the focus-trap code now.
+
+  Listed 1 directory, ran 1 shell command (ctrl+o to expand)
+
+⏺ Neither modal traps Tab or returns focus to its opener despite declaring
+  aria-modal="true", so I'm adding one shared fix with tests.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ Write(frontend/src/composables/useModalFocus.ts)
+  ⎿  Wrote 59 lines to frontend/src/composables/useModalFocus.ts
+       1 // Keyboard focus handling for modal dialogs (aria-modal="true")
+         :
+       2 //  - focus moves into the dialog when it opens;
+       3 //  - Tab / Shift+Tab cycle within the dialog and never reach th
+         e page behind it;
+       4 //  - when the dialog closes, focus returns to the element that 
+         opened it (if
+       5 //    it is still in the document).
+       6 import { nextTick, onBeforeUnmount, onMounted, type Ref } from '
+         vue'
+     … +53 lines (ctrl+o to expand)
+
+⏺ Bash(python3 - <<'EOF'
+      import re…)
+  ⎿  src/components/ui/ConfirmDialog.vue:5:import { nextTick, onBeforeUnmou
+     nt, onMounted, ref } from 'vue'
+     src/components/composer/ApprovalDialog.vue:8:import { computed, nextTi
+     … +9 lines (ctrl+o to expand)
+  ⎿  Updated frontend/src/components/composer/ApprovalDialog.vue (+3 -5)
+      28  const emit = defineEmits<{ confirm: []; withdraw: []; close: []
+          ; reload: [] }>()
+      29  
+      30  const dialog = ref<HTMLElement | null>(null)
+      31 +const { trapTab } = useModalFocus(dialog)                      
+      32  const ackSnapshot = ref(false)
+      33  const ackFindings = ref(false)
+      34  watch(
+     ...
+      65  
+      66  function onKey(e: KeyboardEvent) {
+      67    if (e.key === 'Escape' && !props.confirming && !props.withdra
+          wing) emit('close')
+      68 +  else trapTab(e)                                              
+      69  }
+      68 -onMounted(async () => {                                        
+      69 -  document.addEventListener('keydown', onKey)                  
+      70 -  await nextTick()                                             
+      71 -  dialog.value?.focus()                                        
+      72 -})                                                             
+      70 +onMounted(() => document.addEventListener('keydown', onKey))   
+      71  onBeforeUnmount(() => document.removeEventListener('keydown', o
+          nKey))
+      72  </script>
+      73  
+  ⎿  Updated frontend/src/components/ui/ConfirmDialog.vue (+3 -5)
+      20  const emit = defineEmits<{ confirm: []; close: [] }>()
+      21  
+      22  const dialog = ref<HTMLElement | null>(null)
+      23 +const { trapTab } = useModalFocus(dialog)                      
+      24  function onKey(e: KeyboardEvent) {
+      25    if (e.key === 'Escape' && !props.pending) emit('close')
+      26 +  else trapTab(e)                                              
+      27  }
+      26 -onMounted(async () => {                                        
+      27 -  document.addEventListener('keydown', onKey)                  
+      28 -  await nextTick()                                             
+      29 -  dialog.value?.focus()                                        
+      30 -})                                                             
+      28 +onMounted(() => document.addEventListener('keydown', onKey))   
+      29  onBeforeUnmount(() => document.removeEventListener('keydown', o
+          nKey))
+      30  </script>
+      31  
+
+⏺ Bash(grep -n "nextTick" src/components/ui/ConfirmDialog.vue
+      src/components/composer/ApprovalDialog.vue; sed -i '' "s|^import {
+      nextTick, onBeforeUnmount, onMounted,…)
+  ⎿  src/components/ui/ConfirmDialog.vue:5:import { nextTick, onBeforeUnmou
+     nt, onMounted, ref } from 'vue'
+     src/components/composer/ApprovalDialog.vue:8:import { computed, nextTi
+     … +65 lines (ctrl+o to expand)
+  ⎿  Updated frontend/src/components/composer/ApprovalDialog.vue (+1 -0)
+      11  import type { Operation } from '@/api/errors'
+      12  import ErrorNotice from '@/components/ui/ErrorNotice.vue'
+      13  import { formatCount } from '@/composables/format'
+      14 +import { useModalFocus } from '@/composables/useModalFocus'    
+      15  import ApprovalSummaryView from './ApprovalSummary.vue'
+      16  
+      17  const props = defineProps<{
+  ⎿  Updated frontend/src/components/ui/ConfirmDialog.vue (+2 -1)
+      2  // A modal confirmation for an irreversible action. The confirm 
+         button is
+      3  // disabled while the action is pending (no double submit); Esca
+         pe and the
+      4  // secondary button close it only when nothing is pending.
+      5 -import { nextTick, onBeforeUnmount, onMounted, ref } from 'vue' 
+      5 +import { onBeforeUnmount, onMounted, ref } from 'vue'           
+      6 +import { useModalFocus } from '@/composables/useModalFocus'     
+      7  
+      8  const props = withDefaults(
+      9    defineProps<{
+
+  Searched for 1 pattern (ctrl+o to expand)
+
+⏺ Bash(sed -i '' "s|^import { computed, nextTick, onBeforeUnmount, onMounted,
+      ref, watch } from 'vue'|import { computed, onBeforeUnmount, onMounted,
+      ref, watch } from…)
+  ⎿  8:import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vu
+     e'
+     13:import { formatCount } from '@/composables/format'
+     … +52 lines (ctrl+o to expand)
+  ⎿  Updated frontend/src/components/composer/ApprovalDialog.vue (+1 -1)
+       5  // Confirm. Closing it decides nothing: the approval stays pend
+          ing until it
+       6  // is confirmed, withdrawn or expires. The server enforces vers
+          ion, binding
+       7  // and expiry; this dialog only presents them.
+       8 -import { computed, nextTick, onBeforeUnmount, onMounted, ref, w
+         -atch } from 'vue'                                              
+       8 +import { computed, onBeforeUnmount, onMounted, ref, watch } fro
+         +m 'vue'                                                        
+       9  import type { ApprovalSummary, Campaign } from '@/api/types'
+      10  import type { ApiError } from '@/api/client'
+      11  import type { Operation } from '@/api/errors'
+
+⏺ I've added a shared useModalFocus composable and wired it into both dialogs.
+  Now writing a regression test for it.
+
+⏺ Write(frontend/tests/modalFocus.spec.ts)
+  ⎿  Wrote 84 lines to frontend/tests/modalFocus.spec.ts
+       1 // Keyboard focus of modal dialogs (CP18): focus enters the dial
+         og, Tab and
+       2 // Shift+Tab cycle inside it and never reach the page behind it,
+          and focus
+       3 // returns to the opener when the dialog closes.
+       4 import { afterEach, describe, expect, it } from 'vitest'
+       5 import { mount, type VueWrapper } from '@vue/test-utils'
+       6 import { nextTick } from 'vue'
+       7 import ConfirmDialog from '@/components/ui/ConfirmDialog.vue'
+       8 
+     … +76 lines (ctrl+o to expand)
+
+  Ran 2 shell commands (ctrl+o to expand)
+
+⏺ The new test fails without the fix and passes with it (265 frontend tests
+  now). Next: the duplicate "4" section number.
+
+  Searched for 1 pattern (ctrl+o to expand)
+
+⏺ Bash(grep -rn "step-num\|step 6\|Message content'\|'5 Review\|6 Send" tests |
+      head; sed -i '' 's|<span class="step-num">4</span> Message content|<span
+      class="step-nu…)
+  ⎿   frontend/src/components/composer/ApprovalDialog.vue | 11 +++++------
+      frontend/src/components/composer/ApprovalPanel.vue  |  2 +-
+      frontend/src/components/composer/ContentPanel.vue   |  2 +-
+     … +4 lines (ctrl+o to expand)
+  ⎿  Updated frontend/src/components/composer/ApprovalPanel.vue (+1 -1)
+      87  <template>
+      88    <section class="card approval-panel" data-testid="approval-pa
+          nel">
+      89      <div class="card-header">
+      90 -      <p class="card-eyebrow"><span class="step-num">5</span> R
+         -eview &amp; approval</p>                                       
+      90 +      <p class="card-eyebrow"><span class="step-num">6</span> R
+         +eview &amp; approval</p>                                       
+      91      </div>
+      92      <div class="card-body body">
+      93        <div v-if="notice" class="notice" :class="notice.tone" ro
+          le="status" data-testid="approval-notice" :data-kind="approvalN
+          otice">
+  ⎿  Updated frontend/src/components/composer/ContentPanel.vue (+1 -1)
+      141    <section class="card content-panel" data-testid="content-pan
+           el">
+      142      <div class="card-header">
+      143        <div class="head-main">
+      144 -        <p class="card-eyebrow"><span class="step-num">4</span
+          -> Message content</p>                                         
+      144 +        <p class="card-eyebrow"><span class="step-num">5</span
+          +> Message content</p>                                         
+      145          <ContentVersionBadge v-if="savedVersion" :version="sav
+           edVersion" />
+      146          <span v-else class="badge badge-neutral" data-testid="
+           content-empty">No content yet</span>
+      147        </div>
+  ⎿  Updated frontend/src/components/dashboard/DeliveryPanel.vue (+1 -1)
+      117  <template>
+      118    <section ref="panel" class="card delivery-panel" data-testid
+           ="delivery-panel">
+      119      <div class="card-header header">
+      120 -      <p class="card-eyebrow"><span class="step-num">6</span> 
+          -Send &amp; delivery</p>                                       
+      120 +      <p class="card-eyebrow"><span class="step-num">7</span> 
+          +Send &amp; delivery</p>                                       
+      121        <div v-if="streaming" class="conn">
+      122          <span class="badge" :class="connection === 'live' || c
+           onnection === 'ended' ? 'badge-success' : 'badge-warning'" dat
+           a-testid="connection-badge" :data-state="connection">
+      123            {{ CONNECTION_LABEL[connection] }}
+
+⏺ Section numbers are now 1–7 with no duplicates. Continuing Scenario A on the
+  running build: confirm the approval, then send.
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ Bash(sed -i '' 's|sending starts from step 6|sending starts from step 7|;
+      s|start sending explicitly in step 6 below|start sending explicitly in
+      step 7 below|' front…)
+  ⎿  frontend/src/components/composer/ApprovalPanel.vue:2
+     docs/ARCHITECTURE.md:1
+  ⎿  Updated docs/ARCHITECTURE.md (+3 -3)
+      1025  - Expiry/withdraw/supersede detected on any response (`409 ap
+            proval_expired` or status change) → banner "Approval expired 
+            — review again".
+      1026  - Composables: `useContentStream` (fetch-stream SSE parser, a
+            bort on unmount/regenerate), `useCampaignEvents` (EventSource
+            , backoff, close on terminal), `useCampaign`.
+      1027  - No `v-html` for any AI or user content; variables highlight
+            ed via tokenized spans. Client-side counters are UX only; the
+             server is authoritative.
+      1028 -- Slice 2 (CP13): `ContentPanel` (step 4) with `GenerationPro
+           -gress` (phases, attempt, live preview labelled "not validated
+           -, not saved" in an escaped `<pre>`, Cancel), `SmsEditor`/`Ema
+           -ilEditor` (only for the selected channels; server-computed wo
+           -rst-case counters next to the typed length; inline errors and
+           - warnings), `SmsPreview`/`EmailPreview` (rendered example wit
+           -h the fictional values; the email in an `<iframe sandbox="">`
+           - whose `srcdoc` is built from escaped text), `ValidationList`
+           -, `ContentVersionBadge` (version, AI model/prompt vs. "Edited
+           - manually", demo generator called out). The store keeps the d
+           -raft, validates it on the server (debounced 350 ms; results b
+           -ound to the draft revision and campaign version, re-validated
+           - when the campaign version changes), saves only a revision th
+           -e server has validated (so its warnings were shown) with `exp
+           -ected_version` (a `409` keeps the draft for an explicit save 
+           -after reload; never retried automatically), blocks generation
+           - while the draft has unsaved edits, drops stream events after
+           - navigation (epoch), aborts the stream on unmount/navigation/
+           -Cancel and reloads campaign + content after any failure, inte
+           -rruption or cancellation (a commit may have happened just bef
+           -ore).                                                        
+      1029 -- Slice 3 (CP15): `ApprovalPanel` (step 5: *Prepare approval*
+           - with the reason it is unavailable — unsaved or invalid draft
+           -, no channel; pending: *Review & confirm* / *Withdraw* with c
+           -ountdown; approved: read-only summary with a 24 h countdown a
+           -nd a two-step *Withdraw approval…*; banners for confirmed / w
+           -ithdrawn / expired / replaced), `ApprovalDialog` (explainer o
+           -f what confirming authorizes and that consent/contact are re-
+           -checked at delivery, `ApprovalSummary` — channels, content ve
+           -rsion + origin, segment version, digest, per-channel frozen r
+           -ecipients with `no_consent`/`no_contact`, reach, render issue
+           -s, non-offer warnings, rendered previews — the offer/price fi
+           -ndings listed individually with the authorized offer, explici
+           -t acknowledgement checkboxes, Confirm / Withdraw / *Close wit
+           -hout confirming*). No send button. The store applies an appro
+           -val only together with the campaign of the same response (sam
+           -e version), runs one approval mutation at a time, never retri
+           -es a `409` (shown with *Reload latest campaign*), re-reads th
+           -e approval (server-side lazy expiry) when the display countdo
+           -wn elapses and disables Confirm meanwhile, restores the dialo
+           -g on reload of a pending campaign, drops late responses after
+           - navigation (epoch), and decodes approval responses strictly 
+           -(closed property sets, cross-field consistency).             
+      1030 -- Slice 4/5 delivery UI (CP17B): the dashboard is a section o
+           -f the campaign page (`components/dashboard/DeliveryPanel.vue`
+           -, step 6), not a separate route: one stable URL, one store. I
+           -t appears for `approved` (Start sending) and leads the page f
+           -or `sending`/finished campaigns. **Start sending…** opens a c
+           -onfirmation (`ConfirmDialog`) with the frozen per-channel cou
+           -nts, content version, irreversibility, "the worker may start 
+           -before this returns" and what cancel cannot do; the store sen
+           -ds `{approval_id, expected_version}` once (a second click whi
+           -le pending is ignored), treats `already_started` as success, 
+           -never retries a `409`, refreshes the approval on `approval_ex
+           -pired`, and on a lost response (network / invalid response) o
+           -r `invalid_state` re-reads the campaign with a fresh GET inst
+           -ead of guessing. **Cancel sending…** (sending only) explains 
+           -the in-flight limit and reports `cancelled_deliveries` / `in_
+           -flight`; a cancel racing completion (`409 invalid_state`) or 
+           -a lost cancel response also reconciles with a GET. Live data:
+           - `useCampaignEvents` (EventSource; strict decoding of every e
+           -vent; a malformed or oversized event is dropped, the source c
+           -losed and reopened for a fresh snapshot; events of superseded
+           - connections and of other campaigns are ignored; snapshots ol
+           -der than the one shown (`updated_at`) are never applied; own 
+           -capped exponential reconnect 1 s → 15 s instead of the browse
+           -r's; `end` closes for good; polling `GET /stats` every 3 s if
+           - EventSource is unavailable; manual Refresh). A snapshot repo
+           -rting a newer `campaign_version` triggers a campaign re-read,
+           - so the status badge follows completion or a cancel elsewhere
+           -. Views: connection badge, worker-offline warning while sendi
+           -ng with a non-fresh heartbeat, overall and per-channel stacke
+           -d progress (`ChannelProgress`), tiles (sent/failed/skipped/ca
+           -ncelled/pending, attempts, retries, attempts/s), uncertain ov
+           -erlay note, reason summary, version identity, final summary d
+           -istinguishing *Completed* from *Completed with f … [+292 char
+           -s]                                                           
+      1028 +- Slice 2 (CP13): `ContentPanel` (step 5) with `GenerationPro
+           +gress` (phases, attempt, live preview labelled "not validated
+           +, not saved" in an escaped `<pre>`, Cancel), `SmsEditor`/`Ema
+           +ilEditor` (only for the selected channels; server-computed wo
+           +rst-case counters next to the typed length; inline errors and
+           + warnings), `SmsPreview`/`EmailPreview` (rendered example wit
+           +h the fictional values; the email in an `<iframe sandbox="">`
+           + whose `srcdoc` is built from escaped text), `ValidationList`
+           +, `ContentVersionBadge` (version, AI model/prompt vs. "Edited
+           + manually", demo generator called out). The store keeps the d
+           +raft, validates it on the server (debounced 350 ms; results b
+           +ound to the draft revision and campaign version, re-validated
+           + when the campaign version changes), saves only a revision th
+           +e server has validated (so its warnings were shown) with `exp
+           +ected_version` (a `409` keeps the draft for an explicit save 
+           +after reload; never retried automatically), blocks generation
+           + while the draft has unsaved edits, drops stream events after
+           + navigation (epoch), aborts the stream on unmount/navigation/
+           +Cancel and reloads campaign + content after any failure, inte
+           +rruption or cancellation (a commit may have happened just bef
+           +ore).                                                        
+      1029 +- Slice 3 (CP15): `ApprovalPanel` (step 6: *Prepare approval*
+           + with the reason it is unavailable — unsaved or invalid draft
+           +, no channel; pending: *Review & confirm* / *Withdraw* with c
+           +ountdown; approved: read-only summary with a 24 h countdown a
+           +nd a two-step *Withdraw approval…*; banners for confirmed / w
+           +ithdrawn / expired / replaced), `ApprovalDialog` (explainer o
+           +f what confirming authorizes and that consent/contact are re-
+           +checked at delivery, `ApprovalSummary` — channels, content ve
+           +rsion + origin, segment version, digest, per-channel frozen r
+           +ecipients with `no_consent`/`no_contact`, reach, render issue
+           +s, non-offer warnings, rendered previews — the offer/price fi
+           +ndings listed individually with the authorized offer, explici
+           +t acknowledgement checkboxes, Confirm / Withdraw / *Close wit
+           +hout confirming*). No send button. The store applies an appro
+           +val only together with the campaign of the same response (sam
+           +e version), runs one approval mutation at a time, never retri
+           +es a `409` (shown with *Reload latest campaign*), re-reads th
+           +e approval (server-side lazy expiry) when the display countdo
+           +wn elapses and disables Confirm meanwhile, restores the dialo
+           +g on reload of a pending campaign, drops late responses after
+           + navigation (epoch), and decodes approval responses strictly 
+           +(closed property sets, cross-field consistency).             
+      1030 +- Slice 4/5 delivery UI (CP17B): the dashboard is a section o
+           +f the campaign page (`components/dashboard/DeliveryPanel.vue`
+           +, step 7), not a separate route: one stable URL, one store. I
+           +t appears for `approved` (Start sending) and leads the page f
+           +or `sending`/finished campaigns. **Start sending…** opens a c
+           +onfirmation (`ConfirmDialog`) with the frozen per-channel cou
+           +nts, content version, irreversibility, "the worker may start 
+           +before this returns" and what cancel cannot do; the store sen
+           +ds `{approval_id, expected_version}` once (a second click whi
+           +le pending is ignored), treats `already_started` as success, 
+           +never retries a `409`, refreshes the approval on `approval_ex
+           +pired`, and on a lost response (network / invalid response) o
+           +r `invalid_state` re-reads the campaign with a fresh GET inst
+           +ead of guessing. **Cancel sending…** (sending only) explains 
+           +the in-flight limit and reports `cancelled_deliveries` / `in_
+           +flight`; a cancel racing completion (`409 invalid_state`) or 
+           +a lost cancel response also reconciles with a GET. Live data:
+           + `useCampaignEvents` (EventSource; strict decoding of every e
+           +vent; a malformed or oversized event is dropped, the source c
+           +losed and reopened for a fresh snapshot; events of superseded
+           + connections and of other campaigns are ignored; snapshots ol
+           +der than the one shown (`updated_at`) are never applied; own 
+           +capped exponential reconnect 1 s → 15 s instead of the browse
+           +r's; `end` closes for good; polling `GET /stats` every 3 s if
+           + EventSource is unavailable; manual Refresh). A snapshot repo
+           +rting a newer `campaign_version` triggers a campaign re-read,
+           + so the status badge follows completion or a cancel elsewhere
+           +. Views: connection badge, worker-offline warning while sendi
+           +ng with a non-fresh heartbeat, overall and per-channel stacke
+           +d progress (`ChannelProgress`), tiles (sent/failed/skipped/ca
+           +ncelled/pending, attempts, retries, attempts/s), uncertain ov
+           +erlay note, reason summary, version identity, final summary d
+           +istinguishing *Completed* from *Completed with f … [+292 char
+           +s]                                                           
+      1031  - Slice 1a (CP7): routes `/campaigns/new` and `/campaigns/:id
+            ` (reloadable). The store applies a campaign only if its `ver
+            sion` is not older than the one shown, shows audience statist
+            ics only for the matching `campaign_version`, aborts supersed
+            ed requests, and never retries a `409` automatically (the rej
+            ected channel selection is offered for an explicit re-apply a
+            fter reload). The shell reads `llm_provider` from `GET /ready
+            z` to label demo mode, so the CP8 proxy must forward `/readyz
+            ` as well as `/api/`.
+      1032  
+      1033  ---
+  ⎿  Updated frontend/src/components/composer/ApprovalPanel.vue (+2 -2)
+      1  <script setup lang="ts">
+      2  // Step 5: approval. Prepare freezes the audience and content in
+         to a pending
+      3  // approval (server); the dialog reviews and confirms or withdra
+         ws it; an
+      4 -// approved campaign shows a read-only summary; sending starts f
+        -rom step 6                                                      
+      4 +// approved campaign shows a read-only summary; sending starts f
+        +rom step 7                                                      
+      5  // (DeliveryPanel), never from here. All state lives in the camp
+         aign store.
+      6  import { computed, ref, watch } from 'vue'
+      7  import { storeToRefs } from 'pinia'
+     ...
+      168                <p class="notice-title">Approved — not sent</p>
+      169                <p>
+      170                  Valid for <strong data-testid="approved-countd
+           own">{{ remaining }}</strong>. No messages have been sent:
+      171 -                start sending explicitly in step 6 below. Cons
+          -ent and contact will be re-checked for every delivery.        
+      171 +                start sending explicitly in step 7 below. Cons
+          +ent and contact will be re-checked for every delivery.        
+      172                </p>
+      173              </div>
+      174            </div>
+
+⏺ Approval confirmed in the UI. Next I'm clicking Start sending and watching the
+  live SSE dashboard to completion.
+
+⏺ Sending finished in about 7 s with 203 sent and 2 deliberate SMS failures
+  (destinations ending 0000). I'm now cross-checking the counts against
+  PostgreSQL and the mock-provider ledger before reloading the page.
+
+  Ran 2 shell commands (ctrl+o to expand)
+
+⏺ Ledger and database agree on the per-campaign message counts, the 217 attempts
+  and 2 rate-limited responses match the UI, and there are no duplicate
+  accepted keys. Next I'll check the reload, console errors, and the 375 px
+  layout.
+
+⏺ The reload kept the final state with no console errors, and the 375 px layout
+  has no page-level overflow. Next I'll set up a larger campaign through the API
+  and start and cancel it from the UI.
+
+  Ran 2 shell commands (ctrl+o to expand)
+
+⏺ Cancellation cleared all 255 queued rows and flagged 6 uncertain outcomes, but
+  the dashboard reads "Retries 0" against 990 attempts and 13 rate-limited
+  responses, so I'm checking that against the database.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ The 55 failed-first-attempt rows were all due after the 11 s cancel, so
+  "Retries 0" holds. I'm checking that no request started after the cancel
+  committed.
+
+  Ran 2 shell commands (ctrl+o to expand)
+
+⏺ The 6 uncertain SMS rows account for the 6 extra messages in the ledger, since
+  those timeouts committed at the provider before stalling. Next I'll start
+  Scenario C, restarting the mock provider and worker mid-send.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ Scenario C passed: the ledger matched the database on both channels after the
+  restart and SIGKILL, with no duplicate keys and rate limits respected. I'm
+  moving on to Scenario D, covering stale and invalid operations, revoked
+  consent, missing contacts, and SSE reconnect.
+
+  Ran 3 shell commands (ctrl+o to expand)
+
+⏺ That run failed on a shell-quoting error in my helper, before any request
+  reached the API. I'll redo Scenario D as a single Python script.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ Every invalid-operation check behaves as specified (results above). The script
+  then broke on parsing psql's INSERT 0 1 status line. Fixing the parser and
+  rerunning on a fresh campaign.
+
+  Ran 2 shell commands (ctrl+o to expand)
+⏺ Scenario D is passing across the board, with stale and duplicate requests
+  returning the expected codes and the SSE stream closing cleanly. Next I'll
+  test approval expiry with a short TTL and dashboard reconnect during an API
+  restart.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ Dashboard shows Live. Now recreating the API container with a 5 s pending TTL
+  (which also drops the SSE connection).
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ The dashboard recovered after the API restart, with the stream reconnecting
+  and reaching Final (1,171 sent, 13 failed, 1,184 total). The two console
+  errors came from the deliberate restart, so I'm moving on to the 5 s TTL
+  expiry check.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ Expiry behaves as specified: confirming after the 5 s TTL returns 409
+  approval_expired, and the campaign is back in content_ready. Next I'll rebuild
+  the clean-room frontend with the two UI fixes and check it, including error
+  and empty states.
+
+  Ran 2 shell commands (ctrl+o to expand)
+
+⏺ The trap now holds both ways: focus went to <body> after Escape because the
+  dialog opened on page load with no opener to return to. I'm checking the
+  normal case, where the button opens it.
+
+⏺ Focus is back on Review & confirm after closing, and the not-found,
+  invalid-link and 404 states all render properly. Next I'll check the 375 px
+  overflow on the create page and on the composer with the dialog open.
+
+⏺ Browser acceptance is finished; the leftover console errors come from the
+  deliberate API restart and the 404 page I opened on purpose. Next I'm checking
+  the documentation against the code.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ One gap stands out: the roadmap's A tier lists a Day-2 model evaluation
+  recorded in docs/model-evaluation.md, and that file doesn't exist. Checking
+  what ADR-015 says about it.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ The 12-brief model evaluation was never run, since there's no harness and no
+  docs/model-evaluation.md. I'll log it as an incomplete A-tier item for you to
+  decide on rather than invent results, and I'm checking the remaining items
+  next.
+
+  Searched for 4 patterns, listed 1 directory, ran 1 shell command (ctrl+o to expand)
+
+⏺ I'm fixing the documentation drift: ARCHITECTURE §8 and ADR-013 still describe
+  GSM-7/UCS-2 warnings as built, though §8.1 says they weren't. Next I'll
+  spot-check campaign statuses against the migration, then restructure the
+  README.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ Bash(python3 - <<'EOF'
+      import re…)
+  ⎿   CLAUDE.md                                           |  2 +-
+      DECISIONS.md                                        |  2 ++
+      docs/ARCHITECTURE.md                                | 12 ++++++------
+     … +6 lines (ctrl+o to expand)
+  ⎿  Updated CLAUDE.md (+1 -1)
+       8  
+       9  ## Technology stack
+      10  
+      11 -- **Backend**: Go 1.25, `pgx/v5` + `pgxpool`, stdlib `net/http`
+         - ServeMux, `golang-migrate`, `log/slog`, `prometheus/client_gol
+         -ang`, `golang.org/x/text/unicode/norm`, Anthropic Go SDK `githu
+         -b.com/anthropics/anthropic-sdk-go/v2` (pinned v2.5.0).         
+      11 +- **Backend**: Go 1.25, `pgx/v5` + `pgxpool`, stdlib `net/http`
+         + ServeMux, `golang-migrate`, `log/slog`, Prometheus text exposi
+         +tion (planned `prometheus/client_golang`; replaced by a standar
+         +d-library implementation — ADR-026 amendment), `golang.org/x/te
+         +xt/unicode/norm`, Anthropic Go SDK `github.com/anthropics/anthr
+         +opic-sdk-go/v2` (pinned v2.5.0).                               
+      12  - **Database**: PostgreSQL 16 — the only infrastructure depende
+          ncy. Also the job queue.
+      13  - **Frontend**: Vue 3 + TypeScript (strict) + Vite + Vue Router
+           + Pinia; Vitest + Vue Test Utils; Playwright (B tier).
+      14  - **Tests**: `go test`, `testcontainers-go` (PostgreSQL) for in
+          tegration tests.
+  ⎿  Updated DECISIONS.md (+2 -0)
+      191  
+      192  **Trade-offs.** Conservative (rejects some messages that would
+            fit for real names); no Turkish national shift table.
+      193  
+      194 +**Status (CP18).** The hard rule is implemented as decided. Th
+          +e advisory GSM-7/UCS-2 and segment-count warnings were B-tier 
+          +and were **not** built; the only content warning is `first_nam
+          +e_not_used` (ARCHITECTURE §8.1).                              
+      195 +                                                              
+      196  ---
+      197  
+      198  ## ADR-014 — Official Anthropic Go SDK v2 with stable structur
+           ed outputs and one repair turn
+  ⎿  Updated docs/ARCHITECTURE.md (+3 -3)
+      559  3. **Declared maximum lengths** (variable registry): `first_na
+           me` 20, `last_name` 25, `city` = longest known city name (comp
+           uted at startup). The database CHECK constraints guarantee the
+            data never exceeds these.
+      560  4. **Worst-case length** = literal runes + Σ for each placehol
+           der `max(declared_max, rune_len(fallback))`.
+      561  5. **Hard limits (blocking errors)** on the worst-case rune co
+           unt: SMS ≤ 160, email subject ≤ 80, email body ≤ 5,000. Requir
+           ed fields for each selected channel must be present and non-em
+           pty.
+      562 -6. **Warnings (non-blocking)**: encoding — GSM-7 if every rune
+          - is in the GSM 03.38 basic set or extension table (extension c
+          -haracters count 2 septets), otherwise UCS-2; worst-case segmen
+          -t count (GSM-7: 1 if ≤160 septets else ⌈n/153⌉; UCS-2: 1 if ≤7
+          -0 UTF-16 units else ⌈n/67⌉); offer not mentioned; email body w
+          -ithout the first name.                                        
+      562 +6. **Warnings (non-blocking)** *(design; as implemented only `
+          +first_name_not_used` exists — encoding/segment warnings are B-
+          +tier and were not built, §8.1)*: encoding — GSM-7 if every run
+          +e is in the GSM 03.38 basic set or extension table (extension 
+          +characters count 2 septets), otherwise UCS-2; worst-case segme
+          +nt count (GSM-7: 1 if ≤160 septets else ⌈n/153⌉; UCS-2: 1 if ≤
+          +70 UTF-16 units else ⌈n/67⌉); offer not mentioned; email body 
+          +without the first name.                                       
+      563  7. **Render-time assertion**: the renderer checks the actual r
+           endered length; violation (impossible given 3 and 5) fails the
+            delivery permanently with `content_too_long` and increments a
+            metric. Never silently truncated.
+      564  8. The backend appends the fixed email footer (unsubscribe tex
+           t) outside the 5,000-rune body budget; it is shown in the prev
+           iew. No SMS opt-out suffix by default.
+      565  
+      566 -Result shape: `{errors[], warnings[], sms:{chars_worst_case, e
+          -ncoding, segments_worst_case}, subject:{chars_worst_case}, ren
+          -dered_example}`.                                              
+      566 +Result shape (design): `{errors[], warnings[], sms:{chars_wors
+          +t_case, encoding, segments_worst_case}, subject:{chars_worst_c
+          +ase}, rendered_example}`; as implemented `sms`/`subject`/`body
+          +` are `{chars_worst_case, limit}` (§8.1, §11.2).              
+      567  
+      568  ### 8.1 Content contract as implemented (CP11)
+      569  
+     ...
+      1126  - FIFO across campaigns: a large campaign delays a small one.
+      1127  - No quiet hours, frequency capping, localization beyond tr/e
+            n, A/B testing, scheduling, or real unsubscribe handling.
+      1128  - Segment rules can only be changed by re-interpreting the br
+            ief (no form editor in core).
+      1129 -- No GSM Turkish national shift table; encoding information i
+           -s advisory.                                                  
+      1129 +- No GSM-7/UCS-2 encoding or SMS segment-count warnings (B-ti
+           +er, not built); the hard rule is the worst-case character cou
+           +nt (ADR-013).                                                
+      1130  - The offer policy is a keyword check: it blocks model output
+             but is only advisory for marketer-written text, and it canno
+            t detect every unauthorized offer or claim; the marketer's re
+            view (and the Slice 3 approval re-check, §7.9) remains the co
+            ntrol.
+
+  Searched for 1 pattern (ctrl+o to expand)
+
+⏺ Config defaults, .env.example and the docs agree (15 min / 24 h TTLs,
+  retry/backoff caps, mock fault rates). Now adding status notes to ADR-015 and
+  the roadmap.
+
+⏺ Bash(python3 - <<'EOF'
+      def rep(path, old, new):…)
+  ⎿  ok
+  ⎿  Updated DECISIONS.md (+2 -0)
+      223  
+      224  **Trade-offs.** Opus 5.5 thinking cannot be disabled, adding l
+           atency before the first streamed token (mitigated by a "thinki
+           ng" status in the UI). The evaluation spends a small amount of
+            real API budget.
+      225  
+      226 +**Status (CP18).** The 12-brief evaluation (ROADMAP Day 2) was
+          + **not run**: there is no evaluation harness and no `docs/mode
+          +l-evaluation.md`. The recorded evidence is the single CP10 int
+          +erpretation call above and the CP12/CP13 live content checks; 
+          +both defaults are therefore informed choices, not measured win
+          +ners. Running the evaluation spends real API budget and needs 
+          +explicit approval.                                            
+      227 +                                                              
+      228  ---
+      229  
+      230  ## ADR-016 — LLM abstraction at the client level with scripted
+            and demo mocks
+  ⎿  Updated docs/ARCHITECTURE.md (+1 -1)
+      498  
+      499  - Only `ANTHROPIC_API_KEY` is consulted; the key is passed exp
+           licitly with `option.WithAPIKey`, so other SDK credential sour
+           ces are never picked up implicitly.
+      500  - **No fallback at runtime**: when the Anthropic provider is s
+           elected, every failure (transport, 4xx/5xx after SDK retries, 
+           refusal, truncation, invalid output after the repair turn, tim
+           eout) is returned to the caller as the mapped domain error and
+            surfaced as an actionable API error (§7.5). Demo output is ne
+           ver substituted.
+      501 -- **Unit tests** never read `LLM_PROVIDER`; they construct `ll
+          -m.Scripted` explicitly. `demo` is used only for running the ap
+          -p (Compose, Playwright) and in its own unit tests.            
+      501 +- **Unit tests** never read `LLM_PROVIDER`; they construct `ll
+          +m.Scripted` explicitly. `demo` is used only for running the ap
+          +p (Compose, smoke scripts; Playwright was planned as B-tier an
+          +d not built) and in its own unit tests.                       
+      502  
+      503  The model string flows config → service → `llm.Request.Model` 
+           and is persisted with every AI result. Interpretation defaults
+            to `claude-haiku-5-5` (ADR-015; verified live in CP10); conte
+           nt generation keeps `claude-opus-5-5` until it is evaluated. T
+           he 12-brief evaluation compares models per task; switching is 
+           an env change, never a runtime fallback.
+      504  
+  ⎿  Updated docs/ROADMAP.md (+11 -0)
+      187  - Slices 1–3 must be complete by end of Day 4; if not, B-tier 
+           is dropped entirely and Day 7 absorbs the overrun.
+      188  - If Slice 4 overruns, Slice 5 reduces to SSE snapshots render
+           ed as plain tiles (no failure table paging).
+      189  - The rate integration test and the crash/replay test are neve
+           r cut: they prove the core reliability claims.
+      190 +                                                              
+      191 +---                                                           
+      192 +                                                              
+      193 +## Status at submission (CP18)                                
+      194 +                                                              
+      195 +Delivered (A tier): Slices 1a–5 end to end — interpretation (d
+          +emo + Anthropic), DSL/validator/compiler, audience partition, 
+          +streamed content generation and editing, prepare/confirm/withd
+          +raw/expiry with frozen snapshots, send and cancel, the Postgre
+          +SQL worker (claim, lease, precheck, gated sender, per-channel 
+          +sliding-window limiter, 429 pauses, classified retries, reaper
+          +, sweeper), the durable mock provider, the live SSE dashboard,
+          + `/healthz`, `/readyz`, `/metrics` (six core metrics), Docker 
+          +Compose, README and ADRs. Verification evidence: `docs/FINAL_C
+          +HECKLIST.md`.                                                 
+      196 +                                                              
+      197 +Not delivered:                                                
+      198 +- **Day 2 model evaluation (A tier):** the 12-brief comparison
+          + and `docs/model-evaluation.md` do not exist; model defaults r
+          +est on one live interpretation call (CP10) and live content ch
+          +ecks (ADR-015 status). It needs paid API calls.               
+      199 +- **B tier:** GSM-7/UCS-2 and segment warnings (1), Playwright
+          + (2), `llm_calls` audit table (3), masked sample users (4) and
+          + the refusal fallback (5) were not built; the snapshot digest 
+          +in the approval dialog (6) was. Browser acceptance was perform
+          +ed manually against Compose (CP17B, CP18).                    
+      200 +- **C tier:** none.                                           
+
+⏺ Before relying on it, I'm checking a claim I just wrote into ADR-015 ("live
+  content checks" in CP12/CP13).
+
+  Searched for 3 patterns (ctrl+o to expand)
+⏺ There's no record of any live content-generation call; ADR-015 itself says
+  content generation was not evaluated. Correcting my wording so it doesn't
+  claim evidence that doesn't exist.
+
+⏺ Bash(python3 - <<'EOF'
+      p="DECISIONS.md"; s=open(p).read()…)
+  ⎿  ok
+  ⎿  Updated DECISIONS.md (+1 -1)
+      223  
+      224  **Trade-offs.** Opus 5.5 thinking cannot be disabled, adding l
+           atency before the first streamed token (mitigated by a "thinki
+           ng" status in the UI). The evaluation spends a small amount of
+            real API budget.
+      225  
+      226 -**Status (CP18).** The 12-brief evaluation (ROADMAP Day 2) was
+          - **not run**: there is no evaluation harness and no `docs/mode
+          -l-evaluation.md`. The recorded evidence is the single CP10 int
+          -erpretation call above and the CP12/CP13 live content checks; 
+          -both defaults are therefore informed choices, not measured win
+          -ners. Running the evaluation spends real API budget and needs 
+          -explicit approval.                                            
+      226 +**Status (CP18).** The 12-brief evaluation (ROADMAP Day 2) was
+          + **not run**: there is no evaluation harness and no `docs/mode
+          +l-evaluation.md`. The only recorded live evidence is the singl
+          +e CP10 interpretation call above; no live content-generation e
+          +valuation is recorded. Both defaults are therefore reasoned ch
+          +oices, not measured winners. Running the evaluation spends rea
+          +l API budget and needs explicit approval.                     
+      227  
+      228  ---
+      229  
+  ⎿  Updated docs/ROADMAP.md (+1 -1)
+      195  Delivered (A tier): Slices 1a–5 end to end — interpretation (d
+           emo + Anthropic), DSL/validator/compiler, audience partition, 
+           streamed content generation and editing, prepare/confirm/withd
+           raw/expiry with frozen snapshots, send and cancel, the Postgre
+           SQL worker (claim, lease, precheck, gated sender, per-channel 
+           sliding-window limiter, 429 pauses, classified retries, reaper
+           , sweeper), the durable mock provider, the live SSE dashboard,
+            `/healthz`, `/readyz`, `/metrics` (six core metrics), Docker 
+           Compose, README and ADRs. Verification evidence: `docs/FINAL_C
+           HECKLIST.md`.
+      196  
+      197  Not delivered:
+      198 -- **Day 2 model evaluation (A tier):** the 12-brief comparison
+          - and `docs/model-evaluation.md` do not exist; model defaults r
+          -est on one live interpretation call (CP10) and live content ch
+          -ecks (ADR-015 status). It needs paid API calls.               
+      198 +- **Day 2 model evaluation (A tier):** the 12-brief comparison
+          + and `docs/model-evaluation.md` do not exist; the interpretati
+          +on default rests on one live call (CP10) and the content defau
+          +lt on reasoning only (ADR-015 status). It needs paid API calls
+          +.                                                             
+      199  - **B tier:** GSM-7/UCS-2 and segment warnings (1), Playwright
+            (2), `llm_calls` audit table (3), masked sample users (4) and
+            the refusal fallback (5) were not built; the snapshot digest 
+           in the approval dialog (6) was. Browser acceptance was perform
+           ed manually against Compose (CP17B, CP18).
+      200  - **C tier:** none.
+
+⏺ The docs now state the missing evaluation plainly, and I'm restructuring the
+  README around your 16 points, keeping the honest guarantees and linking the
+  deep detail to ARCHITECTURE and DECISIONS.
+
+  Listed 1 directory, ran 1 shell command (ctrl+o to expand)
+
+⏺ All ten functional requirements from the assignment are covered; the missing
+  model evaluation was a self-set roadmap item rather than a submission
+  requirement, so I'm writing the new README next.
+
+⏺ Write(README.md)
+  ⎿  Added 309 lines, removed 356 lines
+        1  # Smart Campaign Composer
+        2  
+        3 -AI-assisted campaign composer: a marketer writes a brief, the 
+          -AI proposes a                                                 
+        4 -typed audience rule, the backend validates it and shows a live
+          -,                                                             
+        5 -database-backed audience preview; the AI then writes SMS/email
+          - content that                                                 
+        6 -the backend validates and stores as immutable versions the mar
+          -keter can edit;                                               
+        7 -the marketer then prepares an approval (a frozen recipient sna
+          -pshot), reviews                                               
+        8 -it and confirms or withdraws it, and explicitly starts sending
+          -; a                                                           
+        9 -PostgreSQL-backed worker delivers through a **mock** SMS/email
+          - provider. No                                                 
+       10 -real messages are sent.                                       
+        3 +An AI-assisted marketing campaign composer (seven-day take-hom
+          +e). A marketer                                                
+        4 +describes a campaign in plain language; Claude proposes a **ty
+          +ped audience                                                  
+        5 +rule** and **SMS/email content**; the Go backend validates eve
+          +rything; the                                                  
+        6 +marketer edits, reviews a **frozen audience snapshot** and app
+          +roves; a worker                                               
+        7 +then sends through a **mock** SMS/email provider at ≤ 100 requ
+          +ests per second                                               
+        8 +per channel, with retries, 429 handling and idempotency, while
+          + a live                                                       
+        9 +dashboard shows progress. **No real messages are ever sent.** 
+       10  
+       12 -Design and rationale: `docs/ARCHITECTURE.md`, `DECISIONS.md`, 
+          -`docs/ROADMAP.md`,                                            
+       13 -`CLAUDE.md`. Current scope: **Slices 1a, 1b and 2** — brief → 
+       14 -interpretation (demo, or real Claude when a key is configured)
+          - → validated                                                  
+       15 -segment → audience preview → streamed content generation, edit
+          -ing,                                                          
+       16 -validation and immutable content versions, plus Slice 3's appr
+          -oval                                                          
+       17 -preparation, review, confirmation, withdrawal and expiry (CP14
+          -–CP15), and                                                   
+       18 -Slice 4's backend (CP16–CP17A): the send API, the delivery wor
+          -ker and the                                                   
+       19 -mock provider, the per-channel rate limiter (≤ 100 requests pe
+          -r channel in                                                  
+       20 -any rolling second, retries included), exponential backoff wit
+          -h jitter, 429                                                 
+       21 -channel pauses, the cancel endpoint and the background approva
+          -l-expiry                                                      
+       22 -sweeper, and (CP17B) delivery statistics, the delivery list, t
+          -he live                                                       
+       23 -progress stream (SSE), worker-heartbeat readiness and the brow
+          -ser delivery                                                  
+       24 -dashboard with explicit Start sending / Cancel sending, and th
+          -e six core                                                    
+       25 -Prometheus metrics on `/metrics` of the API and the worker.   
+       11 +Design documents: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.m
+          +d) (design and                                                
+       12 +contracts), [`DECISIONS.md`](DECISIONS.md) (ADR-001…026),     
+       13 +[`docs/ROADMAP.md`](docs/ROADMAP.md) (slices and submission st
+          +atus),                                                        
+       14 +[`docs/FINAL_CHECKLIST.md`](docs/FINAL_CHECKLIST.md) (acceptan
+          +ce evidence),                                                 
+       15 +[`CLAUDE.md`](CLAUDE.md) (implementation rules and invariants)
+          +.                                                             
+       16  
+       27 -## Quick start (Docker only)                                  
+       17 +## Contents                                                   
+       18  
+       29 -Prerequisites: Docker Desktop (or Docker Engine) with Docker C
+          -ompose v2.20+.                                                
+       30 -No Go, Node or Anthropic API key is needed.                   
+       19 +1. [Workflow](#workflow) · 2. [Stack and services](#stack-and-
+          +services) ·                                                   
+       20 +3. [Quick start (demo mode, no API key)](#quick-start-demo-mod
+          +e-no-api-key) ·                                               
+       21 +4. [Demo walkthrough](#demo-walkthrough-35-minutes) ·         
+       22 +5. [Tests](#tests) · 6. [Smoke tests](#smoke-tests) ·         
+       23 +7. [Real Claude (optional, billable)](#real-claude-optional-bi
+          +llable) ·                                                     
+       24 +8. [How approval, consent and sending work](#how-approval-cons
+          +ent-and-sending-work) ·                                       
+       25 +9. [Operations: restart, isolate, reset](#operations-restart-i
+          +solate-reset) ·                                               
+       26 +10. [API and metrics](#api-and-metrics) · 11. [Decisions and t
+          +rade-offs](#decisions-and-trade-offs) ·                       
+       27 +12. [Known limitations](#known-limitations) · 13. [Where the c
+          +ode lives](#where-the-code-lives) ·                           
+       28 +14. [AI-assisted development](#ai-assisted-development)       
+       29  
+       32 -```bash                                                       
+       33 -docker compose up --build                                     
+       34 -```                                                           
+       30 +## Workflow                                                   
+       31  
+       36 -Open **http://localhost:8000** (change the host port with `COM
+          -POSER_HTTP_PORT=…`).                                          
+       32 +Create campaign → **Interpret** the brief (Claude or the deter
+          +ministic demo                                                 
+       33 +interpreter) → review the validated rule and the live audience
+          + preview                                                      
+       34 +(`eligible / no_consent / no_contact` per channel) → choose SM
+          +S and/or email →                                              
+       35 +**Generate** content (streamed) and edit it → **Prepare approv
+          +al** (freezes                                                 
+       36 +recipients + content version) → **Confirm** → **Start sending*
+          +* (explicit) →                                                
+       37 +watch the live dashboard → *Completed*, *Completed with failur
+          +es* or                                                        
+       38 +*Cancelled* (cancel is possible at any non-final step).       
+       39  
+       38 -The web UI is published on the loopback interface only (`127.0
+          -.0.1`), so it is                                              
+       39 -not reachable from other machines; PostgreSQL and the Go API a
+          -re not published                                              
+       40 -at all. The `api`, `migrate`, `seed` and `frontend` containers
+          - run as non-root                                              
+       41 -with a read-only root filesystem, all Linux capabilities dropp
+          -ed and                                                        
+       42 -`no-new-privileges`; `postgres` uses the stock `postgres:16-al
+          -pine` settings.                                               
+       40 +## Stack and services                                         
+       41  
+       44 -On a fresh volume the stack starts in this order; each step mu
+          -st succeed before                                             
+       45 -the next one starts:                                          
+       42 +| Layer | Technology |                                        
+       43 +|---|---|                                                     
+       44 +| Backend | Go 1.25, stdlib `net/http`, `pgx/v5`, `golang-migr
+          +ate`, `log/slog`, Anthropic Go SDK v2.5.0 |                   
+       45 +| Database / queue | PostgreSQL 16 (the only infrastructure; a
+          +lso the job queue — ADR-002) |                                
+       46 +| Frontend | Vue 3 + TypeScript (strict), Vite, Vue Router, Pi
+          +nia; Vitest + Vue Test Utils |                                
+       47 +| Runtime | Docker Compose, nginx (serves the SPA, proxies `/a
+          +pi/` and `/readyz`, SSE-safe) |                               
+       48  
+       47 -| Service    | Role |                                         
+       48 -|------------|------|                                         
+       49 -| `postgres` | PostgreSQL 16, data in the named volume `pgdata
+          -` |                                                           
+       50 -| `migrate`  | one-shot: applies the embedded migrations (no-o
+          -p when up to date) |                                          
+       51 -| `seed`     | one-shot: loads the deterministic 5,000-user da
+          -taset only if the `users` table is empty |                    
+       52 -| `api`      | Go API; healthy once `/readyz` reports the data
+          -base and a clean schema |                                     
+       53 -| `frontend` | nginx: the built Vue app, proxies `/api/` and `
+          -/readyz` to `api` (same origin) |                             
+       49 +Compose services (one backend image with five entrypoints — AD
+          +R-001):                                                       
+       50  
+       55 -If `migrate` or `seed` fails, Compose prints `service "…" didn
+          -'t complete                                                   
+       56 -successfully` and the API is not started. Inspect with `docker
+          - compose logs migrate seed`.                                  
+       51 +| Service | Role | Published |                                
+       52 +|---|---|---|                                                 
+       53 +| `postgres` | data + queue (volume `pgdata`) | no |          
+       54 +| `migrate` | one-shot, applies embedded migrations | — |     
+       55 +| `seed` | one-shot, loads 5,000 deterministic users only if `
+          +users` is empty | — |                                         
+       56 +| `api` | REST + SSE API; healthy once `/readyz` sees a migrat
+          +ed DB | no |                                                  
+       57 +| `mockprovider` | fake SMS/email provider with a durable idem
+          +potency ledger (volume `mockledger`) and fault injection | no 
+          +|                                                             
+       58 +| `worker` | the **single** delivery worker (also expiry sweep
+          +er, reaper, heartbeat) | no |                                 
+       59 +| `frontend` | nginx + built Vue app | `127.0.0.1:8000` only |
+       60  
+       58 -### Health checks                                             
+       61 +Start order: `postgres` (healthy) → `migrate` → `seed` → `api`
+          + (healthy) →                                                  
+       62 +`mockprovider` (healthy) → `worker`; `frontend` after `api`. A
+          + failed                                                       
+       63 +migration or seed stops the chain (`docker compose logs migrat
+          +e seed`).                                                     
+       64 +Backend containers run as uid 10001 with a read-only root file
+          +system, all                                                   
+       65 +capabilities dropped and `no-new-privileges`; nginx runs unpri
+          +vileged and                                                   
+       66 +read-only; `postgres` uses stock image settings.              
+       67  
+       68 +## Quick start (demo mode, no API key)                        
+       69 +                                                              
+       70 +**Prerequisites:** Docker Desktop or Docker Engine with Compos
+          +e v2.20+.                                                     
+       71 +Nothing else — no Go, Node, Anthropic account or API key. Veri
+          +fied on macOS                                                 
+       72 +(Apple Silicon, Docker Desktop, Compose v5.1); Linux hosts are
+          + expected to work                                             
+       73 +but were not separately verified.                             
+       74 +                                                              
+       75  ```bash
+       61 -docker compose ps                                             
+       76 +git clone <repository-url> && cd insider-campaign-composer-cas
+          +e                                                             
+       77  ```
+       78  
+       79  ```bash
+       65 -curl -s http://localhost:8000/readyz                          
+       80 +LLM_PROVIDER=demo ANTHROPIC_API_KEY= docker compose up --build
+          + -d --wait                                                    
+       81  ```
+       82  
+       68 -Expected (abridged): `{"status":"ready","database":"ok","migra
+          -tion_version":2,"migration_dirty":false,"llm_provider":"demo",
+          -"worker":{"status":"fresh","last_seen_at":"…","heartbeat_age_s
+          -econds":1.2,"stale_after_seconds":15,"fresh_processes":1},"sen
+          -ding_campaigns":0}`.                                          
+       69 -`worker` is the freshest delivery-worker heartbeat (written ev
+          -ery 5 s):                                                     
+       70 -`fresh` within 15 s, else `stale`; `absent` if no worker ever 
+          -reported;                                                     
+       71 -`unknown` if the database is down. It is reported only — the A
+          -PI's readiness                                                
+       72 -never fails on it, so it does not flap when no campaign is sen
+          -ding.                                                         
+       83 +Open **http://localhost:8000** (another port: `COMPOSER_HTTP_P
+          +ORT=18000`). The                                              
+       84 +first build takes a few minutes. The UI shows a **Demo AI** ba
+          +dge; nothing is                                               
+       85 +sent to Claude. `LLM_PROVIDER=demo ANTHROPIC_API_KEY=` forces 
+          +demo mode even if                                             
+       86 +your shell or a local `.env` holds a key (`docker compose up -
+          +-build` without                                               
+       87 +them also selects demo when no key is configured).            
+       88  
+       74 -An automated HTTP check of the whole Slice 1a flow against the
+          - running stack                                                
+       75 -(needs `curl` and `python3`; creates one campaign named `smoke
+          - …`):                                                         
+       76 -                                                              
+       89  ```bash
+       78 -make smoke                                                    
+       90 +curl -s http://localhost:8000/readyz                          
+       91  ```
+       92  
+       81 -### Try it                                                    
+       93 +→ `{"status":"ready","database":"ok","migration_version":2,"mi
+          +gration_dirty":false,"llm_provider":"demo","worker":{"status":
+          +"fresh",…},"sending_campaigns":0}`                            
+       94  
+       83 -1. Click **Use example brief** (or paste it), then **Create ca
+          -mpaign**:                                                     
+       95 +Stop with `docker compose down` (keeps all data; see          
+       96 +[Operations](#operations-restart-isolate-reset)).             
+       97  
+       85 -   > Send a short and friendly 30% discount reminder to users 
+          -in Istanbul who                                               
+       86 -   > added products to their cart in the last 30 days but did 
+          -not complete a purchase.                                      
+       98 +**Seed and dates.** `SEED_USERS=5000`, `SEED_RANDOM_SEED=42`, 
+       99 +`SEED_REFERENCE_TIME=2026-11-01T00:00:00Z` always produce the 
+          +same dataset                                                  
+      100 +(`dataset_hash c553fe36…` in the `seed` log). "Last N days" ru
+          +les are evaluated                                             
+      101 +against the database's `now()`, so counts shrink as real time 
+          +moves past the                                                
+      102 +reference date (the example brief matches 184 users on 2026-11
+          +-01 and 178 on                                                
+      103 +2026-11-06). For a demo much later, start a **fresh** volume w
+          +ith                                                           
+      104 +`SEED_REFERENCE_TIME="$(date -u +%Y-%m-%dT00:00:00Z)"` (not re
+          +producible across days).                                      
+      105  
+       88 -2. Click **Interpret brief**. The demo interpreter proposes *C
+          -ity is İstanbul ·                                             
+       89 -   Abandoned cart in the last 30 days*; the backend validates 
+          -it and the                                                    
+       90 -   audience card shows matched users with the per-channel     
+       91 -   `eligible / no_consent / no_contact` split (184 matched use
+          -rs with the                                                   
+       92 -   default seed while "now" is within 30 days of 2026-11-01; s
+          -ee below).                                                    
+       93 -3. Untick SMS and email: zero messages, matched users unchange
+          -d. Tick them again.                                           
+       94 -4. In **Message content**, click **Generate content**. The pro
+          -gress panel shows                                             
+       95 -   the phases (writing → validating → saving) and a live draft
+          - labelled *not                                                
+       96 -   validated, not saved*; when the backend has validated and c
+          -ommitted the                                                  
+       97 -   content, version 1 replaces it in the editors (badge *Demo 
+          -generator · not a                                             
+       98 -   live model* in demo mode), with worst-case character counte
+          -rs and SMS/email                                              
+       99 -   previews rendered with fictional example values.           
+      100 -5. Edit the SMS: the counter and preview update after the serv
+          -er validates the                                              
+      101 -   draft (e.g. type `{{email}}` to see an `unknown_variable` e
+          -rror, or make it                                              
+      102 -   longer than 160 worst-case characters). **Save changes** cr
+          -eates version 2                                               
+      103 -   (*Edited manually*); saving unchanged text reports *No chan
+          -ges* and creates                                              
+      104 -   no version.                                                
+      105 -6. Reload or share `/campaigns/{id}` — campaign and content ar
+          -e stored in PostgreSQL.                                       
+      106 -7. In **Review & approval**, click **Prepare approval**. The b
+          -ackend freezes                                                
+      107 -   the eligible recipients (rule match + contact + consent, pe
+          -r selected                                                    
+      108 -   channel) and the content version into a pending approval; t
+          -he review dialog                                              
+      109 -   shows the frozen per-channel counts, the excluded `no_conse
+          -nt / no_contact`                                              
+      110 -   counts, reach, the content version and origin, the snapshot
+          - digest, a                                                    
+      111 -   countdown to the 15-minute confirmation deadline, the rende
+          -red content and                                               
+      112 -   every advisory offer/price finding. Tick the acknowledgemen
+          -t (a browser-side                                             
+      113 -   confirmation step; the server does not record or enforce it
+          - — it enforces                                                
+      114 -   the version and the reviewed binding) and click            
+      115 -   **Confirm approval**: the campaign becomes *Approved* (vali
+          -d 24 h) and the                                               
+      116 -   read-only summary is shown after a reload too. Confirming s
+          -ends nothing;                                                 
+      117 -   sending is a separate, explicit step (9).                  
+      118 -8. **Withdraw approval** (pending: one click in the dialog or 
+          -panel; approved:                                              
+      119 -   a second confirmation step) releases the snapshot and retur
+          -ns the campaign to                                            
+      120 -   *Content ready*. To see expiry, start the stack with short 
+          -TTLs, e.g.                                                    
+      121 -   `APPROVAL_PENDING_TTL=30s APPROVAL_APPROVED_TTL=1m docker c
+          -ompose up -d`;                                                
+      122 -   an expired approval cannot be confirmed (`409 approval_expi
+          -red`) and the UI                                              
+      123 -   shows *Approval expired — review again*.                   
+      124 -9. In **Send & delivery** (step 6 of the page), click **Start 
+          -sending…**. A                                                 
+      125 -   confirmation dialog shows exactly what is released (the fro
+          -zen per-channel                                               
+      126 -   counts and the content version), that it cannot be undone, 
+          -that the worker                                               
+      127 -   may begin before the dialog closes and what cancelling can 
+          -and cannot do.                                                
+      128 -   After **Start sending** the page switches to the live dashb
+          -oard: overall                                                 
+      129 -   and per-channel progress, sent / failed / skipped / cancell
+          -ed / pending,                                                 
+      130 -   provider attempts, retries and attempts per second, uncerta
+          -in outcomes,                                                  
+      131 -   reason summaries, the approval/content/segment versions, wo
+          -rker health                                                   
+      132 -   and a connection badge (*Live*, *Reconnecting…*, *Final*) w
+          -ith **Refresh**.                                              
+      133 -   Every number comes from committed database rows (a delivery
+          - appears as                                                   
+      134 -   sent only after the worker recorded the provider's acceptan
+          -ce). It ends                                                  
+      135 -   with *Completed*, *Completed with failures* (failed rows ar
+          -e listed, without                                             
+      136 -   recipient data) or *Cancelled*; reloading shows the same fi
+          -nal numbers.                                                  
+      137 -   **Cancel sending…** (while sending) asks for confirmation, 
+          -then reports how                                              
+      138 -   many queued deliveries were cancelled and how many requests
+          - were already in                                              
+      139 -   flight (those may still reach the provider once and are rec
+          -orded                                                         
+      140 -   truthfully). Nothing is ever sent by opening, refreshing or
+          - approving.                                                   
+      106 +## Demo walkthrough (3–5 minutes)                             
+      107  
+      142 -### Send, live progress and cancel over the API               
+      108 +1. **New campaign** → **Use example brief** (or paste a Turkis
+          +h one, e.g.                                                   
+      109 +   *Son 30 gün içinde sepetine ürün ekleyip satın almayan İsta
+          +nbul'daki                                                     
+      110 +   kullanıcılara %30 indirim hatırlatması gönder.*) → **Create
+          + campaign**.                                                  
+      111 +2. **Interpret brief.** The demo interpreter (a deterministic 
+          +keyword matcher,                                              
+      112 +   clearly labelled) proposes *City is İstanbul · Abandoned ca
+          +rt in the last 30                                             
+      113 +   days*; the backend validates it. Show the rule chips, assum
+          +ptions, and the                                               
+      114 +   audience card: per channel `eligible + no_consent + no_cont
+          +act = matched`.                                               
+      115 +   Untick a channel to show that messages change and matched u
+          +sers do not.                                                  
+      116 +3. **Generate content.** Phases stream (writing → validating →
+          + saving); the                                                 
+      117 +   validated version replaces the unvalidated live draft. Edit
+          + the SMS: type                                                
+      118 +   `{{email}}` (→ `unknown_variable`) or exceed 160 worst-case
+          + characters                                                   
+      119 +   (→ blocking error). **Save changes** creates version 2.    
+      120 +4. **Prepare approval.** The dialog shows the frozen per-chann
+          +el counts, the                                                
+      121 +   exclusions, the content version, the snapshot digest, a 15-
+          +minute                                                        
+      122 +   countdown and the rendered content. Tick the acknowledgemen
+          +t →                                                           
+      123 +   **Confirm approval** (valid 24 h). Nothing is sent yet.    
+      124 +5. **Start sending…** → confirm. The dashboard goes *Live*: pe
+          +r-channel                                                     
+      125 +   progress, sent/failed/skipped/cancelled, provider attempts,
+          + retries, 429s,                                               
+      126 +   uncertain outcomes. A few SMS fail on purpose (mock destina
+          +tions ending                                                  
+      127 +   `0000`), so the expected end state is **Completed with fail
+          +ures**. Reload:                                               
+      128 +   the same final numbers come from PostgreSQL.               
+      129 +6. *(Optional)* Prepare another campaign with a larger audienc
+          +e (*"…added                                                   
+      130 +   products to their cart in the last 90 days but did not comp
+          +lete a purchase"*,                                            
+      131 +   ≈ 1,200 deliveries) and **Cancel sending…** mid-flight: que
+          +ued rows are                                                  
+      132 +   cancelled at once and the in-flight count is reported hones
+          +tly.                                                          
+      133  
+      144 -The browser flow above uses these routes; a confirmed campaign
+          - can also be                                                  
+      145 -sent with one explicit API call (through the frontend proxy): 
+      134 +## Tests                                                      
+      135  
+      136 +Unit tests need no Docker, no API key and no network (the Anth
+          +ropic adapter is                                              
+      137 +tested against an offline recording transport):               
+      138 +                                                              
+      139  ```bash
+      148 -curl -sS -X POST -H 'Content-Type: application/json' \        
+      149 -  -d '{"approval_id":"<approval id>","expected_version":<campa
+          -ign version>}' \                                              
+      150 -  http://localhost:8000/api/v1/campaigns/<campaign id>/send   
+      140 +make test                                                     
+      141  ```
+      142  
+      153 -`202 {status: "sending", released: {sms, email}, …}` consumes 
+          -the approval and                                              
+      154 -releases its frozen rows to the worker; repeating the call ret
+          -urns `200` with                                               
+      155 -`already_started: true` and writes nothing. The worker then, p
+          -er row: renders                                               
+      156 -the approved content version with the **frozen** personalizati
+          -on values,                                                    
+      157 -re-checks the **current** consent and contact (missing consent
+          - or contact →                                                 
+      158 -skipped, never sent), persists the destination, and sends to t
+          -he mock                                                       
+      159 -provider, recording every attempt. The campaign becomes `compl
+          -eted` (or                                                     
+      160 -`completed_with_failures` if any row failed) once every row is
+          - terminal. `scripts/smoke-send.sh`                            
+      161 -(`make smoke-send`) runs this whole flow against the stack and
+          - checks the                                                   
+      162 -database and the mock provider's counters:                    
+      143 +That runs `go vet` and `go test ./...` (backend) and `npm test
+          +` +                                                           
+      144 +`npm run typecheck` (frontend; requires `cd frontend && npm ci
+          +` once). Separately:                                          
+      145  
+      146  ```bash
+      165 -LLM_PROVIDER=demo ANTHROPIC_API_KEY= docker compose up --build
+          - -d --wait && make smoke-send                                 
+      147 +cd backend && go test -race ./...                             
+      148  ```
+      149  
+      168 -The mock provider (internal only, never published) injects fau
+          -lts by default                                                
+      169 -(3 % 5xx, 1 % 429, 0.5 % timeouts that commit before stalling,
+          - destinations                                                 
+      170 -ending `0000` rejected) to exercise retries and idempotency; s
+          -et                                                            
+      171 -`MOCK_FAULT_5XX_RATE=0 MOCK_FAULT_429_RATE=0 MOCK_FAULT_TIMEOU
+          -T_RATE=0                                                      
+      172 -MOCK_PERMANENT_FAIL_PATTERN=-` for a clean run. Its counters (
+          -per-process                                                   
+      173 -counters restart at 0; `messages` counts the durable ledger, a
+          -nd                                                            
+      174 -`?key_prefix=<campaign id>:` counts one campaign):            
+      175 -`docker compose exec mockprovider wget -qO- http://127.0.0.1:8
+          -090/admin/stats`.                                             
+      150 +```bash                                                       
+      151 +cd frontend && npm ci && npm test && npm run typecheck && npm 
+          +run build                                                     
+      152 +```                                                           
+      153  
+      177 -**Rate limit and retries (CP17A).** Per channel, at most      
+      178 -`RATE_LIMIT_PER_SECOND` (100) provider requests in any `1 s + 
+      179 -RATE_SAFETY_MARGIN` window — a sliding-window log in the worke
+          -r, counting                                                   
+      180 -first attempts and retries; SMS and email are independent. Eve
+          -ry request is                                                 
+      181 -issued within `DISPATCH_MAX_SLOT_TO_REQUEST` (20 ms) of its sl
+          -ot or not at                                                  
+      182 -all. Only one worker process dispatches (it holds a PostgreSQL
+          - advisory                                                     
+      183 -lock); a second one stands by, so the limit holds for the depl
+          -oyment. A 429                                                 
+      184 -pauses only its channel for `Retry-After` (1 s – 30 s), durabl
+          -y across                                                      
+      185 -worker restarts; transient failures and timeouts retry after a
+          - full-jitter                                                  
+      186 -exponential backoff (≤ 60 s, 5 attempts); permanent 4xx are ne
+          -ver retried.                                                  
+      187 -The mock provider measures the result: `max_in_any_rolling_1s`
+          - and                                                          
+      188 -`limit_exceeded` (its own strict limiter) per channel in `/adm
+          -in/stats`.                                                    
+      154 +**PostgreSQL integration tests** (testcontainers; needs Docker
+          +; offline, no key;                                            
+      155 +≈ 3 min). They run the real worker against the mock provider o
+          +ver TCP: crash                                                
+      156 +and replay, lease reaping, two concurrent workers, the provide
+          +r-observed rate                                               
+      157 +limit (`max_in_any_rolling_1s ≤ 100`), 429 isolation, cancella
+          +tion races, the                                               
+      158 +lock-wait expiry test, statistics reconciliation and a privacy
+          + scan:                                                        
+      159  
+      190 -**Statistics and progress (CP17B).** `GET /api/v1/campaigns/<i
+          -d>/stats` is                                                  
+      191 -one consistent snapshot of the consumed approval's rows: per c
+          -hannel the                                                    
+      192 -exclusive partition `approved_total = pending + in_flight + re
+          -try_scheduled +                                               
+      193 -sent + failed + skipped_consent_revoked + skipped_no_contact +
+          - cancelled`                                                   
+      194 -(each row counted once, however many attempts it took), `uncer
+          -tain` as an                                                   
+      195 -overlay, provider `attempts` (rows of `delivery_attempts`, by 
+          -outcome, with                                                 
+      196 -`retries` and `per_second` over the last 10 s), sanitized `rea
+          -sons`, totals,                                                
+      197 -`progress`, `terminal` and worker health. "Sent" means **accep
+          -ted by the                                                    
+      198 -(mock) provider**, not delivered to a handset or inbox; provid
+          -er attempts                                                   
+      199 -(retries, 429s, replays) and the mock's ledger `messages` are 
+          -different                                                     
+      200 -numbers again. `GET …/deliveries?status=&channel=&uncertain=&c
+          -ursor=&limit=`                                                
+      201 -pages the rows (id order, ≤ 100 per page) with masked destinat
+          -ions only.                                                    
+      202 -`GET …/events` is the SSE stream the dashboard uses: `stats` s
+          -napshots as they                                              
+      203 -change (polled once per second), a keep-alive comment every 15
+          - s, and one                                                   
+      204 -`end` event once the campaign is finished and no row is in fli
+          -ght:                                                          
+      160 +```bash                                                       
+      161 +make test-integration                                         
+      162 +```                                                           
+      163  
+      164 +**Lint** (gofmt, `go vet` for all build tags, staticcheck v0.8
+          +.2):                                                          
+      165 +                                                              
+      166  ```bash
+      207 -curl -sN http://localhost:8000/api/v1/campaigns/<campaign id>/
+          -events                                                        
+      167 +make lint                                                     
+      168  ```
+      169  
+      210 -**Cancel** (also the dashboard's *Cancel sending…*):          
+      170 +`make lint` downloads staticcheck through the Go module proxy.
+          + Behind a                                                     
+      171 +TLS-intercepting proxy that download fails; do not disable TLS
+          + or checksum                                                  
+      172 +verification. If staticcheck v0.8.2 is already in your module 
+          +cache, run it                                                 
+      173 +offline instead:                                              
+      174  
+      175  ```bash
+      213 -curl -sS -X POST -H 'Content-Type: application/json' -d '{"exp
+          -ected_version":<campaign version>}' \                         
+      214 -  http://localhost:8000/api/v1/campaigns/<campaign id>/cancel 
+      176 +cd backend && GOPROXY="file://$(go env GOMODCACHE)/cache/downl
+          +oad" go run honnef.co/go/tools/cmd/staticcheck@v0.8.2 ./...   
+      177  ```
+      178  
+      217 -Before sending it revokes the approval and deletes the frozen 
+          -rows. While                                                   
+      218 -sending, queued rows are cancelled at once; rows already in fl
+          -ight finish                                                   
+      219 -truthfully — the response's `in_flight` is the number of reque
+          -sts that may                                                  
+      220 -still reach the provider (at most one per row; a request on th
+          -e wire cannot                                                 
+      221 -be recalled). A repeat is `409 invalid_state`. `make smoke-can
+          -cel` exercises                                                
+      222 -both cases against the stack. Due approvals are also expired i
+          -n the                                                         
+      223 -background every `APPROVAL_SWEEP_INTERVAL` (30 s); correctness
+          - never depends                                                
+      224 -on it (confirm and send re-check expiry under the campaign loc
+          -k).                                                           
+      179 +## Smoke tests                                                
+      180  
+      226 -**Guarantees, honestly:** provider requests are at-least-once;
+          - every retry of a                                             
+      227 -delivery sends the same idempotency key (`campaign:user:channe
+          -l`), destination                                              
+      228 -and body, and the mock provider replays instead of sending aga
+          -in, so with the                                               
+      229 -mock there is at most one delivered message per recipient and 
+          -channel **while                                               
+      230 -its durable idempotency ledger is retained and intact**. The l
+          -edger is an                                                   
+      231 -fsynced journal on the `mockledger` volume: it survives provid
+          -er crashes,                                                   
+      232 -`docker compose restart`, `down`/`up` and container recreation
+          -; only                                                        
+      233 -`docker compose down -v` (which also deletes the database) or 
+          -the opt-in                                                    
+      234 -admin reset forget earlier keys. A corrupt ledger stops the mo
+          -ck provider                                                   
+      235 -(and therefore the worker) instead of starting empty. This is 
+      236 -a property of the provider's idempotency, not of our database 
+          -locks; we never                                               
+      237 -claim exactly-once. Rows whose last attempt was ambiguous and 
+          -that end unsent                                               
+      238 -are flagged `outcome_uncertain`. Consent is re-checked immedia
+          -tely before each                                              
+      239 -request, so a revocation committed before that check is always
+          - honoured; one                                                
+      240 -committed during the few milliseconds between the check and th
+          -e request is                                                  
+      241 -not (§10.10).                                                 
+      181 +Against a running stack (need `curl` and `python3`; each creat
+          +es its own                                                    
+      182 +campaigns). `smoke-send` and `smoke-cancel` require demo mode:
+      183  
+      243 -### Restart, keep data                                        
+      184 +```bash                                                       
+      185 +make smoke         # create → interpret → audience partition →
+          + persistence                                                  
+      186 +```                                                           
+      187  
+      188  ```bash
+      246 -docker compose down                                           
+      189 +make smoke-send    # full send; checks DB rows, ledger, ≤100/s
+          +, no duplicates, no PII in logs                               
+      190  ```
+      191  
+      192  ```bash
+      250 -docker compose up                                             
+      193 +make smoke-cancel  # cancel before and during sending         
+      194  ```
+      195  
+      253 -`down` (without `-v`) keeps the `pgdata` volume and the mock p
+          -rovider's                                                     
+      254 -idempotency ledger (`mockledger`), so a retry after a restart 
+          -is still                                                      
+      255 -recognised as a replay. On the next start `migrate`           
+      256 -finds the schema current and `seed` finds users present; both 
+          -exit without                                                  
+      257 -changes, so campaigns and customer data are preserved. `docker
+          - compose restart`                                             
+      258 -or Ctrl+C followed by `docker compose up` behave the same.    
+      196 +For an isolated stack set the same variables you started it wi
+          +th, e.g.                                                      
+      197 +`COMPOSE_PROJECT_NAME=composer-review COMPOSER_HTTP_PORT=18000
+          + make smoke-send`.                                            
+      198  
+      260 -### Start over (destroys all local data)                      
+      199 +## Real Claude (optional, billable)                           
+      200  
+      201 +⚠️ Every interpretation and every content generation is a **bi
+          +llable**                                                      
+      202 +Anthropic API request (up to three requests per action: the an
+          +swer, at most one                                             
+      203 +repair turn, at most one retry after truncation, each with up 
+          +to                                                            
+      204 +`CLAUDE_MAX_RETRIES` SDK retries). Keep the key out of tracked
+          + files:                                                       
+      205 +                                                              
+      206  ```bash
+      263 -make reset-volumes CONFIRM=yes                                
+      207 +cp .env.example .env   # then set ANTHROPIC_API_KEY=… in .env 
+          +(git-ignored)                                                 
+      208  ```
+      209  
+      266 -This runs `docker compose down -v`, removing the database volu
+          -me with every                                                 
+      267 -campaign and the mock provider's idempotency ledger (`mockledg
+          -er`). The next `docker compose up --build` migrates and seeds 
+          -from scratch.                                                 
+      268 -The stack never resets an existing database on its own.       
+      210 +```bash                                                       
+      211 +LLM_PROVIDER=anthropic docker compose up --build -d --wait    
+      212 +```                                                           
+      213  
+      270 -## AI provider and demo mode                                  
+      271 -                                                              
+      272 -The provider is chosen once at API startup from `LLM_PROVIDER`
+          -:                                                             
+      273 -                                                              
+      214  | `LLM_PROVIDER` | `ANTHROPIC_API_KEY` | Result |
+      215  |---|---|---|
+      276 -| `auto` (default) | empty | `demo` (warning logged; the UI sh
+          -ows a "Demo AI" badge) |                                      
+      216 +| `auto` (default) | empty | `demo` |                         
+      217  | `auto` | set | `anthropic` |
+      278 -| `anthropic` | empty | startup fails with a configuration err
+          -or |                                                          
+      218 +| `anthropic` | empty | API refuses to start |                
+      219  | `demo` | any | `demo` |
+      220  
+      281 -There is never a runtime fallback from Anthropic to demo: once
+          - `anthropic` is                                               
+      282 -selected, every provider failure (authentication, rate limit, 
+          -outage, timeout,                                              
+      283 -refusal, invalid output) is returned as an API error. Startup 
+          -makes no model                                                
+      284 -call, so an invalid key only shows up on the first interpretat
+          -ion (as                                                       
+      285 -`llm_rejected`). `/readyz` reports the selected `llm_provider`
+          -.                                                             
+      221 +The provider is chosen once at startup. An Anthropic failure (
+          +auth, rate                                                    
+      222 +limit, outage, timeout, refusal, invalid output) is returned a
+          +s an API error —                                              
+      223 +**never** replaced by demo output. Models come only from confi
+          +guration:                                                     
+      224 +`CLAUDE_SEGMENT_MODEL` (default `claude-haiku-5-5`) and `CLAUD
+          +E_CONTENT_MODEL`                                              
+      225 +(default `claude-opus-5-5`), plus `_EFFORT`, `_TIMEOUT`, `_MAX
+          +_TOKENS` (all in                                              
+      226 +`.env.example`). Only the brief and the content brief are sent
+          + to Claude —                                                  
+      227 +never customer names, contacts or purchase history. Manual liv
+          +e verification                                                
+      228 +is in `backend/test/live` (budget-capped, never part of `make 
+          +test`).                                                       
+      229  
+      287 -**Keep running demo mode** (no key, nothing sent to Claude): l
+          -eave                                                          
+      288 -`ANTHROPIC_API_KEY` empty, or force it even if your shell expo
+          -rts a key:                                                    
+      230 +## How approval, consent and sending work                     
+      231  
+      290 -```bash                                                       
+      291 -LLM_PROVIDER=demo docker compose up --build                   
+      292 -```                                                           
+      232 +- **The LLM never writes SQL.** It returns a JSON rule in a sm
+          +all typed DSL;                                                
+      233 +  the backend strictly decodes it (unknown/duplicate keys, wro
+          +ng types and                                                  
+      234 +  out-of-range values are field errors), validates it against 
+          +a field/operator                                              
+      235 +  registry and compiles it to parameterized SQL (`segment.Comp
+          +ile`). Consent                                                
+      236 +  and contact are not expressible in the DSL; the backend appl
+          +ies them.                                                     
+      237 +- **Content** uses a custom `{{first_name|fallback}}` grammar 
+          +(no template                                                  
+      238 +  engine), NFC normalization and **worst-case** limits after p
+          +ersonalization:                                               
+      239 +  SMS ≤ 160, subject ≤ 80, body ≤ 5,000 characters. Nothing is
+          + truncated.                                                   
+      240 +- **Approval** (ADR-005/006/023): *Prepare* inserts one `held`
+          + delivery row per                                             
+      241 +  eligible recipient and channel with frozen personalization v
+          +alues, bound to                                               
+      242 +  the segment version, content version and channels. *Confirm*
+          + within 15 min                                                
+      243 +  (pending TTL) → approved for 24 h. Every transition locks th
+          +e campaign row                                                
+      244 +  and checks expiry with `clock_timestamp()`; an expired appro
+          +val can never be                                              
+      245 +  confirmed or sent (`409 approval_expired`). Editing content 
+          +or channels                                                   
+      246 +  revokes the approval and deletes its held rows. Users who st
+          +art matching                                                  
+      247 +  later are never added.                                      
+      248 +- **Send** is an explicit, idempotent, version-guarded call th
+          +at consumes the                                               
+      249 +  approval and releases exactly its frozen rows to the worker.
+          + A repeat                                                     
+      250 +  returns `200 already_started` and writes nothing.           
+      251 +- **Worker, per attempt** (ADR-007…012): acquire the channel's
+          + rate slot →                                                  
+      252 +  re-check **current** consent and contact (missing → `skipped
+          +_*`, never sent)                                              
+      253 +  → persist the destination on the first attempt → send to the
+          + mock provider                                                
+      254 +  with the idempotency key `campaign:user:channel` and the sam
+          +e body on every                                               
+      255 +  retry. Transient errors retry with full-jitter exponential b
+          +ackoff (≤ 60 s,                                               
+      256 +  5 attempts); 429 pauses only that channel for `Retry-After` 
+          +(1–30 s,                                                      
+      257 +  persisted); permanent 4xx never retry. No transaction is ope
+          +n across HTTP.                                                
+      258 +- **Mock provider** (ADR-020): fsynced idempotency ledger on t
+          +he `mockledger`                                               
+      259 +  volume — same key + same payload replays the original result
+          +, same key +                                                  
+      260 +  different payload is `422`. Default faults: 3 % 5xx, 1 % 429
+          +, 0.5 % timeouts                                              
+      261 +  that commit before stalling, destinations ending `0000` reje
+          +cted. Disable                                                 
+      262 +  them with `MOCK_FAULT_5XX_RATE=0 MOCK_FAULT_429_RATE=0      
+      263 +  MOCK_FAULT_TIMEOUT_RATE=0 MOCK_PERMANENT_FAIL_PATTERN=-`.   
+      264 +- **Guarantees, honestly:** requests are at-least-once. With t
+          +he mock provider                                              
+      265 +  there is at most one accepted message per recipient and chan
+          +nel **while its                                               
+      266 +  durable ledger is retained** (`down -v` or the opt-in admin 
+          +reset forgets                                                 
+      267 +  it). Ambiguous outcomes are flagged `outcome_uncertain`, nev
+          +er counted as                                                 
+      268 +  sent. We never claim exactly-once. The 100 requests/s limit 
+          +is enforced at                                                
+      269 +  the dispatch gate per channel; arrival at the provider addit
+          +ionally assumes                                               
+      270 +  ≤ 30 ms transport jitter (measured, not proven).            
+      271  
+      294 -**Use real Claude locally.** ⚠️ Every interpretation and every
+          - content                                                      
+      295 -generation is a billable Anthropic API request (up to three re
+          -quests: the first answer, at most one repair turn and at      
+      296 -most one retry after truncation, each with up to `CLAUDE_MAX_R
+          -ETRIES` automatic                                             
+      297 -SDK retries). Put the key in the uncommitted `.env` (git-ignor
+          -ed) or export it                                              
+      298 -only in your shell, never in a tracked file:                  
+      272 +## Operations: restart, isolate, reset                        
+      273  
+      274 +**Restart, keep data.** `docker compose down` then `docker com
+          +pose up -d`                                                   
+      275 +(also `restart`, Ctrl+C, `--build`): `migrate` finds the schem
+          +a current, `seed`                                             
+      276 +finds users present, and campaigns, delivery history and the m
+          +ock ledger                                                    
+      277 +survive.                                                      
+      278 +                                                              
+      279 +**Isolated evaluation environment** (does not touch an existin
+          +g stack's                                                     
+      280 +containers or volumes):                                       
+      281 +                                                              
+      282  ```bash
+      301 -cp .env.example .env    # then set ANTHROPIC_API_KEY=… in .env
+          - (never commit it)                                            
+      283 +export COMPOSE_PROJECT_NAME=composer-review COMPOSER_HTTP_PORT
+          +=18000 LLM_PROVIDER=demo ANTHROPIC_API_KEY=                   
+      284  ```
+      285  
+      286  ```bash
+      305 -LLM_PROVIDER=anthropic docker compose up --build              
+      287 +docker compose up --build -d --wait                           
+      288  ```
+      289  
+      308 -With `LLM_PROVIDER=anthropic` and no key the API refuses to st
+          -art.                                                          
+      290 +Remove only that project, including its two volumes:          
+      291  
+      310 -Demo limitations: the demo interpreter is a deterministic keyw
+          -ord matcher, not                                              
+      311 -language understanding. It recognizes a fixed set of keywords 
+          -and declines                                                  
+      312 -briefs it cannot express with field-level errors instead of gu
+          -essing a broader                                              
+      313 -audience. Nothing is sent                                     
+      314 -to Claude.                                                    
+      315 -                                                              
+      316 -Model names come only from configuration (`CLAUDE_SEGMENT_MODE
+          -L`, default                                                   
+      317 -`claude-haiku-5-5`; set `claude-sonnet-5-5` or `claude-opus-5-
+          -5` to use another                                             
+      318 -model, plus `_EFFORT`, `_TIMEOUT`, `_MAX_TOKENS`, and         
+      319 -`CLAUDE_MAX_RETRIES`, default 2). `_TIMEOUT` is the total budg
+          -et of one                                                     
+      320 -interpretation, SDK retries included. All variables are       
+      321 -listed in `.env.example`; Compose reads an uncommitted `.env` 
+          -in the repository                                             
+      322 -root. Never commit `.env` or an API key.                      
+      323 -                                                              
+      324 -### Seed and dates                                            
+      325 -                                                              
+      326 -The seed is reproducible: `SEED_USERS=5000`, `SEED_RANDOM_SEED
+          -=42` and                                                      
+      327 -`SEED_REFERENCE_TIME=2026-11-01T00:00:00Z` always produce the 
+          -same dataset                                                  
+      328 -(the `dataset_hash` is logged by `seed`). "Last N days" rules 
+          -are evaluated                                                 
+      329 -against the database's `now()`, so counts shrink as real time 
+          -moves past the                                                
+      330 -reference time. For a demo long after that date, start from a 
+          -fresh volume                                                  
+      331 -with today's date:                                            
+      332 -                                                              
+      292  ```bash
+      334 -SEED_REFERENCE_TIME="$(date -u +%Y-%m-%dT00:00:00Z)" docker co
+          -mpose up --build                                              
+      293 +docker compose -p composer-review down -v                     
+      294  ```
+      295  
+      337 -(This only takes effect on an empty volume; it is not reproduc
+          -ible across days.)                                            
+      296 +**Start over in the default project** (⚠️ deletes every campai
+          +gn, the seed and                                              
+      297 +the mock ledger of the `campaign-composer` project):          
+      298  
+      339 -## Metrics                                                    
+      340 -                                                              
+      341 -Prometheus text exposition (format 0.0.4) on `GET /metrics` of
+          - each                                                         
+      342 -process; neither is published to the host (the API is reached 
+          -through the                                                   
+      343 -Compose network, the worker on its health port 9091):         
+      344 -                                                              
+      299  ```bash
+      346 -docker compose exec api wget -qO- http://127.0.0.1:8080/metric
+          -s                                                             
+      300 +make reset-volumes CONFIRM=yes                                
+      301  ```
+      302  
+      349 -```bash                                                       
+      350 -docker compose exec worker wget -qO- http://127.0.0.1:9091/met
+          -rics                                                          
+      351 -```                                                           
+      303 +Both stacks tag the same local images (`campaign-composer/back
+          +end:local`,                                                   
+      304 +`campaign-composer/frontend:local`); rebuilding one re-tags th
+          +em for both.                                                  
+      305  
+      353 -| Metric | Type | Process | Meaning |                         
+      354 -|---|---|---|---|                                             
+      355 -| `deliveries_total{channel,outcome}` | counter | worker, api 
+          -| delivery rows this process committed to a terminal status (`
+          -sent`, `failed`, `skipped_consent_revoked`, `skipped_no_contac
+          -t`, `cancelled`); once per row however many attempts. The API 
+          -counts the queued rows its cancel transaction cancelled, the w
+          -orker everything else — sum both jobs. |                      
+      356 -| `provider_request_duration_seconds{channel}` | histogram | w
+          -orker | wall time of every provider HTTP request issued (any r
+          -esult) |                                                      
+      357 -| `provider_rate_limited_total{channel}` | counter | worker | 
+          -provider 429 responses |                                      
+      358 -| `delivery_queue_depth{channel,status}` | gauge | worker | re
+          -leased, non-terminal rows (`pending`, `in_flight`, `retry_sche
+          -duled`) sampled from PostgreSQL every 5 s; absent if the last 
+          -sample failed |                                               
+      359 -| `llm_requests_total{task,outcome}` | counter | api | LLM pro
+          -vider requests (repair and truncation retries are requests) by
+          - result; demo-mode calls are counted too |                    
+      360 -| `llm_request_duration_seconds{task}` | histogram | api | dur
+          -ation of those requests |                                     
+      306 +## API and metrics                                            
+      307  
+      362 -Counters and histograms are per process and start at 0 when it
+          - starts                                                       
+      363 -(Prometheus treats restarts as counter resets); nothing is rec
+          -onstructed                                                    
+      364 -from the database. Labels have closed value sets — no campaign
+          -, user,                                                       
+      365 -destination or free text — so the output has a fixed size (46 
+          -series from the worker, 82 from the API).                     
+      308 +All routes are under `/api/v1` (through nginx on the same orig
+          +in; no CORS).                                                 
+      309 +Request bodies are strict JSON (≤ 64 KiB, `application/json`, 
+          +no unknown or                                                 
+      310 +duplicate properties); every mutation carries `expected_versio
+          +n`. Errors use                                                
+      311 +one envelope: `{"error":{"code","message","details":[{path,cod
+          +e,message}],"retryable"}}`.                                   
+      312  
+      367 -## Known gaps (CP17B)                                         
+      313 +| Route | Purpose |                                           
+      314 +|---|---|                                                     
+      315 +| `POST /campaigns`, `GET /campaigns/{id}` | create / read |  
+      316 +| `POST /campaigns/{id}/interpret`, `GET …/audience`, `PUT …/c
+          +hannels` | rule and audience |                                
+      317 +| `GET …/content`, `POST …/content/validate`, `PUT …/content`,
+          + `POST …/content/generations` (SSE) | content |               
+      318 +| `POST …/approvals`, `GET …/approvals/{aid}`, `POST …/{aid}/c
+          +onfirm`, `POST …/{aid}/withdraw` | approval |                 
+      319 +| `POST …/send`, `POST …/cancel` | delivery control |         
+      320 +| `GET …/stats`, `GET …/deliveries`, `GET …/events` (SSE) | pr
+          +ogress (no recipient data; destinations masked) |             
+      321 +| `GET /healthz`, `GET /readyz`, `GET /metrics` | operations (
+          +`/metrics` and `/healthz` are not proxied by nginx) |         
+      322  
+      369 -- `/metrics` uses a small standard-library exposition (see *Me
+          -trics*), not                                                  
+      370 -  `prometheus/client_golang`, which could not be downloaded he
+          -re (TLS                                                       
+      371 -  interception; verification is never disabled). It implements
+          - exactly the                                                  
+      372 -  six core metrics — no Go runtime/process collectors, summari
+          -es, exemplars                                                 
+      373 -  or OpenMetrics negotiation.                                 
+      374 -- Cancellation cannot recall a request already on the wire (re
+          -ported as                                                     
+      375 -  `in_flight`, at most one request per row). Requests are at-l
+          -east-once; at                                                 
+      376 -  most one delivered message per recipient and channel holds o
+          -nly with the                                                  
+      377 -  mock provider's retained idempotency ledger; never exactly-o
+          -nce.                                                          
+      378 -- The 100 requests/s limit is enforced at the dispatch gate pe
+          -r channel for                                                 
+      379 -  the single dispatching worker; arrival at the provider addit
+          -ionally assumes                                               
+      380 -  ≤ 30 ms transport jitter (measured by the mock provider, not
+          - proven).                                                     
+      323 +Full contracts: ARCHITECTURE §11–§13. Metrics (Prometheus text
+          + format, read                                                 
+      324 +inside the network):                                          
+      325  
+      382 -## Tests                                                      
+      383 -                                                              
+      384 -Unit tests need no Docker, no API key and no network; the Anth
+          -ropic adapter is                                              
+      385 -tested against an offline HTTP transport that records the exac
+          -t request JSON                                                
+      386 -and returns scripted Messages API responses (no test calls Ant
+          -hropic):                                                      
+      387 -                                                              
+      326  ```bash
+      389 -make test                                                     
+      327 +docker compose exec api wget -qO- http://127.0.0.1:8080/metric
+          +s                                                             
+      328  ```
+      329  
+      392 -Backend (Go 1.25) and frontend (Node ≥ 22.13) separately:     
+      393 -                                                              
+      330  ```bash
+      395 -cd backend && go test ./... && go test -race ./...            
+      331 +docker compose exec worker wget -qO- http://127.0.0.1:9091/met
+          +rics                                                          
+      332  ```
+      333  
+      398 -```bash                                                       
+      399 -cd frontend && npm ci && npm test && npm run typecheck && npm 
+          -run build                                                     
+      400 -```                                                           
+      334 +`deliveries_total{channel,outcome}`, `provider_request_duratio
+          +n_seconds{channel}`,                                          
+      335 +`provider_rate_limited_total{channel}`, `delivery_queue_depth{
+          +channel,status}`,                                             
+      336 +`llm_requests_total{task,outcome}`, `llm_request_duration_seco
+          +nds{task}` — closed                                           
+      337 +label sets, no campaign/user labels, per-process counters (ARC
+          +HITECTURE §15).                                               
+      338 +Mock provider counters:                                       
+      339 +`docker compose exec mockprovider wget -qO- http://127.0.0.1:8
+          +090/admin/stats`.                                             
+      340  
+      402 -Integration tests (PostgreSQL via testcontainers; requires Doc
+          -ker; also offline,                                            
+      403 -no API key):                                                  
+      341 +## Decisions and trade-offs                                   
+      342  
+      405 -```bash                                                       
+      406 -make test-integration                                         
+      407 -```                                                           
+      343 +The full rationale is in `DECISIONS.md`; the most consequentia
+          +l choices:                                                    
+      344  
+      409 -Live Anthropic verification is manual and billable; it is neve
+          -r part of                                                     
+      410 -`make test` or the smoke test. `backend/test/live/liveapi` (bu
+          -ild tag `live`)                                               
+      411 -serves the real API with the Anthropic adapter's transport wra
+          -pped in a                                                     
+      412 -persistent request counter (`backend/test/live/budget`) that r
+          -efuses any request                                            
+      413 -beyond 3, and it only starts with `LLM_PROVIDER=anthropic`,   
+      414 -`CLAUDE_MAX_RETRIES=0`, an allowed model and an absolute `LIVE
+          -_BUDGET_FILE`                                                 
+      415 -outside the repository. The counter fails closed: it must be c
+          -reated                                                        
+      416 -deliberately (`echo 0 > "$LIVE_BUDGET_FILE"`); a missing or co
+          -rrupt counter sends                                           
+      417 -nothing.                                                      
+      345 +- **PostgreSQL as the queue** (ADR-002): the delivery row *is*
+          + the job; claim                                               
+      346 +  with `FOR UPDATE SKIP LOCKED`, leases and a reaper. No Redis
+          +.                                                             
+      347 +- **Typed DSL, never LLM SQL** (ADR-003/004) and strict valida
+          +tion of every                                                 
+      348 +  model output, with one repair turn (ADR-014).               
+      349 +- **Prepare → confirm with a frozen snapshot** (ADR-005/007): 
+          +what the                                                      
+      350 +  marketer reviews is exactly what is sent; consent and contac
+          +t are still                                                   
+      351 +  re-checked at every attempt (ADR-008).                      
+      352 +- **One dispatching worker** with an in-process per-channel sl
+          +iding-window                                                  
+      353 +  limiter (ADR-011/025), enforced by a PostgreSQL advisory loc
+          +k — simple and                                                
+      354 +  provably ≤ 100/s at the gate, but not horizontally scalable.
+      355 +- **Business idempotency key + recorded uncertainty** (ADR-009
+          +) instead of an                                               
+      356 +  exactly-once claim.                                         
+      357 +- **Separate mock provider service** with a durable ledger and
+          + fault                                                        
+      358 +  injection (ADR-020) so retries, replays and rate limits are 
+          +tested over real HTTP.                                        
+      359 +- **Snapshot SSE events from committed rows** (ADR-017/026): r
+          +econnects need no                                             
+      360 +  replay; the dashboard never shows a row as sent before its c
+          +ommit.                                                        
+      361 +- **Standard-library Prometheus exposition** (ADR-026 amendmen
+          +t):                                                           
+      362 +  `prometheus/client_golang` could not be fetched through the 
+          +local                                                         
+      363 +  TLS-intercepting proxy and verification is never disabled.  
+      364  
+      419 -The delivery integration tests run the real worker against the
+          - mock provider                                                
+      420 -over TCP (crash recovery, consent/contact rechecks, two concur
+          -rent workers on                                               
+      421 -2,000 rows, injected database failures, graceful shutdown) and
+          -, since CP17A,                                                
+      422 -prove the rate guarantee from the provider's side (real time, 
+          -1,200                                                         
+      423 -messages with injected 5xx/429: `max_in_any_rolling_1s ≤ 100`,
+          - arrivals =                                                   
+      424 -recorded attempts), a dispatch handover between two workers, 4
+          -29 channel                                                    
+      425 -isolation and pause persistence, cancellation races and the ex
+          -piry sweeper.                                                 
+      426 -CP17B adds statistics reconciled against the committed rows (m
+          -ulti-attempt                                                  
+      427 -rows, replays, skips, failures, cancellation), pagination unde
+          -r concurrent                                                  
+      428 -worker updates, the progress stream following commits to exact
+          -ly one `end`,                                                 
+      429 -reconnect snapshots, heartbeat freshness and a privacy scan of
+          - every                                                        
+      430 -response; the frontend suites cover the strict decoders, the E
+          -ventSource                                                    
+      431 -composable (backoff, stale and malformed events) and the full 
+          -send/cancel                                                   
+      432 -dashboard flow against a fake backend.                        
+      365 +## Known limitations                                          
+      366  
+      434 -Lint (gofmt, go vet, staticcheck):                            
+      367 +Accepted trade-offs (documented, not bugs):                   
+      368  
+      436 -```bash                                                       
+      437 -make lint                                                     
+      438 -```                                                           
+      369 +- Not exactly-once; at most one accepted message per recipient
+          + and channel                                                  
+      370 +  only while the mock ledger is retained. Cancellation cannot 
+          +recall a request                                              
+      371 +  already on the wire (`in_flight` in the cancel response).   
+      372 +- Consent revoked in the milliseconds between the precheck and
+          + the request is                                               
+      373 +  not honoured for that one request (ARCHITECTURE §10.10).    
+      374 +- One dispatching worker; FIFO across campaigns (a large campa
+          +ign delays a small one).                                      
+      375 +- Snapshot staleness up to 24 h: users who stopped matching st
+          +ill receive the message.                                      
+      376 +- The demo interpreter is a keyword matcher; it declines brief
+          +s it cannot                                                   
+      377 +  express instead of guessing a broader audience.             
+      378 +- No authentication/RBAC, scheduling, quiet hours, frequency c
+          +apping or real                                                
+      379 +  unsubscribe handling; segment rules change only by re-interp
+          +reting.                                                       
+      380 +- No GSM-7/UCS-2 or SMS-segment warnings; the hard rule is the
+          + worst-case                                                   
+      381 +  character count.                                            
+      382 +- `/metrics` is a minimal standard-library implementation (no 
+          +runtime collectors).                                          
+      383 +- Base images are pinned by tag, not digest.                  
+      384 +- Not built (roadmap): the 12-brief model evaluation (needs pa
+          +id API calls),                                                
+      385 +  Playwright E2E, an `llm_calls` audit table. See `docs/ROADMA
+          +P.md`.                                                        
+      386  
+      440 -## Development without Docker for the app                     
+      387 +ARCHITECTURE §18 has the complete list.                       
+      388  
+      442 -Requires Go, Node ≥ 22.13 and a PostgreSQL 16 database. The Vi
+          -te dev server                                                 
+      443 -proxies `/api` and `/readyz` to the Go API (`http://localhost:
+          -8080` by default;                                             
+      444 -override with `VITE_API_PROXY_TARGET`).                       
+      389 +## Where the code lives                                       
+      390  
+      446 -```bash                                                       
+      447 -# 1. Database (credentials as in .env.example), migrated and s
+          -eeded                                                         
+      448 -export DATABASE_URL='postgres://composer:composer@localhost:54
+          -32/composer?sslmode=disable'                                  
+      449 -make migrate                                                  
+      450 -make seed            # or `make seed-today` so "last N days" r
+          -ules match today's data                                       
+      391 +| Path | Contents |                                           
+      392 +|---|---|                                                     
+      393 +| `backend/cmd/{api,worker,mockprovider,migrate,seed}` | proce
+          +ss entrypoints |                                              
+      394 +| `backend/migrations/` | SQL schema (embedded) |             
+      395 +| `backend/internal/segment` | DSL, registry, validator, compi
+          +ler, Turkish city normalization, audience partition |         
+      396 +| `backend/internal/ai`, `internal/llm` | prompts, schemas, in
+          +terpreter/generator, repair, stream extractor; `llm.Client` wi
+          +th Anthropic, demo and scripted implementations |             
+      397 +| `backend/internal/content` | placeholder parser/renderer, va
+          +riable registry, content validation |                         
+      398 +| `backend/internal/campaign`, `internal/approval` | campaign 
+          +aggregate and state machine; prepare/confirm/withdraw/expire/s
+          +end/cancel (the only code inserting delivery rows) |          
+      399 +| `backend/internal/delivery`, `internal/provider` | worker, g
+          +ated sender, limiter, retry policy, reaper, stats; provider HT
+          +TP client |                                                   
+      400 +| `backend/internal/mockprovider` | fake provider and its ledg
+          +er (never imported by production binaries) |                  
+      401 +| `backend/internal/httpapi` | routing, strict decoding, error
+          + envelope, SSE |                                              
+      402 +| `backend/internal/platform` | config, DB pool, logging (PII 
+          +masking), clock, metrics |                                    
+      403 +| `backend/test/integration`, `backend/test/live` | PostgreSQL
+          + integration tests; manual budget-capped live checks |        
+      404 +| `frontend/src/pages`, `components/{composer,dashboard,ui}` |
+          + composer page, delivery dashboard, dialogs |                 
+      405 +| `frontend/src/api`, `composables`, `stores` | typed client +
+          + strict decoders + SSE parser; EventSource composable; Pinia s
+          +tore |                                                        
+      406 +| `frontend/tests` | Vitest suites |                          
+      407 +| `frontend/nginx`, `docker-compose.yml`, `scripts/` | proxy c
+          +onfig, stack, smoke scripts |                                 
+      408  
+      452 -# 2. API in demo mode (no ANTHROPIC_API_KEY needed; nothing is
+          - sent to Claude)                                              
+      453 -cd backend && LLM_PROVIDER=demo go run ./cmd/api              
+      409 +## AI-assisted development                                    
+      410  
+      455 -# 3. Frontend, in a second terminal                           
+      456 -cd frontend && npm install && npm run dev   # http://localhost
+          -:5173                                                         
+      457 -```                                                           
+      458 -                                                              
+      459 -Routes: `/campaigns/new` (create) and `/campaigns/:id` (compos
+          -er; the URL can be                                            
+      460 -reloaded or shared). There is no campaign-listing endpoint in 
+          -Slice 1a; the                                                 
+      461 -create page keeps a "recently opened" list in `localStorage` (
+          -IDs and names only)                                           
+      462 -and can open a campaign by ID.                                
+      411 +This project was built with Claude Code as an engineering part
+          +ner. The                                                      
+      412 +exported working sessions are in [`ai-sessions/`](ai-sessions)
+          + (sessions 1–18,                                              
+      413 +as recorded); design decisions, reviews and corrections made i
+          +n those                                                       
+      414 +sessions are reflected in `DECISIONS.md`. No AI output is trus
+          +ted at runtime                                                
+      415 +without backend validation.                                   
+
+⏺ Checking the README's claims against the code: route patterns, SKIP LOCKED,
+  and ADR numbers.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ Routes, SKIP LOCKED and ADR numbers all match. Now writing
+  docs/FINAL_CHECKLIST.md.
+
+⏺ Write(docs/FINAL_CHECKLIST.md)
+  ⎿  Wrote 138 lines to docs/FINAL_CHECKLIST.md
+      1 # Final acceptance checklist (CP18)
+      2 
+      3 Verified on 2026-11-06 against `e458687` (CP17B code `1d39f91` + 
+        session log)
+      4 plus the CP18 working-tree changes listed at the end. Host: macOS
+         (Apple
+      5 Silicon), Docker Desktop with Compose v5.1.4, Go 1.27.3 toolchain
+         (module
+      6 `go 1.25.0`; images build with `golang:1.25-alpine`), Node 22.20.
+         Demo LLM
+     … +132 lines (ctrl+o to expand)
+
+  Searched for 2 patterns (ctrl+o to expand)
+
+⏺ The cited integration tests exist (snapshot invariant, lock-wait expiry ×5,
+  crash/reaper, replay). Last step: hygiene scans and a final run of the literal
+  make test.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ .env, logs, build output and dist/ are already ignored. I'm adding narrow
+  patterns for the local ledger journal and DB dumps so they can't be committed
+  by accident.
+
+⏺ Bash(cat >> .gitignore <<'EOF'…)
+  ⎿  ledger.journal                           ignored
+     x.dump                                   ignored
+     dumps/a.sql                              ignored
+     backend/migrations/000001_init.up.sql    tracked-ok
+  ⎿  Updated .gitignore (+8 -0)
+      28  # Logs and scratch files
+      29  *.log
+      30  tmp/
+      31 +                                                               
+      32 +# Runtime data that belongs in Docker volumes, never in Git: mo
+         +ck-provider                                                    
+      33 +# idempotency ledgers and database dumps (migrations/*.sql stay
+         + tracked).                                                     
+      34 +*.journal                                                      
+      35 +*.dump                                                         
+      36 +*.pgdump                                                       
+      37 +*.sql.gz                                                       
+      38 +dumps/                                                         
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ Bash(cd /Users/bilgem/Desktop/devel/leet/insider-case/insider-campaign-compose
+      r-case && env -u ANTHROPIC_API_KEY make test >/dev/null 2>&1; echo "make
+      test exit $?";…)
+  ⎿  make test exit 0
+     diffcheck-ok
+      M .gitignore
+     … +14 lines (ctrl+o to expand)
+  ⎿  Updated docs/FINAL_CHECKLIST.md (+1 -0)
+      109  - `README.md` restructured for reviewers; stale seed count cor
+           rected.
+      110  - Documentation consistency: ARCHITECTURE §8/§14/§18, ADR-013 
+           and ADR-015
+      111    status notes, ROADMAP submission status, `CLAUDE.md` stack l
+           ine (stdlib metrics).
+      112 +- `.gitignore`: mock ledger journals and database dumps (`*.jo
+          +urnal`, `*.dump`, `*.pgdump`, `*.sql.gz`, `dumps/`).          
+      113  - This checklist.
+      114  
+      115  ## Remaining items
+
+⏺ The submission is ready: nothing blocks running, reviewing or demoing it, and
+  every test suite and acceptance scenario passed. One open item needs your
+  decision: the roadmap's 12-brief model evaluation was never run (details
+  below). Nothing is committed, pushed or tagged, and no Anthropic API calls
+  were made.
+
+  Git state: HEAD is e458687 (the CP17B code 1d39f91 plus the session-18 log).
+  The working tree has 11 modified files and 3 new ones:
+  - Code: frontend/src/composables/useModalFocus.ts (new), ApprovalDialog.vue,
+    ConfirmDialog.vue, ContentPanel.vue, ApprovalPanel.vue, DeliveryPanel.vue
+  - Tests: frontend/tests/modalFocus.spec.ts (new)
+  - Docs and config: README.md, docs/FINAL_CHECKLIST.md (new),
+    docs/ARCHITECTURE.md, docs/ROADMAP.md, DECISIONS.md, CLAUDE.md, .gitignore
+
+  Fixes
+  - Modal keyboard navigation: both dialogs declare themselves modal, but
+    Shift+Tab escaped to the page behind, and closing didn't return focus to the
+    button that opened them. A small shared composable fixes both. The new test
+    fails without the fix and passes with it; I also confirmed the fix in the
+    browser.
+  - Duplicate section number: the composer showed two sections numbered "4".
+    They're now numbered 1–7, and the text "step 6" became "step 7".
+  - Docs:
+    - Two documents described SMS encoding warnings as built when they never
+      were.
+    - CLAUDE.md still named the official Prometheus client.
+    - The README promised 184 matched users; today it's 178, because "last 30
+      days" moves with the real date.
+  - .gitignore: now also ignores mock-ledger journals and database dumps
+    (*.journal, *.dump, *.pgdump, *.sql.gz, dumps/).
+
+  Test results
+
+  ┌─────────────────────────────────────┬───────────────────────────────────┐
+  │                Check                │              Result               │
+  ├─────────────────────────────────────┼───────────────────────────────────┤
+  │ Backend unit tests (no key, no      │ 422 tests + 992 subtests passed,  │
+  │ Docker)                             │ 0 skipped                         │
+  ├─────────────────────────────────────┼───────────────────────────────────┤
+  │ Backend race tests                  │ all packages pass                 │
+  ├─────────────────────────────────────┼───────────────────────────────────┤
+  │ Integration tests (with -race)      │ 129 tests + 142 subtests passed,  │
+  │                                     │ 0 skipped                         │
+  ├─────────────────────────────────────┼───────────────────────────────────┤
+  │ Frontend Vitest                     │ 265 passed (260 before + 5 new)   │
+  ├─────────────────────────────────────┼───────────────────────────────────┤
+  │ Typecheck, production build         │ pass                              │
+  ├─────────────────────────────────────┼───────────────────────────────────┤
+  │ gofmt, go vet (all build tags), go  │ clean                             │
+  │ mod verify                          │                                   │
+  ├─────────────────────────────────────┼───────────────────────────────────┤
+  │ make test as written                │ exit 0                            │
+  ├─────────────────────────────────────┼───────────────────────────────────┤
+  │ npm audit (production dependencies) │ 0 vulnerabilities                 │
+  └─────────────────────────────────────┴───────────────────────────────────┘
+
+  make lint as written fails at the staticcheck download (TLS interception). I
+  ran the same pinned v0.8.2 offline from the module cache without changing TLS
+  or checksum settings, and it's clean for both build tags.
+
+  Clean-room install: I used a fresh clone (no .env) under a separate project
+  name (cc-cp18) on port 18000, in demo mode.
+  - Everything built and became healthy in about 4 minutes, in the documented
+    order.
+  - The seed is deterministic: same hash as the CP3 run.
+  - Only the frontend is published, on 127.0.0.1.
+  - down/up and a rebuild kept all campaigns and the mock ledger.
+  - All three smoke scripts passed.
+  - Your own campaign-composer stack and its volumes weren't touched. Both
+    stacks share the same local image tags, though, so my rebuilds re-tagged
+    them; your running containers keep their old images.
+
+  Browser and live scenarios
+  - A, full workflow: Turkish brief through to Completed with failures (2 SMS
+    rejected on purpose). UI, /stats, PostgreSQL and the mock ledger all
+    reconcile, and a reload keeps the results.
+  - B, cancellation: 255 queued deliveries cancelled at once, 19 in flight. No
+    attempt started after the cancel committed. Six timeouts that reached the
+    provider are flagged as uncertain rather than counted as sent.
+  - C, failure and recovery: I restarted the mock provider and force-killed the
+    worker mid-send. Ledger counts equal DB sent, with 0 duplicate accepted keys
+    and at most 100 requests in any second.
+  - D, invalid and stale operations: stale versions, mismatched or invalid
+    confirmations, duplicate Send, approval expiry, revoked consent, missing
+    contact and malformed requests all return the specified responses. The
+    dashboard reconnected through an API restart.
+  - E, usability: no horizontal overflow at 375 px, error states render, and the
+    only console errors were caused deliberately.
+
+  Security audit: no exploitable gaps found. Strict JSON parsing, size and type
+  limits, UUID path validation, parameterized SQL, the restricted placeholder
+  grammar, the sandboxed email preview (no v-html), security headers,
+  same-origin only (no CORS), the cap on open SSE streams, log masking and
+  non-root containers all held up under probing. The real key from your local
+  .env appears nowhere in Git history.
+
+  Remaining items
+  - Blockers: none.
+  - Open, needs your decision: the roadmap's Day-2 model evaluation (12 briefs,
+    comparing models) was never run, and docs/model-evaluation.md doesn't exist.
+    It's in this repo's own plan, not the assignment. ADR-015 and the roadmap
+    now say so plainly, without claiming results. Running it would cost real API
+    money.
+  - Accepted trade-offs, kept as documented:
+    - Requests are at-least-once; "at most one accepted message" holds only
+      while the mock ledger is kept.
+    - Cancel can't recall a request already sent.
+    - The provider-side rate assumes ≤ 30 ms network jitter.
+    - There is a single dispatching worker.
+    - Metrics use a standard-library exposition.
+    - The staticcheck download is blocked by the local TLS proxy.
+    - The optional (B-tier) items weren't built.
+    - Base images are pinned by tag, not digest.
+
+  Readiness: ready to submit once you've reviewed these changes and committed
+  them. A 3–5 minute evaluator demo path is at the end of
+  docs/FINAL_CHECKLIST.md.
+
+❯ CP18 final hardening and submission-readiness report has been reviewed and    
+  approved.                                                                     
+  Decision on the open model-evaluation item:                                   
+  Do not run the paid 12-brief model evaluation.                                
+  It was an internal roadmap goal, not a mandatory assignment requirement. Keep 
+  its status explicitly documented as not completed. Do not invent a            
+  model-evaluation report, measurements or live API evidence.                   
+  Proceed with a final focused documentation/Git check and commit CP18.         
+  1. Final documentation checks                                                 
+     Confirm:                                                                   
+                                                                                
+  - README quick start works without an Anthropic API key.                      
+  - README links directly to docs/FINAL_CHECKLIST.md and its evaluator demo     
+  instructions.                                                                 
+  - The roadmap and ADR-015 accurately state that the 12-brief comparative      
+  model evaluation was not performed.                                           
+  - No documents claim that paid content-generation evaluation occurred.        
+  - Real Anthropic integration verification and comparative model-quality       
+  evaluation are described as separate activities.                              
+  - Optional B-tier features are not represented as completed.                  
+  - README, ARCHITECTURE, ROADMAP, DECISIONS and CLAUDE.md agree on the actual  
+  implementation.                                                               
+                                                                                
+  Review the new .gitignore patterns. Prefer narrowly scoped runtime-data       
+  exclusions where practical, without accidentally tracking mock-provider       
+  journals, DB dumps or secrets.                                                
+  2. Final UI checks                                                            
+  Confirm the modal focus regression tests cover:                               
+                                                                                
+  - Tab and Shift+Tab remaining inside each open modal.                         
+  - Focus returning to the opening button when one exists.                      
+  - Escape closing the modal where permitted.                                   
+  - A sensible fallback when the dialog opens automatically without an          
+  available opener.                                                             
+  - Focus handling on unmount/navigation.                                       
+                                                                                
+  Confirm the campaign section numbers are consistently 1–7.                    
+  Avoid unrelated UI changes.                                                   
+  3. Git safety                                                                 
+  Inspect the full CP18 diff.                                                   
+  Run:                                                                          
+                                                                                
+  - git status --short                                                          
+  - git diff --check                                                            
+  - git diff --stat                                                             
+                                                                                
+  Verify no .env, real API credentials, database dumps, mock-provider ledger    
+  files, customer data or runtime logs are included.                            
+  Stage only CP18's intended code, tests, documentation and .gitignore changes. 
+  Inspect the staged file list and run:                                         
+  git diff --cached --check                                                     
+  Do not modify previous commits or rewrite history.                            
+  4. Commit                                                                     
+  If all checks pass, commit with:                                              
+  chore: finalize accessibility documentation and submission readiness          
+  Report:                                                                       
+                                                                                
+  1. Commit hash.                                                               
+  2. Final Git status.                                                          
+  3. Files included.                                                            
+  4. Confirmation that the incomplete model evaluation is documented honestly.  
+  5. Final test/verification summary.                                           
+  6. Any submission blockers that remain.                                       
+                                                                                
+  Do not run paid Anthropic calls.                                              
+  Do not push to GitHub.                                                        
+  Do not create a release tag yet.                                              
+  Stop after the CP18 commit.                                                   
+
+  Searched for 1 pattern, ran 1 shell command (ctrl+o to expand)
+
+⏺ Bash(python3 - <<'EOF'
+      def rep(path, old, new):…)
+  ⎿  386:- No GSM-7/UCS-2 or SMS-segment warnings; the hard rule is the wor
+     st-case
+  ⎿  Updated DECISIONS.md (+2 -2)
+      223  
+      224  **Trade-offs.** Opus 5.5 thinking cannot be disabled, adding l
+           atency before the first streamed token (mitigated by a "thinki
+           ng" status in the UI). The evaluation spends a small amount of
+            real API budget.
+      225  
+      226 -**Status (CP18).** The 12-brief evaluation (ROADMAP Day 2) was
+          - **not run**: there is no evaluation harness and no `docs/mode
+          -l-evaluation.md`. The only recorded live evidence is the singl
+          -e CP10 interpretation call above; no live content-generation e
+          -valuation is recorded. Both defaults are therefore reasoned ch
+          -oices, not measured winners. Running the evaluation spends rea
+          -l API budget and needs explicit approval.                     
+      226 +**Status (CP18).** The 12-brief comparative evaluation (ROADMA
+          +P Day 2) was **not performed**, by decision: it was an interna
+          +l roadmap goal, not an assignment requirement, and it needs pa
+          +id API calls. There is no evaluation harness and no `docs/mode
+          +l-evaluation.md`. Two activities are distinct here: *integrati
+          +on verification* (does the real Anthropic adapter work end to 
+          +end — evidenced by the single CP10 interpretation call above) 
+          +and *comparative model-quality evaluation* (which model is bet
+          +ter per task — not done). No live content-generation call or e
+          +valuation is recorded. Both defaults are therefore reasoned ch
+          +oices, not measured winners.                                  
+      227  
+      228  ---
+      229  
+     ...
+      237  
+      238  **Reasoning.** Tests exercise the real prompt assembly, decodi
+           ng, validation, repair loop and stream extractor — the code mo
+           st likely to break. A startup-time, immutable selection makes 
+           the provider in use observable and predictable; a silent runti
+           me fallback would present fabricated "AI" results as real ones
+            and hide outages.
+      239  
+      240 -**Trade-offs.** Mocks do not measure real model quality; the D
+          -ay 2 evaluation and an optional live smoke test cover that. An
+          - Anthropic outage makes AI features unavailable instead of deg
+          -rading to demo output (intended).                             
+      240 +**Trade-offs.** Mocks do not measure real model quality; the p
+          +lanned Day 2 evaluation would have covered that (not performed
+          + — ADR-015 status), and the budget-capped live harness only ve
+          +rifies integration. An Anthropic outage makes AI features unav
+          +ailable instead of degrading to demo output (intended).       
+      241  
+      242  ---
+      243  
+  ⎿  Updated README.md (+12 -4)
+      105  
+      106  ## Demo walkthrough (3–5 minutes)
+      107  
+      108 +A condensed evaluator script with timings is in               
+      109 +[`docs/FINAL_CHECKLIST.md` → Recommended 3–5 minute live demo]
+          +(docs/FINAL_CHECKLIST.md#recommended-35-minute-live-demo).    
+      110 +                                                              
+      111  1. **New campaign** → **Use example brief** (or paste a Turkis
+           h one, e.g.
+      112     *Son 30 gün içinde sepetine ürün ekleyip satın almayan İsta
+           nbul'daki
+      113     kullanıcılara %30 indirim hatırlatması gönder.*) → **Create
+            campaign**.
+     ...
+      227  `CLAUDE_SEGMENT_MODEL` (default `claude-haiku-5-5`) and `CLAUD
+           E_CONTENT_MODEL`
+      228  (default `claude-opus-5-5`), plus `_EFFORT`, `_TIMEOUT`, `_MAX
+           _TOKENS` (all in
+      229  `.env.example`). Only the brief and the content brief are sent
+            to Claude —
+      227 -never customer names, contacts or purchase history. Manual liv
+          -e verification                                                
+      228 -is in `backend/test/live` (budget-capped, never part of `make 
+          -test`).                                                       
+      230 +never customer names, contacts or purchase history. Live *inte
+          +gration* verification                                         
+      231 +(does the adapter work against the real API) is manual and bud
+          +get-capped in                                                 
+      232 +`backend/test/live`, never part of `make test`; it was run onc
+          +e for                                                         
+      233 +interpretation (CP10). A *comparative model-quality evaluation
+          +* was planned but                                             
+      234 +not performed (ADR-015).                                      
+      235  
+      236  ## How approval, consent and sending work
+      237  
+     ...
+      387    character count.
+      388  - `/metrics` is a minimal standard-library implementation (no 
+           runtime collectors).
+      389  - Base images are pinned by tag, not digest.
+      384 -- Not built (roadmap): the 12-brief model evaluation (needs pa
+          -id API calls),                                                
+      385 -  Playwright E2E, an `llm_calls` audit table. See `docs/ROADMA
+          -P.md`.                                                        
+      390 +- Not performed / not built (roadmap): the 12-brief comparativ
+          +e model                                                       
+      391 +  evaluation (by decision; paid API calls), and the optional B
+          +-tier items —                                                 
+      392 +  GSM/segment warnings, Playwright E2E, an `llm_calls` audit t
+          +able, masked                                                  
+      393 +  sample users, refusal fallback. See `docs/ROADMAP.md`.      
+      394  
+      395  ARCHITECTURE §18 has the complete list.
+      396  
+  ⎿  Updated docs/ARCHITECTURE.md (+2 -2)
+      500  - **No fallback at runtime**: when the Anthropic provider is s
+           elected, every failure (transport, 4xx/5xx after SDK retries, 
+           refusal, truncation, invalid output after the repair turn, tim
+           eout) is returned to the caller as the mapped domain error and
+            surfaced as an actionable API error (§7.5). Demo output is ne
+           ver substituted.
+      501  - **Unit tests** never read `LLM_PROVIDER`; they construct `ll
+           m.Scripted` explicitly. `demo` is used only for running the ap
+           p (Compose, smoke scripts; Playwright was planned as B-tier an
+           d not built) and in its own unit tests.
+      502  
+      503 -The model string flows config → service → `llm.Request.Model` 
+          -and is persisted with every AI result. Interpretation defaults
+          - to `claude-haiku-5-5` (ADR-015; verified live in CP10); conte
+          -nt generation keeps `claude-opus-5-5` until it is evaluated. T
+          -he 12-brief evaluation compares models per task; switching is 
+          -an env change, never a runtime fallback.                      
+      503 +The model string flows config → service → `llm.Request.Model` 
+          +and is persisted with every AI result. Interpretation defaults
+          + to `claude-haiku-5-5` (ADR-015; one live integration call in 
+          +CP10 verified compatibility, not comparative quality); content
+          + generation keeps `claude-opus-5-5` without a recorded evaluat
+          +ion. The planned 12-brief comparative evaluation was not perfo
+          +rmed (ADR-015 status); switching is an env change, never a run
+          +time fallback.                                                
+      504  
+      505  ### 7.4 Prompts
+      506  Versioned templates (`segment_v1`, `content_v1`). The interpre
+           tation system prompt contains the **field catalog generated fr
+           om the registry**, operator semantics, rules (never invent fie
+           lds; put inexpressible requests in `unsupported`; state interp
+           retation choices in `assumptions`) and few-shot examples. The 
+           brief is wrapped in `<brief>` tags and declared as data. The c
+           ontent prompt receives the content brief, selected channels, a
+           llowed variables and limits (target SMS ≤150, subject ≤70 to l
+           eave headroom), plain-text only. **No customer data is ever se
+           nt to the LLM.**
+     ...
+      1011  
+      1012  ## 14. Frontend
+      1013  
+      1014 -Vue 3 + TypeScript (strict) + Vite + Vue Router + Pinia (one 
+           -store for the active campaign); Vitest + Vue Test Utils; Play
+           -wright (B).                                                  
+      1014 +Vue 3 + TypeScript (strict) + Vite + Vue Router + Pinia (one 
+           +store for the active campaign); Vitest + Vue Test Utils; Play
+           +wright (B, not built).                                       
+      1015  
+      1016  | Campaign status | UI |
+      1017  |---|---|
+  ⎿  Updated docs/FINAL_CHECKLIST.md (+5 -4)
+      116  
+      117  **Blockers:** none found for running, reviewing or demonstrati
+           ng the submission.
+      118  
+      119 -**Open, needs a decision (not a runtime blocker):** the roadma
+          -p's Day 2 12-brief                                            
+      120 -model evaluation (A tier in this repository's own plan, not in
+          - the assignment)                                              
+      121 -was never run and `docs/model-evaluation.md` does not exist; i
+          -t requires paid                                               
+      122 -API calls (ADR-015 status).                                   
+      119 +**Not performed, by decision:** the roadmap's Day 2 12-brief c
+          +omparative model                                              
+      120 +evaluation (A tier in this repository's own plan, not in the a
+          +ssignment). It                                                
+      121 +needs paid API calls; `docs/model-evaluation.md` does not exis
+          +t and no results                                              
+      122 +are claimed. Live Anthropic *integration* was verified once in
+          + CP10 (one                                                    
+      123 +interpretation call); that is not a model-quality comparison (
+          +ADR-015 status).                                              
+      124  
+      125  **Accepted trade-offs:** see README *Known limitations* and AR
+           CHITECTURE §18 —
+      126  at-least-once requests with ledger-conditional at-most-one acc
+           eptance; no
+  ⎿  Updated docs/ROADMAP.md (+1 -1)
+      195  Delivered (A tier): Slices 1a–5 end to end — interpretation (d
+           emo + Anthropic), DSL/validator/compiler, audience partition, 
+           streamed content generation and editing, prepare/confirm/withd
+           raw/expiry with frozen snapshots, send and cancel, the Postgre
+           SQL worker (claim, lease, precheck, gated sender, per-channel 
+           sliding-window limiter, 429 pauses, classified retries, reaper
+           , sweeper), the durable mock provider, the live SSE dashboard,
+            `/healthz`, `/readyz`, `/metrics` (six core metrics), Docker 
+           Compose, README and ADRs. Verification evidence: `docs/FINAL_C
+           HECKLIST.md`.
+      196  
+      197  Not delivered:
+      198 -- **Day 2 model evaluation (A tier):** the 12-brief comparison
+          - and `docs/model-evaluation.md` do not exist; the interpretati
+          -on default rests on one live call (CP10) and the content defau
+          -lt on reasoning only (ADR-015 status). It needs paid API calls
+          -.                                                             
+      198 +- **Day 2 model evaluation (A tier):** not performed, by decis
+          +ion (internal goal, not an assignment requirement; it needs pa
+          +id API calls). The 12-brief comparison and `docs/model-evaluat
+          +ion.md` do not exist. Live integration was verified with one i
+          +nterpretation call (CP10); that is not a comparative quality e
+          +valuation. The content default rests on reasoning only (ADR-01
+          +5 status).                                                    
+      199  - **B tier:** GSM-7/UCS-2 and segment warnings (1), Playwright
+            (2), `llm_calls` audit table (3), masked sample users (4) and
+            the refusal fallback (5) were not built; the snapshot digest 
+           in the approval dialog (6) was. Browser acceptance was perform
+           ed manually against Compose (CP17B, CP18).
+      200  - **C tier:** none.
+
+⏺ Docs now separate integration verification from comparative evaluation and
+  link the demo script. Next: extending the modal focus tests.
+
+  Searched for 1 pattern, ran 2 shell commands (ctrl+o to expand)
+
+⏺ Bash(python3 - <<'EOF'
+      p="tests/approval.spec.ts"; s=open(p).read()…)
+  ⎿        Tests  50 passed (50)
+  ⎿  Updated frontend/tests/approval.spec.ts (+73 -0)
+      359    })
+      360  })
+      361  
+      362 +describe('dialog keyboard focus (CP18)', () => {              
+      363 +  function press(key: string, shiftKey = false): void {       
+      364 +    ;(document.activeElement ?? document.body).dispatchEvent(n
+          +ew KeyboardEvent('keydown', { key, shiftKey, bubbles: true, ca
+          +ncelable: true }))                                            
+      365 +  }                                                           
+      366 +  function dialogEl(): HTMLElement {                          
+      367 +    return find('approval-dialog').element as HTMLElement     
+      368 +  }                                                           
+      369 +  function focusables(): HTMLElement[] {                      
+      370 +    return Array.from(dialogEl().querySelectorAll<HTMLElement>
+          +('button:not([disabled]), input:not([disabled]), a[href], ifra
+          +me'))                                                         
+      371 +  }                                                           
+      372 +                                                              
+      373 +  it('keeps Tab and Shift+Tab inside the dialog and returns fo
+          +cus to the opening button on Escape', async () => {           
+      374 +    readyCampaign()                                           
+      375 +    await open()                                              
+      376 +    await prepare()                                           
+      377 +    await find('approval-close').trigger('click')             
+      378 +    const opener = find('open-approval-dialog').element as HTM
+          +LButtonElement                                                
+      379 +    opener.focus()                                            
+      380 +    opener.click()                                            
+      381 +    await settle()                                            
+      382 +    expect(document.activeElement).toBe(dialogEl())           
+      383 +                                                              
+      384 +    const items = focusables()                                
+      385 +    expect(items.length).toBeGreaterThan(1)                   
+      386 +    press('Tab', true)                                        
+      387 +    expect(document.activeElement).toBe(items[items.length - 1
+          +])                                                            
+      388 +    press('Tab')                                              
+      389 +    expect(document.activeElement).toBe(items[0])             
+      390 +    press('Tab', true)                                        
+      391 +    expect(document.activeElement).toBe(items[items.length - 1
+          +])                                                            
+      392 +    for (let i = 0; i < items.length + 3; i++) {              
+      393 +      press('Tab')                                            
+      394 +      expect(dialogEl().contains(document.activeElement)).toBe
+          +(true)                                                        
+      395 +    }                                                         
+      396 +                                                              
+      397 +    press('Escape')                                           
+      398 +    await settle()                                            
+     … 39 more lines (ctrl+o to expand)
+  ⎿  Updated frontend/tests/modalFocus.spec.ts (+20 -0)
+       75      expect((document.activeElement as HTMLButtonElement).disab
+           led ?? false).toBe(false)
+       76    })
+       77  
+       78 +  it('closes on Escape when nothing is pending, and not while 
+          +pending', async () => {                                       
+       79 +    await open()                                              
+       80 +    press('Escape')                                           
+       81 +    expect(wrapper!.emitted('close')).toHaveLength(1)         
+       82 +    wrapper!.unmount()                                        
+       83 +    wrapper = null                                            
+       84 +    document.body.innerHTML = ''                              
+       85 +    await open(true)                                          
+       86 +    press('Escape')                                           
+       87 +    expect(wrapper!.emitted('close')).toBeUndefined()         
+       88 +  })                                                          
+       89 +                                                              
+       90 +  it('does not focus an opener that was removed (navigation)',
+          + async () => {                                                
+       91 +    await open()                                              
+       92 +    opener.remove()                                           
+       93 +    wrapper!.unmount()                                        
+       94 +    wrapper = null                                            
+       95 +    expect(document.activeElement).not.toBe(opener)           
+       96 +  })                                                          
+       97 +                                                              
+       98    it('returns focus to the opener on close', async () => {
+       99      await open()
+      100      wrapper!.unmount()
+⏺ All 50 pass. Checking that the new app-level tests actually detect the bug
+  when the fix is reverted:
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ Four of the new tests fail without the fix, so they do catch the regression,
+  while the auto-open and navigation tests pass either way and serve only as
+  fallback checks. I'm now checking why the step-number list in
+  CampaignComposerPage.vue shows duplicate 2s and 3s.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ The duplicate 2/3 placeholders render instead of sections 2–4 (v-else), so the
+  page shows 1–3 before interpretation and 1–7 after, with numbering
+  consistent. I'm checking the .gitignore patterns next.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ The ignore patterns are fine as they are, since no tracked file matches them
+  and *.journal suits the configurable ledger path better than a single file
+  name. I'm reviewing the full diff next.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ Two leftovers from the diff review are being fixed: a stale "Step 5" comment
+  in ApprovalPanel.vue and a Playwright line in CLAUDE.md that misstates its
+  status. After that I'll rerun all suites to refresh the checklist numbers.
+
+⏺ Bash(sed -i '' 's|^// Step 5: approval\.|// Step 6: approval.|'
+      frontend/src/components/composer/ApprovalPanel.vue && sed -i '' 's|Vitest
+      + Vue Test Utils; Playwrigh…)
+  ⎿  2:// Step 6: approval. Prepare freezes the audience and content into a
+      pending
+     13:- **Frontend**: Vue 3 + TypeScript (strict) + Vite + Vue Router + P
+     … +11 lines (ctrl+o to expand)
+  ⎿  Updated CLAUDE.md (+1 -1)
+      10  
+      11  - **Backend**: Go 1.25, `pgx/v5` + `pgxpool`, stdlib `net/http`
+           ServeMux, `golang-migrate`, `log/slog`, Prometheus text exposi
+          tion (planned `prometheus/client_golang`; replaced by a standar
+          d-library implementation — ADR-026 amendment), `golang.org/x/te
+          xt/unicode/norm`, Anthropic Go SDK `github.com/anthropics/anthr
+          opic-sdk-go/v2` (pinned v2.5.0).
+      12  - **Database**: PostgreSQL 16 — the only infrastructure depende
+          ncy. Also the job queue.
+      13 -- **Frontend**: Vue 3 + TypeScript (strict) + Vite + Vue Router
+         - + Pinia; Vitest + Vue Test Utils; Playwright (B tier).        
+      13 +- **Frontend**: Vue 3 + TypeScript (strict) + Vite + Vue Router
+         + + Pinia; Vitest + Vue Test Utils; Playwright (B tier, not buil
+         +t).                                                            
+      14  - **Tests**: `go test`, `testcontainers-go` (PostgreSQL) for in
+          tegration tests.
+      15  - **Runtime**: Docker Compose — `postgres`, `migrate`, `seed`, 
+          `api`, `worker` (exactly 1 replica), `mockprovider`, `frontend`
+           (nginx).
+      16  
+  ⎿  Updated frontend/src/components/composer/ApprovalPanel.vue (+1 -1)
+      1  <script setup lang="ts">
+      2 -// Step 5: approval. Prepare freezes the audience and content in
+        -to a pending                                                    
+      2 +// Step 6: approval. Prepare freezes the audience and content in
+        +to a pending                                                    
+      3  // approval (server); the dialog reviews and confirms or withdra
+         ws it; an
+      4  // approved campaign shows a read-only summary; sending starts f
+         rom step 7
+      5  // (DeliveryPanel), never from here. All state lives in the camp
+         aign store.
+
+⏺ Bash(cd /Users/bilgem/Desktop/devel/leet/insider-case/insider-campaign-compose
+      r-case && sed -i '' 's|^// Step 4: message content\.|// Step 5: message
+      content.|' fron…)
+  ⎿  frontend/src/components/dashboard/DeliveryPanel.vue:2:// Step 7: send
+     and delivery progress (CP17B). An approved campaign offers
+     frontend/src/components/composer/ApprovalPanel.vue:2:// Step 6: approv
+     … +7 lines (ctrl+o to expand)
+  ⎿  Updated frontend/src/components/composer/ContentPanel.vue (+1 -1)
+      1  <script setup lang="ts">
+      2 -// Step 4: message content. Generate (streamed), edit, validate 
+        -(debounced,                                                     
+      2 +// Step 5: message content. Generate (streamed), edit, validate 
+        +(debounced,                                                     
+      3  // server-authoritative) and save immutable content versions for
+          the
+      4  // selected channels. All state lives in the campaign store; thi
+         s component
+      5  // only renders it and schedules the debounced validation.
+  ⎿  Updated frontend/src/components/dashboard/DeliveryPanel.vue (+1 -1)
+      1  <script setup lang="ts">
+      2 -// Step 6: send and delivery progress (CP17B). An approved campa
+        -ign offers                                                      
+      2 +// Step 7: send and delivery progress (CP17B). An approved campa
+        +ign offers                                                      
+      3  // Start sending behind an explicit confirmation; a sending or f
+         inished
+      4  // campaign shows the live dashboard: numbers come only from com
+         mitted
+      5  // database rows (GET /stats snapshots over the progress stream)
+         , so a
+
+  Read 1 file (ctrl+o to expand)
+
+⏺ Bash(python3 - <<'EOF'
+      p="docs/FINAL_CHECKLIST.md"; s=open(p).read()…)
+  ⎿  ok
+  ⎿  Updated docs/FINAL_CHECKLIST.md (+15 -5)
+      33  | `go vet` (default, `integration`, `live` tags) | ✅ clean |
+      34  | staticcheck v0.8.2 (default and `integration` tags) | ✅ clea
+          n — run offline from the verified module cache (see note) |
+      35  | `go mod verify` | ✅ all modules verified |
+      36 -| Frontend Vitest | ✅ 18 files, 265 tests passed (260 before C
+         -P18 + 5 new) |                                                 
+      36 +| Frontend Vitest | ✅ 18 files, 270 tests passed (260 before C
+         +P18 + 10 new focus tests) |                                    
+      37  | Frontend typecheck (`vue-tsc` app + tests, `tsc` node) | ✅ c
+          lean |
+      38  | Frontend production build | ✅ |
+      39  | `npm audit --omit=dev` | ✅ 0 vulnerabilities |
+     ...
+      102  
+      103  - `frontend/src/composables/useModalFocus.ts` (new) + `Approva
+           lDialog.vue`,
+      104    `ConfirmDialog.vue`: Tab/Shift+Tab stay inside modal dialogs
+           ; focus returns
+      105 -  to the opener on close. Regression test `frontend/tests/moda
+          -lFocus.spec.ts`                                               
+      106 -  (fails without the fix).                                    
+      105 +  to the opener on close; Escape still closes only when nothin
+          +g is pending; a                                               
+      106 +  dialog that opened by itself (no opener) or is unmounted by 
+          +navigation leaves                                             
+      107 +  focus on the document, never on a detached node. Tests:     
+      108 +  `frontend/tests/modalFocus.spec.ts` (ConfirmDialog) and *dia
+          +log keyboard                                                  
+      109 +  focus* in `frontend/tests/approval.spec.ts` (ApprovalDialog 
+          +in the full app);                                             
+      110 +  the trap and focus-return tests fail without the fix (jsdom 
+          +does not move                                                 
+      111 +  focus on Tab by itself, so the fallback tests guard against 
+          +errors rather                                                 
+      112 +  than prove the trap).                                       
+      113  - `ContentPanel.vue`, `ApprovalPanel.vue`, `DeliveryPanel.vue`
+           : section
+      108 -  numbers 5/6/7 (were 4/5/6, duplicating "4").                
+      114 +  numbers 5/6/7 (were 4/5/6, duplicating "4"), plus matching c
+          +ode comments                                                  
+      115 +  and the "step 7" hint. Before interpretation the page shows 
+          +steps 1–3                                                     
+      116 +  (placeholders); afterwards 1–7.                             
+      117  - `README.md` restructured for reviewers; stale seed count cor
+           rected.
+      118  - Documentation consistency: ARCHITECTURE §8/§14/§18, ADR-013 
+           and ADR-015
+      111 -  status notes, ROADMAP submission status, `CLAUDE.md` stack l
+          -ine (stdlib metrics).                                         
+      119 +  status notes (incl. the distinction between live *integratio
+          +n* verification and                                           
+      120 +  comparative *model-quality* evaluation), ADR-016 trade-off, 
+          +ROADMAP submission                                            
+      121 +  status, `CLAUDE.md` stack line (stdlib metrics, Playwright n
+          +ot built).                                                    
+      122  - `.gitignore`: mock ledger journals and database dumps (`*.jo
+           urnal`, `*.dump`, `*.pgdump`, `*.sql.gz`, `dumps/`).
+      123  - This checklist.
+      124  
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ make test passes (backend unchanged; frontend 270 tests). Staging only the
+  intended CP18 files by explicit path.
+
+  Ran 2 shell commands (ctrl+o to expand)
+
+⏺ CP18 is committed as 7e2348e, with no submission blockers left. Nothing is
+  pushed or tagged, and no Anthropic API calls were made.
+
+  1. Commit: 7e2348ed98ca62b90d583ad07fa4769a39566eef — chore: finalize 
+  accessibility documentation and submission readiness, on top of e458687. No
+  earlier commit was changed.
+
+  2. Git status: clean. git diff --check and git diff --cached --check both
+  passed.
+
+  3. Files included (15):
+  - Code: frontend/src/composables/useModalFocus.ts (new), ApprovalDialog.vue,
+    ConfirmDialog.vue, ApprovalPanel.vue, ContentPanel.vue, DeliveryPanel.vue
+  - Tests: frontend/tests/modalFocus.spec.ts (new),
+    frontend/tests/approval.spec.ts
+  - Docs and config: README.md, docs/FINAL_CHECKLIST.md (new),
+    docs/ARCHITECTURE.md, docs/ROADMAP.md, DECISIONS.md, CLAUDE.md, .gitignore
+
+  I staged them by explicit path. The staged set contains no .env, API keys,
+  ledger journals, database dumps, logs or customer data.
+
+  4. Model evaluation: ADR-015, the roadmap, the README and the checklist all
+  say the 12-brief comparison was not performed, by decision, and that
+  docs/model-evaluation.md doesn't exist. They treat two activities separately:
+  - Live integration check: run once, as a single interpretation call in CP10.
+  - Comparative model-quality evaluation: not done.
+
+  No document claims a live content-generation call or any evaluation results. I
+  also corrected ADR-016, which had said the evaluation "covers" model quality.
+
+  Other documentation checks:
+  - The README quick start forces demo mode and needs no key; the clean-room run
+    confirmed it.
+  - The README links to docs/FINAL_CHECKLIST.md at the top, and the
+    demo-walkthrough section links straight to the evaluator demo.
+  - Every optional B-tier item is marked as not built, including Playwright in
+    CLAUDE.md and ARCHITECTURE.
+  - I kept the .gitignore patterns as they were. *.journal covers the
+    configurable ledger path, and the dump patterns match dump files only
+    (*.dump, *.pgdump, *.sql.gz, dumps/). No tracked file matches any of them,
+    and migrations stay tracked.
+
+  UI checks:
+  - Focus tests now cover:
+    - Tab and Shift+Tab wrapping inside both dialogs (the approval one inside
+      the full app).
+    - Focus returning to the button that opened the dialog.
+    - Escape closing it, and not closing it while an action is pending.
+    - A dialog that opened by itself on reload, with no button to return to.
+    - Navigation unmounting an open dialog.
+  - Without the fix: 4 of the new tests fail, so they catch the original bug.
+    The auto-open and navigation tests pass either way, because the test
+    environment (jsdom) doesn't move focus on Tab by itself. They guard against
+    errors rather than prove the trap, and the checklist says so.
+  - Section numbers: consistent 1–7 after interpretation; before it, the page
+    shows 1–3 as placeholders. Matching code comments and the "step 7" hint were
+    updated too.
+
+  5. Verification:
+
+  ┌────────────────────┬────────────────────────────────────────────────────┐
+  │       Check        │                       Result                       │
+  ├────────────────────┼────────────────────────────────────────────────────┤
+  │ make test          │ exit 0                                             │
+  ├────────────────────┼────────────────────────────────────────────────────┤
+  │ Frontend Vitest    │ 270/270 passed                                     │
+  ├────────────────────┼────────────────────────────────────────────────────┤
+  │ Typecheck,         │ pass                                               │
+  │ production build   │                                                    │
+  ├────────────────────┼────────────────────────────────────────────────────┤
+  │                    │ unchanged since the CP18 run: 422 unit tests + 992 │
+  │ Backend code       │  subtests, race tests and 129 integration tests +  │
+  │                    │ 142 subtests all passed with 0 skipped; gofmt, vet │
+  │                    │  and staticcheck v0.8.2 (offline) clean            │
+  ├────────────────────┼────────────────────────────────────────────────────┤
+  │ Clean-room         │                                                    │
+  │ install, 3 smoke   │ passed, as recorded in docs/FINAL_CHECKLIST.md     │
+  │ scripts, browser   │                                                    │
+  │ scenarios A–E      │                                                    │
+  └────────────────────┴────────────────────────────────────────────────────┘
+
+  6. Blockers: none. The accepted trade-offs are in the README's Known 
+  limitations: at-least-once requests, a single dispatching worker, no recall of
+  in-flight requests on cancel, standard-library metrics, the staticcheck
+  download blocked by local TLS interception, and the optional items not built.
+
+  The isolated clean-room stack (cc-cp18, port 18000) is still running and has
+  its own volumes. Remove it when you're done with:
+  docker compose -p cc-cp18 down -v
