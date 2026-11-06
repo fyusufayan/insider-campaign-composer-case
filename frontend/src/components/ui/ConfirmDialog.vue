@@ -2,7 +2,8 @@
 // A modal confirmation for an irreversible action. The confirm button is
 // disabled while the action is pending (no double submit); Escape and the
 // secondary button close it only when nothing is pending.
-import { nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
+import { onBeforeUnmount, onMounted, ref } from 'vue'
+import { useModalFocus } from '@/composables/useModalFocus'
 
 const props = withDefaults(
   defineProps<{
@@ -20,14 +21,12 @@ const props = withDefaults(
 const emit = defineEmits<{ confirm: []; close: [] }>()
 
 const dialog = ref<HTMLElement | null>(null)
+const { trapTab } = useModalFocus(dialog)
 function onKey(e: KeyboardEvent) {
   if (e.key === 'Escape' && !props.pending) emit('close')
+  else trapTab(e)
 }
-onMounted(async () => {
-  document.addEventListener('keydown', onKey)
-  await nextTick()
-  dialog.value?.focus()
-})
+onMounted(() => document.addEventListener('keydown', onKey))
 onBeforeUnmount(() => document.removeEventListener('keydown', onKey))
 </script>
 

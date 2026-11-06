@@ -1,7 +1,7 @@
 <script setup lang="ts">
-// Step 5: approval. Prepare freezes the audience and content into a pending
+// Step 6: approval. Prepare freezes the audience and content into a pending
 // approval (server); the dialog reviews and confirms or withdraws it; an
-// approved campaign shows a read-only summary; sending starts from step 6
+// approved campaign shows a read-only summary; sending starts from step 7
 // (DeliveryPanel), never from here. All state lives in the campaign store.
 import { computed, ref, watch } from 'vue'
 import { storeToRefs } from 'pinia'
@@ -87,7 +87,7 @@ const notice = computed(() => (approvalNotice.value ? NOTICE[approvalNotice.valu
 <template>
   <section class="card approval-panel" data-testid="approval-panel">
     <div class="card-header">
-      <p class="card-eyebrow"><span class="step-num">5</span> Review &amp; approval</p>
+      <p class="card-eyebrow"><span class="step-num">6</span> Review &amp; approval</p>
     </div>
     <div class="card-body body">
       <div v-if="notice" class="notice" :class="notice.tone" role="status" data-testid="approval-notice" :data-kind="approvalNotice">
@@ -168,7 +168,7 @@ const notice = computed(() => (approvalNotice.value ? NOTICE[approvalNotice.valu
               <p class="notice-title">Approved — not sent</p>
               <p>
                 Valid for <strong data-testid="approved-countdown">{{ remaining }}</strong>. No messages have been sent:
-                start sending explicitly in step 6 below. Consent and contact will be re-checked for every delivery.
+                start sending explicitly in step 7 below. Consent and contact will be re-checked for every delivery.
               </p>
             </div>
           </div>

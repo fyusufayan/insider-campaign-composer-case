@@ -5,12 +5,13 @@
 // Confirm. Closing it decides nothing: the approval stays pending until it
 // is confirmed, withdrawn or expires. The server enforces version, binding
 // and expiry; this dialog only presents them.
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import type { ApprovalSummary, Campaign } from '@/api/types'
 import type { ApiError } from '@/api/client'
 import type { Operation } from '@/api/errors'
 import ErrorNotice from '@/components/ui/ErrorNotice.vue'
 import { formatCount } from '@/composables/format'
+import { useModalFocus } from '@/composables/useModalFocus'
 import ApprovalSummaryView from './ApprovalSummary.vue'
 
 const props = defineProps<{
@@ -28,6 +29,7 @@ const props = defineProps<{
 const emit = defineEmits<{ confirm: []; withdraw: []; close: []; reload: [] }>()
 
 const dialog = ref<HTMLElement | null>(null)
+const { trapTab } = useModalFocus(dialog)
 const ackSnapshot = ref(false)
 const ackFindings = ref(false)
 watch(
@@ -64,12 +66,9 @@ const confirmHint = computed(() => {
 
 function onKey(e: KeyboardEvent) {
   if (e.key === 'Escape' && !props.confirming && !props.withdrawing) emit('close')
+  else trapTab(e)
 }
-onMounted(async () => {
-  document.addEventListener('keydown', onKey)
-  await nextTick()
-  dialog.value?.focus()
-})
+onMounted(() => document.addEventListener('keydown', onKey))
 onBeforeUnmount(() => document.removeEventListener('keydown', onKey))
 </script>
 

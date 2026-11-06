@@ -28,3 +28,11 @@ test-results/
 # Logs and scratch files
 *.log
 tmp/
+
+# Runtime data that belongs in Docker volumes, never in Git: mock-provider
+# idempotency ledgers and database dumps (migrations/*.sql stay tracked).
+*.journal
+*.dump
+*.pgdump
+*.sql.gz
+dumps/

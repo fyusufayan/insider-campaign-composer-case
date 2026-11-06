@@ -1,5 +1,5 @@
 <script setup lang="ts">
-// Step 6: send and delivery progress (CP17B). An approved campaign offers
+// Step 7: send and delivery progress (CP17B). An approved campaign offers
 // Start sending behind an explicit confirmation; a sending or finished
 // campaign shows the live dashboard: numbers come only from committed
 // database rows (GET /stats snapshots over the progress stream), so a
@@ -117,7 +117,7 @@ const finalTone = computed(() => {
 <template>
   <section ref="panel" class="card delivery-panel" data-testid="delivery-panel">
     <div class="card-header header">
-      <p class="card-eyebrow"><span class="step-num">6</span> Send &amp; delivery</p>
+      <p class="card-eyebrow"><span class="step-num">7</span> Send &amp; delivery</p>
       <div v-if="streaming" class="conn">
         <span class="badge" :class="connection === 'live' || connection === 'ended' ? 'badge-success' : 'badge-warning'" data-testid="connection-badge" :data-state="connection">
           {{ CONNECTION_LABEL[connection] }}

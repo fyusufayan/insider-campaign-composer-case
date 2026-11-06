@@ -191,6 +191,8 @@ A request is never issued after its slot deadline: `gatedSender.Attempt` aborts 
 
 **Trade-offs.** Conservative (rejects some messages that would fit for real names); no Turkish national shift table.
 
+**Status (CP18).** The hard rule is implemented as decided. The advisory GSM-7/UCS-2 and segment-count warnings were B-tier and were **not** built; the only content warning is `first_name_not_used` (ARCHITECTURE §8.1).
+
 ---
 
 ## ADR-014 — Official Anthropic Go SDK v2 with stable structured outputs and one repair turn
@@ -221,6 +223,8 @@ A request is never issued after its slot deadline: `gatedSender.Attempt` aborts 
 
 **Trade-offs.** Opus 5.5 thinking cannot be disabled, adding latency before the first streamed token (mitigated by a "thinking" status in the UI). The evaluation spends a small amount of real API budget.
 
+**Status (CP18).** The 12-brief comparative evaluation (ROADMAP Day 2) was **not performed**, by decision: it was an internal roadmap goal, not an assignment requirement, and it needs paid API calls. There is no evaluation harness and no `docs/model-evaluation.md`. Two activities are distinct here: *integration verification* (does the real Anthropic adapter work end to end — evidenced by the single CP10 interpretation call above) and *comparative model-quality evaluation* (which model is better per task — not done). No live content-generation call or evaluation is recorded. Both defaults are therefore reasoned choices, not measured winners.
+
 ---
 
 ## ADR-016 — LLM abstraction at the client level with scripted and demo mocks
@@ -233,7 +237,7 @@ A request is never issued after its slot deadline: `gatedSender.Attempt` aborts 
 
 **Reasoning.** Tests exercise the real prompt assembly, decoding, validation, repair loop and stream extractor — the code most likely to break. A startup-time, immutable selection makes the provider in use observable and predictable; a silent runtime fallback would present fabricated "AI" results as real ones and hide outages.
 
-**Trade-offs.** Mocks do not measure real model quality; the Day 2 evaluation and an optional live smoke test cover that. An Anthropic outage makes AI features unavailable instead of degrading to demo output (intended).
+**Trade-offs.** Mocks do not measure real model quality; the planned Day 2 evaluation would have covered that (not performed — ADR-015 status), and the budget-capped live harness only verifies integration. An Anthropic outage makes AI features unavailable instead of degrading to demo output (intended).
 
 ---
 

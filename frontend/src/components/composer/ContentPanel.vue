@@ -1,5 +1,5 @@
 <script setup lang="ts">
-// Step 4: message content. Generate (streamed), edit, validate (debounced,
+// Step 5: message content. Generate (streamed), edit, validate (debounced,
 // server-authoritative) and save immutable content versions for the
 // selected channels. All state lives in the campaign store; this component
 // only renders it and schedules the debounced validation.
@@ -141,7 +141,7 @@ const saveErrorOther = computed(
   <section class="card content-panel" data-testid="content-panel">
     <div class="card-header">
       <div class="head-main">
-        <p class="card-eyebrow"><span class="step-num">4</span> Message content</p>
+        <p class="card-eyebrow"><span class="step-num">5</span> Message content</p>
         <ContentVersionBadge v-if="savedVersion" :version="savedVersion" />
         <span v-else class="badge badge-neutral" data-testid="content-empty">No content yet</span>
       </div>

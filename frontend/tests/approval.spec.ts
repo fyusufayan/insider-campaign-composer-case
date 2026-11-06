@@ -359,6 +359,79 @@ describe('withdraw and close', () => {
   })
 })
 
+describe('dialog keyboard focus (CP18)', () => {
+  function press(key: string, shiftKey = false): void {
+    ;(document.activeElement ?? document.body).dispatchEvent(new KeyboardEvent('keydown', { key, shiftKey, bubbles: true, cancelable: true }))
+  }
+  function dialogEl(): HTMLElement {
+    return find('approval-dialog').element as HTMLElement
+  }
+  function focusables(): HTMLElement[] {
+    return Array.from(dialogEl().querySelectorAll<HTMLElement>('button:not([disabled]), input:not([disabled]), a[href], iframe'))
+  }
+
+  it('keeps Tab and Shift+Tab inside the dialog and returns focus to the opening button on Escape', async () => {
+    readyCampaign()
+    await open()
+    await prepare()
+    await find('approval-close').trigger('click')
+    const opener = find('open-approval-dialog').element as HTMLButtonElement
+    opener.focus()
+    opener.click()
+    await settle()
+    expect(document.activeElement).toBe(dialogEl())
+
+    const items = focusables()
+    expect(items.length).toBeGreaterThan(1)
+    press('Tab', true)
+    expect(document.activeElement).toBe(items[items.length - 1])
+    press('Tab')
+    expect(document.activeElement).toBe(items[0])
+    press('Tab', true)
+    expect(document.activeElement).toBe(items[items.length - 1])
+    for (let i = 0; i < items.length + 3; i++) {
+      press('Tab')
+      expect(dialogEl().contains(document.activeElement)).toBe(true)
+    }
+
+    press('Escape')
+    await settle()
+    expect(find('approval-dialog').exists()).toBe(false)
+    expect(document.activeElement).toBe(find('open-approval-dialog').element)
+  })
+
+  it('traps focus when the dialog opens by itself on reload and falls back safely on close', async () => {
+    const { campaign, version } = readyCampaign()
+    fake.seedPending({ ...campaign, version: campaign.version + 1 }, version)
+    ;(document.activeElement as HTMLElement | null)?.blur()
+    await open()
+    await until(() => expect(find('approval-dialog').exists()).toBe(true))
+    await settle()
+    expect(document.activeElement).toBe(dialogEl())
+    press('Tab', true)
+    expect(dialogEl().contains(document.activeElement)).toBe(true)
+
+    press('Escape')
+    await settle()
+    expect(find('approval-dialog').exists()).toBe(false)
+    // No opener existed: focus falls back to the document, never a detached node.
+    const active = document.activeElement
+    expect(active === document.body || (active !== null && document.body.contains(active))).toBe(true)
+  })
+
+  it('leaves focus on a connected element when navigation unmounts the open dialog', async () => {
+    readyCampaign()
+    await open()
+    await prepare()
+    expect(document.activeElement).toBe(dialogEl())
+    await app!.router.push('/campaigns/new')
+    await settle()
+    expect(find('approval-dialog').exists()).toBe(false)
+    const active = document.activeElement
+    expect(active === document.body || (active !== null && active.isConnected)).toBe(true)
+  })
+})
+
 describe('navigation races', () => {
   it('drops a late prepare response after switching campaigns', async () => {
     readyCampaign()

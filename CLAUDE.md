@@ -8,9 +8,9 @@ AI-assisted marketing campaign composer (7-day take-home). A marketer writes a b
 
 ## Technology stack
 
-- **Backend**: Go 1.25, `pgx/v5` + `pgxpool`, stdlib `net/http` ServeMux, `golang-migrate`, `log/slog`, `prometheus/client_golang`, `golang.org/x/text/unicode/norm`, Anthropic Go SDK `github.com/anthropics/anthropic-sdk-go/v2` (pinned v2.5.0).
+- **Backend**: Go 1.25, `pgx/v5` + `pgxpool`, stdlib `net/http` ServeMux, `golang-migrate`, `log/slog`, Prometheus text exposition (planned `prometheus/client_golang`; replaced by a standard-library implementation — ADR-026 amendment), `golang.org/x/text/unicode/norm`, Anthropic Go SDK `github.com/anthropics/anthropic-sdk-go/v2` (pinned v2.5.0).
 - **Database**: PostgreSQL 16 — the only infrastructure dependency. Also the job queue.
-- **Frontend**: Vue 3 + TypeScript (strict) + Vite + Vue Router + Pinia; Vitest + Vue Test Utils; Playwright (B tier).
+- **Frontend**: Vue 3 + TypeScript (strict) + Vite + Vue Router + Pinia; Vitest + Vue Test Utils; Playwright (B tier, not built).
 - **Tests**: `go test`, `testcontainers-go` (PostgreSQL) for integration tests.
 - **Runtime**: Docker Compose — `postgres`, `migrate`, `seed`, `api`, `worker` (exactly 1 replica), `mockprovider`, `frontend` (nginx).
 

@@ -187,3 +187,14 @@ Every slice ends with a working end-to-end result in the browser, its tests, and
 - Slices 1–3 must be complete by end of Day 4; if not, B-tier is dropped entirely and Day 7 absorbs the overrun.
 - If Slice 4 overruns, Slice 5 reduces to SSE snapshots rendered as plain tiles (no failure table paging).
 - The rate integration test and the crash/replay test are never cut: they prove the core reliability claims.
+
+---
+
+## Status at submission (CP18)
+
+Delivered (A tier): Slices 1a–5 end to end — interpretation (demo + Anthropic), DSL/validator/compiler, audience partition, streamed content generation and editing, prepare/confirm/withdraw/expiry with frozen snapshots, send and cancel, the PostgreSQL worker (claim, lease, precheck, gated sender, per-channel sliding-window limiter, 429 pauses, classified retries, reaper, sweeper), the durable mock provider, the live SSE dashboard, `/healthz`, `/readyz`, `/metrics` (six core metrics), Docker Compose, README and ADRs. Verification evidence: `docs/FINAL_CHECKLIST.md`.
+
+Not delivered:
+- **Day 2 model evaluation (A tier):** not performed, by decision (internal goal, not an assignment requirement; it needs paid API calls). The 12-brief comparison and `docs/model-evaluation.md` do not exist. Live integration was verified with one interpretation call (CP10); that is not a comparative quality evaluation. The content default rests on reasoning only (ADR-015 status).
+- **B tier:** GSM-7/UCS-2 and segment warnings (1), Playwright (2), `llm_calls` audit table (3), masked sample users (4) and the refusal fallback (5) were not built; the snapshot digest in the approval dialog (6) was. Browser acceptance was performed manually against Compose (CP17B, CP18).
+- **C tier:** none.
